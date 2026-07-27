@@ -1,8 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use ignore::overrides::OverrideBuilder;
+use ignore::{Walk, WalkBuilder};
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct LanguageId(String);
@@ -35,7 +39,8 @@ pub struct RepositoryInventory {
     pub total_files: usize,
     pub files_by_language: BTreeMap<LanguageId, usize>,
     pub unclassified_files_by_extension: BTreeMap<ExtensionId, usize>,
-    pub num_ignored_directories: usize,
+    pub num_builtin_ignored_directories: usize,
+    pub num_included_ignored_files: usize,
 }
 
 impl RepositoryInventory {
@@ -48,44 +53,148 @@ impl RepositoryInventory {
     }
 }
 
-pub fn inventory_repository(root: &Path) -> io::Result<RepositoryInventory> {
-    let mut inventory = RepositoryInventory::default();
-
-    visit_directory(root, &mut inventory)?;
-
-    Ok(inventory)
+#[derive(Debug, Default)]
+pub struct InventoryOptions {
+    pub include_ignored: Vec<String>,
 }
 
-fn visit_directory(directory: &Path, inventory: &mut RepositoryInventory) -> io::Result<()> {
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let path = entry.path();
+pub fn inventory_repository(root: &Path) -> io::Result<RepositoryInventory> {
+    inventory_repository_with_options(root, &InventoryOptions::default())
+}
 
-        if file_type.is_dir() {
-            if should_ignore_directory(entry.file_name().as_os_str()) {
-                inventory.num_ignored_directories += 1;
-                continue;
+pub fn inventory_repository_with_options(
+    root: &Path,
+    options: &InventoryOptions,
+) -> io::Result<RepositoryInventory> {
+    let ignored_directories = Arc::new(AtomicUsize::new(0));
+    let ignored_directories_for_filter = Arc::clone(&ignored_directories);
+    let mut standard_walker = configured_walker(root);
+
+    standard_walker
+        .parents(false)
+        .ignore(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .filter_entry(move |entry| {
+            let is_ignored = is_builtin_ignored_directory(entry);
+
+            if is_ignored {
+                ignored_directories_for_filter.fetch_add(1, Ordering::Relaxed);
             }
 
-            visit_directory(&path, inventory)?;
-        } else if file_type.is_file() {
-            inventory.total_files += 1;
+            !is_ignored
+        });
 
-            if let Some(language) = detect_language(&path) {
-                *inventory.files_by_language.entry(language).or_insert(0) += 1;
-            } else {
-                let extension = extension_id(&path);
+    let mut discovered_files = BTreeSet::new();
+    collect_regular_files(standard_walker.build(), &mut discovered_files)?;
 
-                *inventory
-                    .unclassified_files_by_extension
-                    .entry(extension)
-                    .or_insert(0) += 1;
+    let mut inventory = RepositoryInventory::default();
+
+    if !options.include_ignored.is_empty() {
+        let overrides = build_include_overrides(root, &options.include_ignored)?;
+        let mut included_walker = configured_walker(root);
+
+        included_walker
+            .standard_filters(false)
+            .overrides(overrides)
+            .filter_entry(|entry| !is_builtin_ignored_directory(entry));
+
+        let mut included_files = BTreeSet::new();
+        collect_regular_files(included_walker.build(), &mut included_files)?;
+
+        for path in included_files {
+            if discovered_files.insert(path) {
+                inventory.num_included_ignored_files += 1;
             }
         }
     }
 
+    for path in discovered_files {
+        record_file(&path, &mut inventory);
+    }
+
+    inventory.num_builtin_ignored_directories = ignored_directories.load(Ordering::Relaxed);
+    Ok(inventory)
+}
+
+fn configured_walker(root: &Path) -> WalkBuilder {
+    let mut walker = WalkBuilder::new(root);
+
+    walker
+        .hidden(false)
+        .follow_links(false)
+        .sort_by_file_path(|left, right| left.cmp(right));
+
+    walker
+}
+
+fn build_include_overrides(
+    root: &Path,
+    patterns: &[String],
+) -> io::Result<ignore::overrides::Override> {
+    let mut builder = OverrideBuilder::new(root);
+
+    for pattern in patterns {
+        if pattern.is_empty() || pattern.starts_with('!') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid include-ignored pattern {pattern:?}"),
+            ));
+        }
+
+        builder.add(pattern).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid include-ignored pattern {pattern:?}: {error}"),
+            )
+        })?;
+    }
+
+    builder.build().map_err(io::Error::other)
+}
+
+fn collect_regular_files(walker: Walk, files: &mut BTreeSet<PathBuf>) -> io::Result<()> {
+    for entry in walker {
+        let entry = entry.map_err(io::Error::other)?;
+
+        if let Some(error) = entry.error() {
+            return Err(io::Error::other(error.to_string()));
+        }
+
+        if entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
+            files.insert(entry.path().to_path_buf());
+        }
+    }
+
     Ok(())
+}
+
+fn is_builtin_ignored_directory(entry: &ignore::DirEntry) -> bool {
+    entry.depth() > 0
+        && entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_dir())
+        && should_ignore_directory(entry.file_name())
+}
+
+fn record_file(path: &Path, inventory: &mut RepositoryInventory) {
+    inventory.total_files += 1;
+
+    if let Some(language) = detect_language(path) {
+        *inventory.files_by_language.entry(language).or_insert(0) += 1;
+    } else {
+        let extension = extension_id(path);
+
+        *inventory
+            .unclassified_files_by_extension
+            .entry(extension)
+            .or_insert(0) += 1;
+    }
 }
 
 fn should_ignore_directory(name: &OsStr) -> bool {

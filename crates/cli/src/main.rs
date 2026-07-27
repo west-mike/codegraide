@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use codegraide_core::inventory_repository;
+use codegraide_core::{InventoryOptions, inventory_repository_with_options};
 #[derive(Debug, Parser)]
 #[command(
     name = "codegraide",
@@ -22,6 +22,10 @@ enum Command {
         /// Path to the repository
         #[arg(value_name = "PATH", default_value = ".")]
         path: PathBuf,
+
+        /// Include files matching a repository-relative glob even when Git ignores them
+        #[arg(long, value_name = "GLOB", action = clap::ArgAction::Append)]
+        include_ignored: Vec<String>,
     },
 }
 
@@ -29,11 +33,14 @@ fn main() -> ExitCode {
     let args = Args::parse();
 
     match &args.command {
-        Command::Inventory { path } => run_inventory(path),
+        Command::Inventory {
+            path,
+            include_ignored,
+        } => run_inventory(path, include_ignored),
     }
 }
 
-fn run_inventory(path: &Path) -> ExitCode {
+fn run_inventory(path: &Path, include_ignored: &[String]) -> ExitCode {
     let metadata = match path.metadata() {
         Ok(metadata) => metadata,
         Err(error) => {
@@ -47,7 +54,10 @@ fn run_inventory(path: &Path) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let inventory = match inventory_repository(path) {
+    let options = InventoryOptions {
+        include_ignored: include_ignored.to_vec(),
+    };
+    let inventory = match inventory_repository_with_options(path, &options) {
         Ok(inventory) => inventory,
         Err(error) => {
             eprintln!("error: failed to inventory {}: {error}", path.display());
@@ -57,7 +67,14 @@ fn run_inventory(path: &Path) -> ExitCode {
 
     println!("Repository:  {}", path.display());
     println!("Total files: {}", inventory.total_files);
-    println!("Ignored directories: {}", inventory.num_ignored_directories);
+    println!(
+        "Built-in ignored directories: {}",
+        inventory.num_builtin_ignored_directories
+    );
+    println!(
+        "Included ignored files: {}",
+        inventory.num_included_ignored_files
+    );
     println!(
         "Recognized source files: {}",
         inventory.recognized_source_files()
@@ -79,4 +96,31 @@ fn run_inventory(path: &Path) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_multiple_include_ignored_patterns() {
+        let args = Args::try_parse_from([
+            "codegraide",
+            "inventory",
+            "example",
+            "--include-ignored",
+            "generated/**",
+            "--include-ignored",
+            "vendor/**",
+        ])
+        .expect("arguments should parse");
+
+        let Command::Inventory {
+            path,
+            include_ignored,
+        } = args.command;
+
+        assert_eq!(path, PathBuf::from("example"));
+        assert_eq!(include_ignored, ["generated/**", "vendor/**"]);
+    }
 }
