@@ -1,0 +1,58 @@
+{
+  "config_version": "0.1.0",
+  "inventory": {
+    "ignore_defaults": false,
+    "categories": {
+      "source": {
+        "include_extensions": [
+          "c",
+          "cc",
+          "cpp",
+          "cxx",
+          "h",
+          "hh",
+          "hpp",
+          "hxx",
+          "py",
+          "rs"
+        ]
+      },
+      "documentation": {
+        "include_extensions": ["adoc", "markdown", "md", "rst"]
+      },
+      "configuration": {
+        "include_filenames": [
+          "Cargo.lock",
+          "Cargo.toml",
+          "codegraide.json",
+          "package.json",
+          "pyproject.toml",
+          "tsconfig.json"
+        ]
+      },
+      "data": {
+        "include_extensions": ["csv", "jsonl", "parquet", "tsv"]
+      },
+      "assets": {
+        "include_extensions": [
+          "avif",
+          "gif",
+          "ico",
+          "jpeg",
+          "jpg",
+          "mp3",
+          "mp4",
+          "otf",
+          "pdf",
+          "png",
+          "svg",
+          "ttf",
+          "webp",
+          "woff",
+          "woff2"
+        ]
+      },
+      "uncategorized": {}
+    }
+  }
+}
