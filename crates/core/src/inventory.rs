@@ -8,6 +8,7 @@ use ignore::{Walk, WalkBuilder};
 
 use crate::config::CategoryClassifier;
 use crate::error::InventoryError;
+use crate::lines::RepositoryLineCounts;
 use crate::report::{ExtensionId, FileCategory, LanguageId, RepositoryInventory};
 
 #[derive(Debug)]
@@ -109,6 +110,7 @@ pub fn inventory_repository_with_options(
     }
 
     inventory.diagnostics = diagnostics;
+    inventory.line_counts = RepositoryLineCounts::analyze(root, &inventory)?;
     inventory.ignored.builtin_directories = take_paths_from_mutex(builtin_directories, root)?;
     inventory.validate_invariants();
     Ok(inventory)
@@ -323,7 +325,7 @@ fn should_ignore_directory(name: &OsStr) -> bool {
     matches!(name.to_str(), Some(".git" | "target" | "__pycache__"))
 }
 
-fn detect_language(path: &Path) -> Option<LanguageId> {
+pub(crate) fn detect_language(path: &Path) -> Option<LanguageId> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
 
     let language = match extension.as_str() {

@@ -1,6 +1,7 @@
 use std::fs;
 use std::process::{Command, Output};
 
+use serde_json::Value;
 use tempfile::tempdir;
 
 fn run(arguments: &[&str]) -> Output {
@@ -32,6 +33,7 @@ fn prints_human_readable_summary_and_selected_category_paths() {
     assert!(output.status.success(), "{stderr}");
     assert!(stdout.contains("Inventoried files: 2"));
     assert!(stdout.contains("Source files: 1"));
+    assert!(stdout.contains("Source lines: 1"));
     assert!(stdout.contains("documentation    1"));
     assert!(stdout.contains("Selected files:"));
     assert!(stdout.contains("src/main.rs"));
@@ -109,4 +111,150 @@ fn rejects_unknown_list_category_during_argument_parsing() {
 
     assert!(!output.status.success());
     assert!(stderr.contains("invalid value 'infrastructure'"));
+}
+
+#[test]
+fn prints_deterministic_versioned_json_with_line_counts() {
+    let repository = tempdir().expect("temporary repository should be created");
+    let root = repository.path();
+    fs::write(
+        root.join("main.py"),
+        "# comment\n\nvalue = 1 # trailing comment\n",
+    )
+    .expect("Python fixture should be written");
+    fs::write(root.join("README.md"), "# Example\n")
+        .expect("documentation fixture should be written");
+
+    let path = root.to_str().expect("temporary path should be UTF-8");
+    let first = run(&["inventory", path, "--format", "json"]);
+    let second = run(&["inventory", path, "--format", "json"]);
+    let first_stdout = String::from_utf8(first.stdout).expect("stdout should be UTF-8");
+    let second_stdout = String::from_utf8(second.stdout).expect("stdout should be UTF-8");
+    let report: Value = serde_json::from_str(&first_stdout).expect("stdout should be JSON");
+
+    assert!(first.status.success());
+    assert!(second.status.success());
+    assert!(first.stderr.is_empty());
+    assert_eq!(first_stdout, second_stdout);
+    assert_eq!(report["report_schema_version"], "0.1.0");
+    assert_eq!(report["analysis"]["kind"], "inventory");
+    assert_eq!(
+        report["analysis"]["definition_version"],
+        "inventory-report-v1"
+    );
+    assert_eq!(report["inventory"]["inventoried_files"], 2);
+    assert_eq!(report["inventory"]["categories"]["source"]["count"], 1);
+    assert_eq!(
+        report["inventory"]["categories"]["source"]["files"][0],
+        "main.py"
+    );
+    assert_eq!(report["inventory"]["line_counts"]["total"]["files"], 1);
+    assert_eq!(
+        report["inventory"]["line_counts"]["total"]["total_lines"],
+        3
+    );
+    assert_eq!(
+        report["inventory"]["line_counts"]["total"]["source_lines"],
+        1
+    );
+    assert_eq!(
+        report["inventory"]["line_counts"]["total"]["comment_lines"],
+        1
+    );
+    assert_eq!(
+        report["inventory"]["line_counts"]["total"]["blank_lines"],
+        1
+    );
+    assert_eq!(report["diagnostics"], Value::Array(Vec::new()));
+}
+
+#[test]
+fn puts_warnings_in_json_and_can_omit_them() {
+    let repository = tempdir().expect("temporary repository should be created");
+    let root = repository.path();
+    let config = root.join("rules.json");
+    fs::write(
+        &config,
+        r#"{
+            "config_version": "0.1.0",
+            "inventory": {
+                "categories": {
+                    "configuration": {
+                        "include_filenames": ["special.md"]
+                    }
+                }
+            }
+        }"#,
+    )
+    .expect("configuration fixture should be written");
+    fs::write(root.join("special.md"), "special\n").expect("fixture should be written");
+
+    let path = root.to_str().expect("temporary path should be UTF-8");
+    let config_path = config.to_str().expect("configuration path should be UTF-8");
+    let output = run(&[
+        "inventory",
+        path,
+        "--config",
+        config_path,
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(report["diagnostics"][0]["severity"], "warning");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "category-more-specific-rule-wins"
+    );
+
+    let quiet = run(&[
+        "inventory",
+        path,
+        "--config",
+        config_path,
+        "--format",
+        "json",
+        "--no-warnings",
+    ]);
+    let quiet_report: Value = serde_json::from_slice(&quiet.stdout).expect("stdout should be JSON");
+    assert!(quiet.status.success());
+    assert!(quiet.stderr.is_empty());
+    assert_eq!(quiet_report["diagnostics"], Value::Array(Vec::new()));
+}
+
+#[test]
+fn rejects_terminal_file_listing_in_json_mode() {
+    let output = run(&[
+        "inventory",
+        ".",
+        "--format",
+        "json",
+        "--list-files",
+        "source",
+    ]);
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+
+    assert!(!output.status.success());
+    assert!(stderr.contains("--list-files cannot be combined with --format json"));
+}
+
+#[test]
+fn reports_missing_and_non_directory_paths() {
+    let repository = tempdir().expect("temporary repository should be created");
+    let file = repository.path().join("file.txt");
+    fs::write(&file, "not a directory\n").expect("fixture should be written");
+
+    let missing = run(&[
+        "inventory",
+        repository.path().join("missing").to_str().unwrap(),
+    ]);
+    let missing_stderr = String::from_utf8(missing.stderr).expect("stderr should be UTF-8");
+    assert!(!missing.status.success());
+    assert!(missing_stderr.contains("cannot access"));
+
+    let file_output = run(&["inventory", file.to_str().unwrap()]);
+    let file_stderr = String::from_utf8(file_output.stderr).expect("stderr should be UTF-8");
+    assert!(!file_output.status.success());
+    assert!(file_stderr.contains("is not a directory"));
 }
