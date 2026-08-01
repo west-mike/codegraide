@@ -129,6 +129,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "codegraide-core",
+ "serde_json",
  "tempfile",
 ]
 

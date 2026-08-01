@@ -31,6 +31,29 @@ cargo run -p codegraide -- inventory . \
 
 Use `--list-files all` to print every category.
 
+Recognized source files also report physical source, comment, and blank lines.
+The current line-count implementation covers Python, Rust, C, and C++. Strings
+and docstrings count as source; comment-only lines count as comments; empty lines
+inside block comments count as comments.
+
+The categories are a partition of physical lines: `total = source + comment + blank`.
+Files with an unsupported language remain in inventory but are not included in
+line measurements.
+
+Machine-readable output is versioned separately from the codegraide package:
+
+```sh
+cargo run -p codegraide -- inventory . --format json
+```
+
+The JSON report includes category paths, language counts, ignored populations,
+line counts, diagnostics, and `report_schema_version: "0.1.0"`. It is sorted and
+does not include timestamps or absolute repository paths, so it is suitable for
+fixtures and other automated consumers. Non-UTF-8 Unix path bytes are percent-
+encoded and described by `inventory.path_encoding`. Warnings are included in
+`diagnostics`; `--no-warnings` removes them. `--list-files` is a terminal-only
+option.
+
 Repository `.gitignore` files are respected. To include selected ignored files, repeat `--include-ignored` with repository-relative globs:
 
 ```sh

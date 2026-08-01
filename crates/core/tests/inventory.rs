@@ -51,6 +51,11 @@ fn applies_embedded_categories_and_keeps_paths_relative_and_sorted() {
 
     assert_eq!(inventory.inventoried_files, 7);
     assert_eq!(inventory.source_files(), 2);
+    assert_eq!(inventory.line_counts.total.files, 2);
+    assert_eq!(inventory.line_counts.total.total, 2);
+    assert_eq!(inventory.line_counts.total.source, 2);
+    assert_eq!(inventory.line_counts.total.comment, 0);
+    assert_eq!(inventory.line_counts.total.blank, 0);
     assert_eq!(inventory.category_count(FileCategory::Documentation), 1);
     assert_eq!(inventory.category_count(FileCategory::Configuration), 1);
     assert_eq!(inventory.category_count(FileCategory::Data), 1);
@@ -735,4 +740,56 @@ fn does_not_follow_symbolic_links() {
 
     assert_eq!(inventory.inventoried_files, 1);
     assert_eq!(inventory.source_files(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn does_not_follow_symbolic_directory_cycles() {
+    use std::os::unix::fs::symlink;
+
+    let repository = tempdir().expect("temporary repository should be created");
+    let root = repository.path();
+    let nested = root.join("nested");
+
+    fs::create_dir(&nested).expect("nested directory should be created");
+    fs::write(nested.join("module.py"), "print('nested')\n")
+        .expect("nested source fixture should be written");
+    symlink(root, nested.join("cycle")).expect("directory cycle should be created");
+
+    let inventory = inventory_repository(root).expect("symbolic cycles should be ignored");
+
+    assert_eq!(inventory.inventoried_files, 1);
+    assert_eq!(inventory.source_files(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn reports_unreadable_directories_when_permissions_can_be_enforced() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repository = tempdir().expect("temporary repository should be created");
+    let root = repository.path();
+    let restricted = root.join("restricted");
+    fs::create_dir(&restricted).expect("restricted directory should be created");
+    fs::write(restricted.join("module.py"), "print('restricted')\n")
+        .expect("restricted source fixture should be written");
+
+    let original = fs::metadata(&restricted)
+        .expect("restricted directory metadata should be available")
+        .permissions();
+    fs::set_permissions(&restricted, fs::Permissions::from_mode(0o000))
+        .expect("directory permissions should be changed");
+
+    let can_read = fs::read_dir(&restricted).is_ok();
+    let result = inventory_repository(root);
+
+    fs::set_permissions(&restricted, original).expect("directory permissions should be restored");
+
+    if can_read {
+        eprintln!("skipping unreadable-directory assertion: test process can still read mode 000");
+        return;
+    }
+
+    let error = result.expect_err("unreadable directories should fail inventory");
+    assert!(error.to_string().contains("repository discovery failed"));
 }

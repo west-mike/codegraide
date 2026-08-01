@@ -5,7 +5,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use codegraide_core::{
-    FileCategory, InventoryOptions, RepositoryInventory, inventory_repository_with_options,
+    FileCategory, InventoryJsonReport, InventoryOptions, RepositoryInventory,
+    inventory_repository_with_options,
 };
 
 #[derive(Debug, Parser)]
@@ -46,7 +47,17 @@ enum Command {
         /// Print repository-relative paths for a category; may be repeated
         #[arg(long, value_name = "CATEGORY", action = clap::ArgAction::Append)]
         list_files: Vec<FileListSelection>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Terminal)]
+        format: OutputFormat,
     },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum OutputFormat {
+    Terminal,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
@@ -85,6 +96,7 @@ fn main() -> ExitCode {
             audit_ignored,
             no_warnings,
             list_files,
+            format,
         } => run_inventory(
             path,
             include_ignored,
@@ -92,6 +104,7 @@ fn main() -> ExitCode {
             *audit_ignored,
             *no_warnings,
             list_files,
+            *format,
         ),
     }
 }
@@ -103,7 +116,13 @@ fn run_inventory(
     audit_ignored: bool,
     no_warnings: bool,
     list_files: &[FileListSelection],
+    format: OutputFormat,
 ) -> ExitCode {
+    if format == OutputFormat::Json && !list_files.is_empty() {
+        eprintln!("error: --list-files cannot be combined with --format json");
+        return ExitCode::FAILURE;
+    }
+
     let metadata = match path.metadata() {
         Ok(metadata) => metadata,
         Err(error) => {
@@ -131,6 +150,10 @@ fn run_inventory(
         }
     };
 
+    if format == OutputFormat::Json {
+        return print_json(&inventory);
+    }
+
     for diagnostic in &inventory.diagnostics {
         eprintln!("warning[{}]: {}", diagnostic.code, diagnostic.message);
     }
@@ -143,6 +166,20 @@ fn run_inventory(
     }
 
     ExitCode::SUCCESS
+}
+
+fn print_json(inventory: &RepositoryInventory) -> ExitCode {
+    let report = InventoryJsonReport::from_inventory(inventory);
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: could not serialize inventory report: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn print_summary(path: &Path, inventory: &RepositoryInventory) {
@@ -169,6 +206,26 @@ fn print_summary(path: &Path, inventory: &RepositoryInventory) {
     } else {
         for (language, count) in &inventory.files_by_language {
             println!("  {:<16} {count}", language.as_str());
+        }
+    }
+
+    println!("\nPhysical line counts:");
+    println!("  Files analyzed: {}", inventory.line_counts.total.files);
+    println!("  Total lines: {}", inventory.line_counts.total.total);
+    println!("  Source lines: {}", inventory.line_counts.total.source);
+    println!("  Comment lines: {}", inventory.line_counts.total.comment);
+    println!("  Blank lines: {}", inventory.line_counts.total.blank);
+    if !inventory.line_counts.by_language.is_empty() {
+        println!("  By language:");
+        for (language, counts) in &inventory.line_counts.by_language {
+            println!(
+                "    {:<12} files={} source={} comment={} blank={}",
+                language.as_str(),
+                counts.files,
+                counts.source,
+                counts.comment,
+                counts.blank
+            );
         }
     }
 
@@ -281,6 +338,7 @@ mod tests {
             audit_ignored,
             no_warnings,
             list_files,
+            format,
         } = args.command;
 
         assert_eq!(path, PathBuf::from("example"));
@@ -292,5 +350,6 @@ mod tests {
             list_files,
             [FileListSelection::Source, FileListSelection::Uncategorized]
         );
+        assert_eq!(format, OutputFormat::Terminal);
     }
 }
