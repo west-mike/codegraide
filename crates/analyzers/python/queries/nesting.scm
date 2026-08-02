@@ -1,0 +1,10 @@
+(if_statement) @nesting.conditional
+(for_statement) @nesting.loop
+(while_statement) @nesting.loop
+(try_statement) @nesting.exception
+(with_statement) @nesting.context
+(match_statement) @nesting.match
+(list_comprehension) @nesting.comprehension
+(set_comprehension) @nesting.comprehension
+(dictionary_comprehension) @nesting.comprehension
+(generator_expression) @nesting.comprehension

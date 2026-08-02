@@ -4,8 +4,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use codegraide_analyzer_python::PythonAnalyzer;
 use codegraide_core::{
-    FileCategory, InventoryJsonReport, InventoryOptions, RepositoryInventory,
+    AnalysisJsonReport, AnalysisOptions, AnalyzerRegistry, FileCategory, InventoryJsonReport,
+    InventoryOptions, RepositoryAnalysis, RepositoryInventory, analyze_repository,
     inventory_repository_with_options,
 };
 
@@ -47,6 +49,44 @@ enum Command {
         /// Print repository-relative paths for a category; may be repeated
         #[arg(long, value_name = "CATEGORY", action = clap::ArgAction::Append)]
         list_files: Vec<FileListSelection>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Terminal)]
+        format: OutputFormat,
+    },
+    /// Parse supported source files and report syntax recovery diagnostics
+    Analyze {
+        /// File or directory to analyze
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+
+        /// Select repository-relative paths with a full-match regular expression; may repeat
+        #[arg(long = "match", value_name = "REGEX", action = clap::ArgAction::Append)]
+        match_patterns: Vec<String>,
+
+        /// Include files matching a repository-relative glob even when Git ignores them
+        #[arg(long, value_name = "GLOB", action = clap::ArgAction::Append)]
+        include_ignored: Vec<String>,
+
+        /// Print all diagnostics, or diagnostics for one exact file; may repeat
+        #[arg(
+            long,
+            value_name = "FILE",
+            num_args = 0..=1,
+            action = clap::ArgAction::Append,
+            default_missing_value = "__ALL_DIAGNOSTICS__"
+        )]
+        diagnostics: Vec<String>,
+
+        /// Print complete symbols, imports, and measurements, or details for one exact file
+        #[arg(
+            long,
+            value_name = "FILE",
+            num_args = 0..=1,
+            action = clap::ArgAction::Append,
+            default_missing_value = "__ALL_DETAILS__"
+        )]
+        details: Vec<String>,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Terminal)]
@@ -104,6 +144,21 @@ fn main() -> ExitCode {
             *audit_ignored,
             *no_warnings,
             list_files,
+            *format,
+        ),
+        Command::Analyze {
+            path,
+            match_patterns,
+            include_ignored,
+            diagnostics,
+            details,
+            format,
+        } => run_analyze(
+            path,
+            match_patterns,
+            include_ignored,
+            diagnostics,
+            details,
             *format,
         ),
     }
@@ -179,6 +234,437 @@ fn print_json(inventory: &RepositoryInventory) -> ExitCode {
             eprintln!("error: could not serialize inventory report: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn run_analyze(
+    path: &Path,
+    match_patterns: &[String],
+    include_ignored: &[String],
+    diagnostics: &[String],
+    details: &[String],
+    format: OutputFormat,
+) -> ExitCode {
+    let diagnostic_request = match parse_diagnostic_request(diagnostics) {
+        Ok(request) => request,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let detail_request = match parse_detail_request(details) {
+        Ok(request) => request,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if format == OutputFormat::Json && diagnostic_request.is_some() {
+        if detail_request.is_some() {
+            eprintln!("error: --diagnostics and --details are only available with terminal output");
+        } else {
+            eprintln!("error: --diagnostics is only available with terminal output");
+        }
+        return ExitCode::FAILURE;
+    }
+    if format == OutputFormat::Json && detail_request.is_some() {
+        eprintln!("error: --details is only available with terminal output");
+        return ExitCode::FAILURE;
+    }
+
+    let mut registry = AnalyzerRegistry::new();
+    let analyzer = match PythonAnalyzer::new() {
+        Ok(analyzer) => analyzer,
+        Err(error) => {
+            eprintln!("error: could not initialize Python analyzer: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = registry.register(Box::new(analyzer)) {
+        eprintln!("error: could not register Python analyzer: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let analysis = match analyze_repository(
+        &AnalysisOptions {
+            target: path.to_path_buf(),
+            match_patterns: match_patterns.to_vec(),
+            include_ignored: include_ignored.to_vec(),
+        },
+        &mut registry,
+    ) {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            eprintln!("error: failed to analyze {}: {error}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if format == OutputFormat::Json {
+        return print_analysis_json(&analysis);
+    }
+    print_analysis_summary(path, &analysis);
+    if let Some(request) = detail_request {
+        if let Err(message) = print_details(&analysis, request) {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
+    }
+    if let Some(request) = diagnostic_request {
+        if let Err(message) = print_diagnostics(&analysis, request) {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
+#[derive(Debug, Clone)]
+enum DiagnosticRequest {
+    All,
+    Files(Vec<PathBuf>),
+}
+
+fn parse_diagnostic_request(values: &[String]) -> Result<Option<DiagnosticRequest>, String> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let all_count = values
+        .iter()
+        .filter(|value| value.as_str() == "__ALL_DIAGNOSTICS__")
+        .count();
+    if all_count > 0 {
+        if values.len() != all_count {
+            return Err("--diagnostics cannot mix a bare request with file paths".to_owned());
+        }
+        return Ok(Some(DiagnosticRequest::All));
+    }
+    Ok(Some(DiagnosticRequest::Files(
+        values.iter().map(PathBuf::from).collect(),
+    )))
+}
+
+fn parse_detail_request(values: &[String]) -> Result<Option<DiagnosticRequest>, String> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let all_count = values
+        .iter()
+        .filter(|value| value.as_str() == "__ALL_DETAILS__")
+        .count();
+    if all_count > 0 {
+        if values.len() != all_count {
+            return Err("--details cannot mix a bare request with file paths".to_owned());
+        }
+        return Ok(Some(DiagnosticRequest::All));
+    }
+    Ok(Some(DiagnosticRequest::Files(
+        values.iter().map(PathBuf::from).collect(),
+    )))
+}
+
+fn print_analysis_json(analysis: &RepositoryAnalysis) -> ExitCode {
+    match serde_json::to_string_pretty(&AnalysisJsonReport::from_analysis(analysis)) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: could not serialize analysis report: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis) {
+    println!("Analysis target: {}", path.display());
+    println!("Inventoried files: {}", analysis.inventoried_files);
+    println!(
+        "Selected files: {}",
+        analysis.selection.selected_files.len()
+    );
+    println!("\nInventory languages:");
+    if analysis.inventory_languages.is_empty() {
+        println!("  (none)");
+    } else {
+        for (language, count) in &analysis.inventory_languages {
+            let marker = if analysis.inventory_only_languages.contains_key(language) {
+                " (inventory only)"
+            } else {
+                ""
+            };
+            println!("  {}: {count}{marker}", language.as_str());
+        }
+    }
+    println!("\nAnalyzers:");
+    if analysis.analyzers.is_empty() {
+        println!("  (none)");
+    }
+    for run in &analysis.analyzers {
+        println!(
+            "  {} [{}]: analyzed={} successful={} partial={} failed={}",
+            run.descriptor.language.as_str(),
+            run.descriptor.id,
+            run.counts.analyzed,
+            run.counts.successful,
+            run.counts.partial,
+            run.counts.failed
+        );
+        for file in &run.files {
+            if !file.diagnostics.is_empty() {
+                println!(
+                    "    diagnostics: {} ({})",
+                    file.path.display(),
+                    file.diagnostics.len()
+                );
+            }
+        }
+        let symbol_counts = run
+            .files
+            .iter()
+            .flat_map(|file| file.facts.symbols.iter())
+            .fold([0usize; 4], |mut counts, symbol| {
+                match symbol.kind {
+                    codegraide_core::SymbolKind::Module => counts[0] += 1,
+                    codegraide_core::SymbolKind::Class => counts[1] += 1,
+                    codegraide_core::SymbolKind::Function => counts[2] += 1,
+                    codegraide_core::SymbolKind::Method => counts[3] += 1,
+                }
+                counts
+            });
+        let import_count = run
+            .files
+            .iter()
+            .map(|file| file.facts.dependencies.len())
+            .sum::<usize>();
+        println!(
+            "    facts: modules={} classes={} functions={} methods={} imports={import_count}",
+            symbol_counts[0], symbol_counts[1], symbol_counts[2], symbol_counts[3]
+        );
+        print_top_measurements(
+            run,
+            "function-declaration-physical-lines",
+            "longest declarations",
+        );
+        print_top_measurements(run, "python-max-control-flow-nesting", "deepest nesting");
+    }
+    for diagnostic in &analysis.diagnostics {
+        println!(
+            "\n{}[{}]: {}",
+            diagnostic.severity.as_str(),
+            diagnostic.code,
+            diagnostic.message
+        );
+    }
+}
+
+fn print_top_measurements(run: &codegraide_core::AnalyzerRun, metric_id: &str, label: &str) {
+    let mut values = run
+        .files
+        .iter()
+        .flat_map(|file| {
+            file.facts.symbols.iter().filter_map(|symbol| {
+                if !matches!(
+                    symbol.kind,
+                    codegraide_core::SymbolKind::Function | codegraide_core::SymbolKind::Method
+                ) {
+                    return None;
+                }
+                let value = symbol
+                    .measurements
+                    .iter()
+                    .find(|measurement| measurement.id == metric_id)
+                    .and_then(|measurement| measurement.value)?;
+                Some((value, file.path.clone(), symbol.qualified_name.clone()))
+            })
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    if values.is_empty() {
+        return;
+    }
+    println!("    {label}:");
+    for (value, path, qualified_name) in values.into_iter().take(3) {
+        println!("      {value:>4}  {}::{qualified_name}", path.display());
+    }
+}
+
+fn print_diagnostics(
+    analysis: &RepositoryAnalysis,
+    request: DiagnosticRequest,
+) -> Result<(), String> {
+    let requested_paths = match request {
+        DiagnosticRequest::All => None,
+        DiagnosticRequest::Files(paths) => Some(
+            paths
+                .into_iter()
+                .map(|path| normalize_diagnostic_path(analysis, &path))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    };
+    println!("\nDiagnostics:");
+    let mut printed_any = false;
+    for run in &analysis.analyzers {
+        for file in &run.files {
+            if requested_paths
+                .as_ref()
+                .is_some_and(|paths| !paths.iter().any(|path| path == &file.path))
+            {
+                continue;
+            }
+            printed_any = true;
+            println!("  {}:", file.path.display());
+            if file.diagnostics.is_empty() {
+                println!("    (none)");
+                continue;
+            }
+            for diagnostic in &file.diagnostics {
+                print_one_diagnostic(diagnostic);
+            }
+        }
+    }
+    if let Some(paths) = requested_paths {
+        for path in paths {
+            if !analysis
+                .analyzers
+                .iter()
+                .flat_map(|run| run.files.iter())
+                .any(|file| file.path == path)
+            {
+                return Err(format!(
+                    "diagnostic path {} was not selected or is not supported",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if !printed_any {
+        println!("  (none)");
+    }
+    Ok(())
+}
+
+fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> Result<(), String> {
+    let requested_paths = match request {
+        DiagnosticRequest::All => None,
+        DiagnosticRequest::Files(paths) => Some(
+            paths
+                .into_iter()
+                .map(|path| normalize_diagnostic_path(analysis, &path))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    };
+    println!("\nDetails:");
+    let mut printed_any = false;
+    for run in &analysis.analyzers {
+        for file in &run.files {
+            if requested_paths
+                .as_ref()
+                .is_some_and(|paths| !paths.iter().any(|path| path == &file.path))
+            {
+                continue;
+            }
+            printed_any = true;
+            println!("  {}:", file.path.display());
+            for symbol in &file.facts.symbols {
+                println!(
+                    "    {} {} [{}]",
+                    symbol.kind.as_str(),
+                    symbol.qualified_name,
+                    symbol.completeness.as_str()
+                );
+                for measurement in &symbol.measurements {
+                    println!(
+                        "      metric {}: {}",
+                        measurement.id,
+                        measurement
+                            .value
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "unavailable".to_owned())
+                    );
+                }
+            }
+            for dependency in &file.facts.dependencies {
+                println!(
+                    "    import {}{}",
+                    dependency.module.as_deref().unwrap_or("."),
+                    dependency
+                        .imported_name
+                        .as_ref()
+                        .map(|name| format!("::{name}"))
+                        .unwrap_or_default()
+                );
+            }
+        }
+    }
+    if let Some(paths) = &requested_paths {
+        for path in paths {
+            if !analysis
+                .analyzers
+                .iter()
+                .flat_map(|run| run.files.iter())
+                .any(|file| file.path == *path)
+            {
+                return Err(format!(
+                    "details path {} was not selected or is not supported",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if !printed_any {
+        println!("  (none)");
+    }
+    Ok(())
+}
+
+fn normalize_diagnostic_path(
+    analysis: &RepositoryAnalysis,
+    path: &Path,
+) -> Result<PathBuf, String> {
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        analysis.selection.root.join(path)
+    };
+    candidate
+        .strip_prefix(&analysis.selection.root)
+        .map(Path::to_path_buf)
+        .map_err(|_| {
+            format!(
+                "diagnostic path {} is outside the analysis root",
+                path.display()
+            )
+        })
+}
+
+fn print_one_diagnostic(diagnostic: &codegraide_core::AnalysisDiagnostic) {
+    let location = diagnostic.span.map(|span| {
+        format!(
+            "{}:{}-{}:{}",
+            span.start.line, span.start.column, span.end.line, span.end.column
+        )
+    });
+    match location {
+        Some(location) => println!(
+            "    {}[{}] {location}: {}",
+            diagnostic.severity.as_str(),
+            diagnostic.code,
+            diagnostic.message
+        ),
+        None => println!(
+            "    {}[{}]: {}",
+            diagnostic.severity.as_str(),
+            diagnostic.code,
+            diagnostic.message
+        ),
     }
 }
 
@@ -339,7 +825,10 @@ mod tests {
             no_warnings,
             list_files,
             format,
-        } = args.command;
+        } = args.command
+        else {
+            panic!("expected inventory command");
+        };
 
         assert_eq!(path, PathBuf::from("example"));
         assert_eq!(include_ignored, ["generated/**", "vendor/**"]);
