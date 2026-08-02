@@ -325,7 +325,7 @@ fn should_ignore_directory(name: &OsStr) -> bool {
     matches!(name.to_str(), Some(".git" | "target" | "__pycache__"))
 }
 
-pub(crate) fn detect_language(path: &Path) -> Option<LanguageId> {
+pub fn detect_language(path: &Path) -> Option<LanguageId> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
 
     let language = match extension.as_str() {
