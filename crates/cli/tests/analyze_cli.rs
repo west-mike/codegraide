@@ -69,11 +69,11 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert_eq!(report["report_schema_version"], "0.1.0");
+    assert_eq!(report["report_schema_version"], "0.2.0");
     assert_eq!(report["analysis"]["kind"], "syntax-analysis");
     assert_eq!(
         report["analysis"]["definition_version"],
-        "syntax-analysis-v1"
+        "syntax-analysis-v2"
     );
     assert_eq!(report["inventory"]["inventory_only_languages"]["rust"], 1);
     assert_eq!(
@@ -146,6 +146,187 @@ fn diagnostics_cannot_be_combined_with_json() {
     let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
     assert!(!output.status.success());
     assert!(stderr.contains("--diagnostics is only available with terminal output"));
+}
+
+#[test]
+fn json_review_reports_complexity_risk_and_gate_exit_codes() {
+    let repository = tempdir().expect("temporary repository should be created");
+    fs::write(
+        repository.path().join("simple.py"),
+        "def simple(value):\n    return value\n",
+    )
+    .expect("simple fixture");
+    fs::write(
+        repository.path().join("complex.py"),
+        "def complex(value):\n    if value: pass\n    if value: pass\n    if value: pass\n    if value: pass\n    if value: pass\n    if value: pass\n    if value: pass\n    if value: pass\n    if value: pass\n    if value: pass\n    return value\n",
+    )
+    .expect("complex fixture");
+    let root = repository.path().to_str().unwrap();
+
+    let json = run(&["analyze", root, "--format", "json"]);
+    let report: Value = serde_json::from_slice(&json.stdout).expect("report should be JSON");
+    assert!(json.status.success());
+    assert_eq!(report["review"]["status"], "human-review-required");
+    let rankings = report["review"]["rankings"]
+        .as_array()
+        .expect("rankings should be an array");
+    assert_eq!(rankings[0]["qualified_name"], "complex");
+    assert_eq!(rankings[0]["score"], 11);
+    assert_eq!(rankings[0]["risk"], "high");
+    assert_eq!(
+        report["review"]["findings"][0]["required_action"],
+        "human-review"
+    );
+    assert!(report["review"]["findings"][0]["severity"].is_null());
+
+    let review = run(&[
+        "analyze",
+        root,
+        "--format",
+        "json",
+        "--profile",
+        "review",
+        "--top",
+        "1",
+    ]);
+    let review_report: Value =
+        serde_json::from_slice(&review.stdout).expect("review report should be JSON");
+    assert!(review.status.success());
+    assert_eq!(review_report["review"]["status"], "human-review-required");
+    assert!(review_report["analyzers"].is_null());
+    assert_eq!(review_report["ranking_count"], 2);
+    assert_eq!(review_report["finding_count"], 1);
+    assert_eq!(
+        review_report["review"]["rankings"]
+            .as_array()
+            .expect("review rankings should be an array")
+            .len(),
+        1
+    );
+
+    let gate_report_output = run(&["analyze", root, "--format", "gate", "--top", "1", "--gate"]);
+    let gate_report: Value =
+        serde_json::from_slice(&gate_report_output.stdout).expect("gate report should be JSON");
+    assert_eq!(gate_report_output.status.code(), Some(2));
+    assert_eq!(gate_report["status"], "human-review-required");
+    assert_eq!(gate_report["exit_code"], 2);
+    assert_eq!(gate_report["finding_count"], 1);
+    assert_eq!(
+        gate_report["top_findings"]
+            .as_array()
+            .expect("gate findings should be an array")
+            .len(),
+        1
+    );
+
+    let gated = run(&["analyze", root, "--gate", "--format", "json"]);
+    assert_eq!(gated.status.code(), Some(2));
+
+    let blocked = run(&[
+        "analyze",
+        root,
+        "--gate",
+        "--complexity-block-at",
+        "11",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(blocked.status.code(), Some(3));
+}
+
+#[test]
+fn policy_file_and_cli_threshold_override_are_reported() {
+    let repository = tempdir().expect("temporary repository should be created");
+    fs::write(
+        repository.path().join("sample.py"),
+        "def sample(value):\n    if value: pass\n    if value: pass\n    return value\n",
+    )
+    .expect("Python fixture");
+    let policy = repository.path().join("review-policy.json");
+    fs::write(
+        &policy,
+        r#"{
+            "policy_version": "0.1.0",
+            "cyclomatic_complexity": {
+                "human_review_at": 3,
+                "risk_bands": {"moderate_at": 2, "high_at": 3, "critical_at": 5}
+            }
+        }"#,
+    )
+    .expect("policy fixture");
+    let root = repository.path().to_str().unwrap();
+    let output = run(&[
+        "analyze",
+        root,
+        "--policy",
+        policy.to_str().unwrap(),
+        "--complexity-review-at",
+        "4",
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("report should be JSON");
+    assert!(output.status.success());
+    assert_eq!(report["review"]["policy"]["complexity_review_at"], 4);
+    assert_eq!(report["review"]["policy"]["risk_bands"]["high_at"], 3);
+    assert_eq!(
+        report["review"]["policy"]["sources"],
+        serde_json::json!(["built-in", "policy-file", "cli"])
+    );
+    assert_eq!(report["review"]["status"], "pass");
+}
+
+#[test]
+fn policy_exception_acknowledges_a_bounded_callable_without_hiding_evidence() {
+    let repository = tempdir().expect("temporary repository should be created");
+    fs::write(
+        repository.path().join("legacy.py"),
+        "def legacy(value):\n    if value: pass\n    if value: pass\n    return value\n",
+    )
+    .expect("Python fixture");
+    let root = repository.path().to_str().unwrap();
+    let initial = run(&["analyze", root, "--format", "json"]);
+    let initial_report: Value =
+        serde_json::from_slice(&initial.stdout).expect("initial report should be JSON");
+    let symbol_id = initial_report["review"]["rankings"][0]["symbol_id"]
+        .as_str()
+        .expect("ranking should have a symbol id");
+    let policy = repository.path().join("review-policy.json");
+    fs::write(
+        &policy,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "policy_version": "0.1.0",
+            "cyclomatic_complexity": {
+                "human_review_at": 2,
+                "exceptions": [{
+                    "symbol_id": symbol_id,
+                    "reason": "Legacy protocol parser reviewed by the team",
+                    "approved_max": 3
+                }]
+            }
+        }))
+        .expect("policy should serialize"),
+    )
+    .expect("policy fixture");
+
+    let output = run(&[
+        "analyze",
+        root,
+        "--policy",
+        policy.to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("report should be JSON");
+    assert!(output.status.success());
+    assert_eq!(report["review"]["status"], "pass");
+    assert_eq!(report["review"]["findings"][0]["acknowledged"], true);
+    assert_eq!(report["review"]["findings"][0]["required_action"], "none");
+    assert_eq!(report["review"]["rankings"][0]["score"], 3);
+    assert_eq!(
+        report["review"]["policy"]["exceptions"][0]["approved_max"],
+        3
+    );
 }
 
 #[test]

@@ -136,7 +136,7 @@ fn prints_deterministic_versioned_json_with_line_counts() {
     assert!(second.status.success());
     assert!(first.stderr.is_empty());
     assert_eq!(first_stdout, second_stdout);
-    assert_eq!(report["report_schema_version"], "0.1.0");
+    assert_eq!(report["report_schema_version"], "0.2.0");
     assert_eq!(report["analysis"]["kind"], "inventory");
     assert_eq!(
         report["analysis"]["definition_version"],

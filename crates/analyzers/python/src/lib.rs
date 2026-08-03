@@ -4,11 +4,11 @@ use std::path::Path;
 
 use codegraide_core::{
     AnalysisDiagnostic, AnalysisFacts, AnalysisInput, AnalysisLevel, AnalyzerCapability,
-    AnalyzerDescriptor, Decorator, DependencyKind, DependencyReference, DiagnosticSeverity,
-    FileAnalysis, FileAnalysisStatus, GrammarDescriptor, LanguageAnalyzer, LanguageId, Measurement,
-    MeasurementStatus, NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor,
-    ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolId, SymbolKind,
-    SymbolModifier,
+    AnalyzerDescriptor, DecisionEvent, DecisionEventKind, Decorator, DependencyKind,
+    DependencyReference, DiagnosticSeverity, FileAnalysis, FileAnalysisStatus, GrammarDescriptor,
+    LanguageAnalyzer, LanguageId, Measurement, MeasurementStatus, NestingEvent, NestingEventKind,
+    PYTHON_CYCLOMATIC_COMPLEXITY, Parameter, ParameterKind, QueryDescriptor, ResolutionLevel,
+    SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolId, SymbolKind, SymbolModifier,
 };
 use tree_sitter::{Language, Node, Parser, Query};
 
@@ -21,6 +21,7 @@ pub struct PythonAnalyzer {
     _symbol_query: Query,
     _import_query: Query,
     _nesting_query: Query,
+    _decision_query: Query,
 }
 
 #[derive(Debug)]
@@ -51,6 +52,8 @@ impl PythonAnalyzer {
             .map_err(|error| PythonAnalyzerError(format!("invalid imports query: {error}")))?;
         let nesting_query = Query::new(&language, include_str!("../queries/nesting.scm"))
             .map_err(|error| PythonAnalyzerError(format!("invalid nesting query: {error}")))?;
+        let decision_query = Query::new(&language, include_str!("../queries/decisions.scm"))
+            .map_err(|error| PythonAnalyzerError(format!("invalid decision query: {error}")))?;
 
         Ok(Self {
             descriptor: AnalyzerDescriptor {
@@ -62,6 +65,7 @@ impl PythonAnalyzer {
                     AnalyzerCapability::Parse,
                     AnalyzerCapability::Symbols,
                     AnalyzerCapability::DependencyReferences,
+                    AnalyzerCapability::DecisionEvents,
                     AnalyzerCapability::NestingEvents,
                     AnalyzerCapability::Measurements,
                 ]
@@ -84,6 +88,10 @@ impl PythonAnalyzer {
                         name: "nesting".to_owned(),
                         version: "python-nesting-v1".to_owned(),
                     },
+                    QueryDescriptor {
+                        name: "decisions".to_owned(),
+                        version: "python-decisions-v1".to_owned(),
+                    },
                 ],
                 limitations: vec![
                     "Reports parser recovery and syntax-derived facts; it does not lint or type-check Python."
@@ -94,12 +102,15 @@ impl PythonAnalyzer {
                         .to_owned(),
                     "Non-UTF-8 source text is parsed by byte span but names and snippets use lossy decoding."
                         .to_owned(),
+                    "Cyclomatic complexity covers callable bodies; module and class initialization bodies are not scored in v1."
+                        .to_owned(),
                 ],
             },
             parser,
             _symbol_query: symbol_query,
             _import_query: import_query,
             _nesting_query: nesting_query,
+            _decision_query: decision_query,
         })
     }
 }
@@ -196,6 +207,7 @@ impl<'a> Extraction<'a> {
             parameters: Vec::new(),
             decorators: Vec::new(),
             nesting_events: Vec::new(),
+            decision_events: Vec::new(),
             measurements: Vec::new(),
         });
         self.visit_children(root, Some(module_id), None, 0);
@@ -248,10 +260,23 @@ impl<'a> Extraction<'a> {
             "function_definition" | "class_definition" => {
                 self.process_definition(node, parent_id, callable_id, depth, None, Vec::new());
             }
+            "lambda" | "lambda_within_for_in_clause" => {
+                self.process_lambda(node, parent_id, callable_id);
+            }
             "import_statement" | "import_from_statement" | "future_import_statement" => {
                 self.extract_import(node, callable_id);
             }
             _ => {
+                if let Some(kind) = decision_kind(node, self.source) {
+                    if let Some(callable_id) = &callable_id {
+                        if let Some(symbol) = self.symbol_mut(callable_id) {
+                            symbol.decision_events.push(DecisionEvent {
+                                kind,
+                                span: source_span(node),
+                            });
+                        }
+                    }
+                }
                 let event_kind = nesting_kind(node.kind());
                 let next_depth = if let Some(kind) = event_kind {
                     if let Some(callable_id) = &callable_id {
@@ -353,6 +378,7 @@ impl<'a> Extraction<'a> {
             parameters,
             decorators,
             nesting_events: Vec::new(),
+            decision_events: Vec::new(),
             measurements: Vec::new(),
         });
 
@@ -363,6 +389,61 @@ impl<'a> Extraction<'a> {
                 None
             };
             self.visit_children(body, Some(id), next_callable, 0);
+        }
+    }
+
+    fn process_lambda(
+        &mut self,
+        node: Node<'_>,
+        parent_id: Option<SymbolId>,
+        _callable_id: Option<SymbolId>,
+    ) {
+        let parent_qualified = parent_id
+            .as_ref()
+            .and_then(|id| self.symbol(id))
+            .map(|symbol| symbol.qualified_name.clone())
+            .unwrap_or_default();
+        let position = node.start_position();
+        let lambda_name = format!("<lambda>@{}:{}", position.row + 1, position.column + 1);
+        let qualified_name = if parent_qualified.is_empty() {
+            lambda_name.clone()
+        } else {
+            format!("{parent_qualified}.{lambda_name}")
+        };
+        let base_id = format!("{}::lambda:{qualified_name}", path_string(self.path));
+        let ordinal = self.id_counts.entry(base_id.clone()).or_insert(0);
+        *ordinal += 1;
+        let id = SymbolId::new(format!("{base_id}#{}", *ordinal));
+        let span = source_span(node);
+        let body_span = node.child_by_field_name("body").map(source_span);
+        let complete = !node.has_error() && !span_has_error(node);
+        let parameters = node
+            .child_by_field_name("parameters")
+            .map(|parameters| parse_parameters(parameters, self.source))
+            .unwrap_or_default();
+        self.symbols.push(Symbol {
+            id: id.clone(),
+            parent_id,
+            kind: SymbolKind::Lambda,
+            name: "<lambda>".to_owned(),
+            qualified_name,
+            span,
+            body_span,
+            name_span: None,
+            completeness: if complete {
+                SymbolCompleteness::Complete
+            } else {
+                SymbolCompleteness::Partial
+            },
+            modifiers: BTreeSet::new(),
+            parameters,
+            decorators: Vec::new(),
+            nesting_events: Vec::new(),
+            decision_events: Vec::new(),
+            measurements: Vec::new(),
+        });
+        if let Some(body) = node.child_by_field_name("body") {
+            self.visit_node(body, Some(id.clone()), Some(id), 0);
         }
     }
 
@@ -514,7 +595,10 @@ impl<'a> Extraction<'a> {
 
     fn finish_measurements(&mut self) {
         for symbol in &mut self.symbols {
-            if !matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method) {
+            if !matches!(
+                symbol.kind,
+                SymbolKind::Function | SymbolKind::Method | SymbolKind::Lambda
+            ) {
                 continue;
             }
             if symbol.completeness == SymbolCompleteness::Partial {
@@ -524,6 +608,7 @@ impl<'a> Extraction<'a> {
                     ("declared-parameter-count", "parameters"),
                     ("caller-parameter-count", "parameters"),
                     ("python-max-control-flow-nesting", "levels"),
+                    (PYTHON_CYCLOMATIC_COMPLEXITY, "score"),
                 ] {
                     symbol.measurements.push(Measurement {
                         id: id.to_owned(),
@@ -566,6 +651,11 @@ impl<'a> Extraction<'a> {
                 ("declared-parameter-count", "parameters", declared_count),
                 ("caller-parameter-count", "parameters", caller_count),
                 ("python-max-control-flow-nesting", "levels", max_nesting),
+                (
+                    PYTHON_CYCLOMATIC_COMPLEXITY,
+                    "score",
+                    1 + symbol.decision_events.len() as u64,
+                ),
             ] {
                 symbol.measurements.push(Measurement {
                     id: id.to_owned(),
@@ -584,6 +674,15 @@ impl<'a> Extraction<'a> {
                 .then_with(|| left.span.end_byte.cmp(&right.span.end_byte))
                 .then_with(|| left.id.cmp(&right.id))
         });
+        for symbol in &mut self.symbols {
+            symbol.decision_events.sort_by(|left, right| {
+                left.span
+                    .start_byte
+                    .cmp(&right.span.start_byte)
+                    .then_with(|| left.span.end_byte.cmp(&right.span.end_byte))
+                    .then_with(|| left.kind.cmp(&right.kind))
+            });
+        }
         self.dependencies.sort_by(|left, right| {
             left.span
                 .start_byte
@@ -709,6 +808,59 @@ fn nesting_kind(kind: &str) -> Option<NestingEventKind> {
         | "dictionary_comprehension"
         | "generator_expression" => Some(NestingEventKind::Comprehension),
         _ => None,
+    }
+}
+
+fn decision_kind(node: Node<'_>, source: &[u8]) -> Option<DecisionEventKind> {
+    match node.kind() {
+        "if_statement" | "elif_clause" => Some(DecisionEventKind::Conditional),
+        "for_statement" | "while_statement" => Some(DecisionEventKind::Loop),
+        "for_in_clause" => Some(DecisionEventKind::ComprehensionLoop),
+        "except_clause" => Some(DecisionEventKind::ExceptionHandler),
+        "case_clause" if !case_is_irrefutable(node, source) => {
+            Some(DecisionEventKind::PatternBranch)
+        }
+        "if_clause"
+            if node
+                .parent()
+                .is_some_and(|parent| parent.kind() == "case_clause") =>
+        {
+            Some(DecisionEventKind::MatchGuard)
+        }
+        "if_clause" => Some(DecisionEventKind::ComprehensionFilter),
+        "boolean_operator" => Some(DecisionEventKind::BooleanShortCircuit),
+        "conditional_expression" => Some(DecisionEventKind::ConditionalExpression),
+        "assert_statement" => Some(DecisionEventKind::Assertion),
+        _ => None,
+    }
+}
+
+fn case_is_irrefutable(node: Node<'_>, source: &[u8]) -> bool {
+    let guard = node.child_by_field_name("guard");
+    let patterns = node
+        .named_children(&mut node.walk())
+        .filter(|child| {
+            Some(child.start_byte()) != guard.map(|guard| guard.start_byte())
+                && child.kind() != "block"
+                && child.kind() != "suite"
+        })
+        .collect::<Vec<_>>();
+    patterns.len() == 1 && pattern_is_irrefutable(patterns[0], source)
+}
+
+fn pattern_is_irrefutable(node: Node<'_>, source: &[u8]) -> bool {
+    match node.kind() {
+        "case_pattern" | "as_pattern" => node
+            .named_child(0)
+            .is_some_and(|child| pattern_is_irrefutable(child, source)),
+        "union_pattern" => node
+            .named_children(&mut node.walk())
+            .any(|child| pattern_is_irrefutable(child, source)),
+        "identifier" | "dotted_name" => {
+            let text = node_text(node, source);
+            !text.contains('.') && text != "_"
+        }
+        _ => node_text(node, source).trim() == "_",
     }
 }
 
@@ -838,6 +990,111 @@ mod tests {
         assert!(function.measurements.iter().any(|measurement| {
             measurement.id == "declared-parameter-count" && measurement.value == Some(5)
         }));
+        assert!(function.measurements.iter().any(|measurement| {
+            measurement.id == PYTHON_CYCLOMATIC_COMPLEXITY && measurement.value == Some(3)
+        }));
+    }
+
+    #[test]
+    fn counts_explicit_python_decisions_and_preserves_event_spans() {
+        let result = analyze(
+            b"def choose(value, items):\n    if value and value > 0:\n        for item in items:\n            if item.ready:\n                return item\n    elif value is None:\n        assert items\n    return [item for item in items if item.ok]\n",
+        );
+        let function = result
+            .facts
+            .symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Function)
+            .expect("function should be extracted");
+        let complexity = function
+            .measurements
+            .iter()
+            .find(|measurement| measurement.id == PYTHON_CYCLOMATIC_COMPLEXITY)
+            .and_then(|measurement| measurement.value);
+        assert_eq!(complexity, Some(9));
+        assert_eq!(function.decision_events.len(), 8);
+        assert_eq!(
+            function
+                .decision_events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                DecisionEventKind::Conditional,
+                DecisionEventKind::BooleanShortCircuit,
+                DecisionEventKind::Loop,
+                DecisionEventKind::Conditional,
+                DecisionEventKind::Conditional,
+                DecisionEventKind::Assertion,
+                DecisionEventKind::ComprehensionLoop,
+                DecisionEventKind::ComprehensionFilter,
+            ]
+        );
+        assert!(
+            function
+                .decision_events
+                .iter()
+                .all(|event| event.span.start.line > 1)
+        );
+    }
+
+    #[test]
+    fn excludes_implicit_and_unconditional_constructs() {
+        let result = analyze(
+            b"def controlled(lock, values):\n    with lock:\n        try:\n            for value in values:\n                pass\n            else:\n                pass\n        except ValueError:\n            pass\n        else:\n            pass\n        finally:\n            pass\n",
+        );
+        let function = result
+            .facts
+            .symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Function)
+            .expect("function should be extracted");
+        let complexity = function
+            .measurements
+            .iter()
+            .find(|measurement| measurement.id == PYTHON_CYCLOMATIC_COMPLEXITY)
+            .and_then(|measurement| measurement.value);
+        assert_eq!(complexity, Some(3));
+        assert_eq!(
+            function
+                .decision_events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![DecisionEventKind::Loop, DecisionEventKind::ExceptionHandler]
+        );
+    }
+
+    #[test]
+    fn scores_match_cases_and_lambda_as_separate_callables() {
+        let result = analyze(
+            b"def outer(value):\n    match value:\n        case 1:\n            return 1\n        case x:\n            return x\n    return lambda item: item if item and item.ready else None\n",
+        );
+        let outer = result
+            .facts
+            .symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Function)
+            .expect("outer function should be extracted");
+        let outer_score = outer
+            .measurements
+            .iter()
+            .find(|measurement| measurement.id == PYTHON_CYCLOMATIC_COMPLEXITY)
+            .and_then(|measurement| measurement.value);
+        assert_eq!(outer_score, Some(2));
+        let lambda = result
+            .facts
+            .symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Lambda)
+            .expect("lambda should be extracted");
+        let lambda_score = lambda
+            .measurements
+            .iter()
+            .find(|measurement| measurement.id == PYTHON_CYCLOMATIC_COMPLEXITY)
+            .and_then(|measurement| measurement.value);
+        assert_eq!(lambda_score, Some(3));
+        assert_eq!(lambda.parent_id.as_ref(), Some(&outer.id));
     }
 
     #[test]

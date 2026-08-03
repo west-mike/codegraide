@@ -6,9 +6,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use codegraide_analyzer_python::PythonAnalyzer;
 use codegraide_core::{
-    AnalysisJsonReport, AnalysisOptions, AnalyzerRegistry, FileCategory, InventoryJsonReport,
-    InventoryOptions, RepositoryAnalysis, RepositoryInventory, analyze_repository,
-    inventory_repository_with_options,
+    AnalysisJsonReport, AnalysisOptions, AnalyzerRegistry, FileCategory, GateJsonReport,
+    InventoryJsonReport, InventoryOptions, RepositoryAnalysis, RepositoryInventory,
+    ReviewJsonReport, ReviewOptions, ReviewStatus, analyze_repository,
+    inventory_repository_with_options, review_status_code,
 };
 
 #[derive(Debug, Parser)]
@@ -51,8 +52,8 @@ enum Command {
         list_files: Vec<FileListSelection>,
 
         /// Output format
-        #[arg(long, value_enum, default_value_t = OutputFormat::Terminal)]
-        format: OutputFormat,
+        #[arg(long, value_enum, default_value_t = InventoryOutputFormat::Terminal)]
+        format: InventoryOutputFormat,
     },
     /// Parse supported source files and report syntax recovery diagnostics
     Analyze {
@@ -88,16 +89,57 @@ enum Command {
         )]
         details: Vec<String>,
 
+        /// Load an explicit review policy file
+        #[arg(long, value_name = "PATH")]
+        policy: Option<PathBuf>,
+
+        /// Require human review at this cyclomatic-complexity score
+        #[arg(long, value_name = "SCORE")]
+        complexity_review_at: Option<u64>,
+
+        /// Block at this cyclomatic-complexity score
+        #[arg(long, value_name = "SCORE")]
+        complexity_block_at: Option<u64>,
+
+        /// Disable the policy-file cyclomatic-complexity block threshold
+        #[arg(long, conflicts_with = "complexity_block_at")]
+        no_complexity_block: bool,
+
+        /// Return gate-specific exit codes for review status
+        #[arg(long)]
+        gate: bool,
+
+        /// Select the JSON report profile; full preserves the complete analysis report
+        #[arg(long, value_enum, default_value_t = ReportProfile::Full)]
+        profile: ReportProfile,
+
+        /// Limit rankings and findings in compact output profiles
+        #[arg(long, value_name = "COUNT", value_parser = parse_positive_usize)]
+        top: Option<usize>,
+
         /// Output format
-        #[arg(long, value_enum, default_value_t = OutputFormat::Terminal)]
-        format: OutputFormat,
+        #[arg(long, value_enum, default_value_t = AnalyzeOutputFormat::Terminal)]
+        format: AnalyzeOutputFormat,
     },
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
-enum OutputFormat {
+enum InventoryOutputFormat {
     Terminal,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum AnalyzeOutputFormat {
+    Terminal,
+    Json,
+    Gate,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum ReportProfile {
+    Full,
+    Review,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
@@ -123,6 +165,16 @@ impl FileListSelection {
             Self::All => None,
         }
     }
+}
+
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| "COUNT must be a positive integer".to_owned())?;
+    if parsed == 0 {
+        return Err("COUNT must be a positive integer".to_owned());
+    }
+    Ok(parsed)
 }
 
 fn main() -> ExitCode {
@@ -152,15 +204,29 @@ fn main() -> ExitCode {
             include_ignored,
             diagnostics,
             details,
+            policy,
+            complexity_review_at,
+            complexity_block_at,
+            no_complexity_block,
+            gate,
+            profile,
+            top,
             format,
-        } => run_analyze(
+        } => run_analyze(&AnalyzeRequest {
             path,
             match_patterns,
             include_ignored,
             diagnostics,
             details,
-            *format,
-        ),
+            policy: policy.as_deref(),
+            complexity_review_at: *complexity_review_at,
+            complexity_block_at: *complexity_block_at,
+            no_complexity_block: *no_complexity_block,
+            gate: *gate,
+            profile: *profile,
+            top: *top,
+            format: *format,
+        }),
     }
 }
 
@@ -171,9 +237,9 @@ fn run_inventory(
     audit_ignored: bool,
     no_warnings: bool,
     list_files: &[FileListSelection],
-    format: OutputFormat,
+    format: InventoryOutputFormat,
 ) -> ExitCode {
-    if format == OutputFormat::Json && !list_files.is_empty() {
+    if format == InventoryOutputFormat::Json && !list_files.is_empty() {
         eprintln!("error: --list-files cannot be combined with --format json");
         return ExitCode::FAILURE;
     }
@@ -205,7 +271,7 @@ fn run_inventory(
         }
     };
 
-    if format == OutputFormat::Json {
+    if format == InventoryOutputFormat::Json {
         return print_json(&inventory);
     }
 
@@ -237,14 +303,39 @@ fn print_json(inventory: &RepositoryInventory) -> ExitCode {
     }
 }
 
-fn run_analyze(
-    path: &Path,
-    match_patterns: &[String],
-    include_ignored: &[String],
-    diagnostics: &[String],
-    details: &[String],
-    format: OutputFormat,
-) -> ExitCode {
+#[derive(Debug, Clone, Copy)]
+struct AnalyzeRequest<'a> {
+    path: &'a Path,
+    match_patterns: &'a [String],
+    include_ignored: &'a [String],
+    diagnostics: &'a [String],
+    details: &'a [String],
+    policy: Option<&'a Path>,
+    complexity_review_at: Option<u64>,
+    complexity_block_at: Option<u64>,
+    no_complexity_block: bool,
+    gate: bool,
+    profile: ReportProfile,
+    top: Option<usize>,
+    format: AnalyzeOutputFormat,
+}
+
+fn run_analyze(request: &AnalyzeRequest<'_>) -> ExitCode {
+    let AnalyzeRequest {
+        path,
+        match_patterns,
+        include_ignored,
+        diagnostics,
+        details,
+        policy,
+        complexity_review_at,
+        complexity_block_at,
+        no_complexity_block,
+        gate,
+        profile,
+        top,
+        format,
+    } = *request;
     let diagnostic_request = match parse_diagnostic_request(diagnostics) {
         Ok(request) => request,
         Err(message) => {
@@ -259,7 +350,7 @@ fn run_analyze(
             return ExitCode::FAILURE;
         }
     };
-    if format == OutputFormat::Json && diagnostic_request.is_some() {
+    if format != AnalyzeOutputFormat::Terminal && diagnostic_request.is_some() {
         if detail_request.is_some() {
             eprintln!("error: --diagnostics and --details are only available with terminal output");
         } else {
@@ -267,8 +358,12 @@ fn run_analyze(
         }
         return ExitCode::FAILURE;
     }
-    if format == OutputFormat::Json && detail_request.is_some() {
+    if format != AnalyzeOutputFormat::Terminal && detail_request.is_some() {
         eprintln!("error: --details is only available with terminal output");
+        return ExitCode::FAILURE;
+    }
+    if format != AnalyzeOutputFormat::Json && profile != ReportProfile::Full {
+        eprintln!("error: --profile review requires --format json");
         return ExitCode::FAILURE;
     }
 
@@ -290,6 +385,12 @@ fn run_analyze(
             target: path.to_path_buf(),
             match_patterns: match_patterns.to_vec(),
             include_ignored: include_ignored.to_vec(),
+            review: ReviewOptions {
+                policy_path: policy.map(Path::to_path_buf),
+                complexity_review_at,
+                complexity_block_at,
+                no_complexity_block,
+            },
         },
         &mut registry,
     ) {
@@ -300,24 +401,34 @@ fn run_analyze(
         }
     };
 
-    if format == OutputFormat::Json {
-        return print_analysis_json(&analysis);
-    }
-    print_analysis_summary(path, &analysis);
-    if let Some(request) = detail_request {
-        if let Err(message) = print_details(&analysis, request) {
-            eprintln!("error: {message}");
-            return ExitCode::FAILURE;
+    let output_status = match format {
+        AnalyzeOutputFormat::Json => print_analysis_json(&analysis, profile, top),
+        AnalyzeOutputFormat::Gate => print_gate_json(&analysis, top),
+        AnalyzeOutputFormat::Terminal => {
+            print_analysis_summary(path, &analysis, top);
+            if let Some(request) = detail_request {
+                if let Err(message) = print_details(&analysis, request) {
+                    eprintln!("error: {message}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            if let Some(request) = diagnostic_request {
+                if let Err(message) = print_diagnostics(&analysis, request) {
+                    eprintln!("error: {message}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            ExitCode::SUCCESS
         }
+    };
+    if output_status != ExitCode::SUCCESS {
+        return output_status;
     }
-    if let Some(request) = diagnostic_request {
-        if let Err(message) = print_diagnostics(&analysis, request) {
-            eprintln!("error: {message}");
-            return ExitCode::FAILURE;
-        }
+    if gate {
+        review_exit_code(analysis.review.status)
+    } else {
+        ExitCode::SUCCESS
     }
-
-    ExitCode::SUCCESS
 }
 
 #[derive(Debug, Clone)]
@@ -364,8 +475,21 @@ fn parse_detail_request(values: &[String]) -> Result<Option<DiagnosticRequest>, 
     )))
 }
 
-fn print_analysis_json(analysis: &RepositoryAnalysis) -> ExitCode {
-    match serde_json::to_string_pretty(&AnalysisJsonReport::from_analysis(analysis)) {
+fn print_analysis_json(
+    analysis: &RepositoryAnalysis,
+    profile: ReportProfile,
+    top: Option<usize>,
+) -> ExitCode {
+    let json = match profile {
+        ReportProfile::Full => {
+            serde_json::to_string_pretty(&AnalysisJsonReport::from_analysis_with_top(analysis, top))
+        }
+        ReportProfile::Review => serde_json::to_string_pretty(&ReviewJsonReport::from_analysis(
+            analysis,
+            Some(top.unwrap_or(20)),
+        )),
+    };
+    match json {
         Ok(json) => {
             println!("{json}");
             ExitCode::SUCCESS
@@ -377,12 +501,33 @@ fn print_analysis_json(analysis: &RepositoryAnalysis) -> ExitCode {
     }
 }
 
-fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis) {
+fn print_gate_json(analysis: &RepositoryAnalysis, top: Option<usize>) -> ExitCode {
+    match serde_json::to_string_pretty(&GateJsonReport::from_analysis(analysis, top)) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: could not serialize gate report: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Option<usize>) {
     println!("Analysis target: {}", path.display());
     println!("Inventoried files: {}", analysis.inventoried_files);
     println!(
         "Selected files: {}",
         analysis.selection.selected_files.len()
+    );
+    println!("Review status: {}", analysis.review.status.as_str());
+    println!(
+        "Review coverage: measured={}/{} unavailable={} unsupported-files={}",
+        analysis.review.coverage.measured_callables,
+        analysis.review.coverage.eligible_callables,
+        analysis.review.coverage.unavailable_callables,
+        analysis.review.coverage.unsupported_selected_files
     );
     println!("\nInventory languages:");
     if analysis.inventory_languages.is_empty() {
@@ -424,12 +569,13 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis) {
             .files
             .iter()
             .flat_map(|file| file.facts.symbols.iter())
-            .fold([0usize; 4], |mut counts, symbol| {
+            .fold([0usize; 5], |mut counts, symbol| {
                 match symbol.kind {
                     codegraide_core::SymbolKind::Module => counts[0] += 1,
                     codegraide_core::SymbolKind::Class => counts[1] += 1,
                     codegraide_core::SymbolKind::Function => counts[2] += 1,
                     codegraide_core::SymbolKind::Method => counts[3] += 1,
+                    codegraide_core::SymbolKind::Lambda => counts[4] += 1,
                 }
                 counts
             });
@@ -439,8 +585,12 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis) {
             .map(|file| file.facts.dependencies.len())
             .sum::<usize>();
         println!(
-            "    facts: modules={} classes={} functions={} methods={} imports={import_count}",
-            symbol_counts[0], symbol_counts[1], symbol_counts[2], symbol_counts[3]
+            "    facts: modules={} classes={} functions={} methods={} lambdas={} imports={import_count}",
+            symbol_counts[0],
+            symbol_counts[1],
+            symbol_counts[2],
+            symbol_counts[3],
+            symbol_counts[4]
         );
         print_top_measurements(
             run,
@@ -448,6 +598,28 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis) {
             "longest declarations",
         );
         print_top_measurements(run, "python-max-control-flow-nesting", "deepest nesting");
+        print_top_measurements(
+            run,
+            "python-cyclomatic-complexity",
+            "highest cyclomatic complexity",
+        );
+    }
+    if !analysis.review.findings.is_empty() {
+        println!("\nReview findings:");
+        for finding in analysis.review.findings.iter().take(top.unwrap_or(5)) {
+            let location = finding
+                .path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "repository".to_owned());
+            println!(
+                "  {} {} {}: {}",
+                finding.risk.as_str(),
+                finding.required_action.as_str(),
+                location,
+                finding.message
+            );
+        }
     }
     for diagnostic in &analysis.diagnostics {
         println!(
@@ -467,7 +639,9 @@ fn print_top_measurements(run: &codegraide_core::AnalyzerRun, metric_id: &str, l
             file.facts.symbols.iter().filter_map(|symbol| {
                 if !matches!(
                     symbol.kind,
-                    codegraide_core::SymbolKind::Function | codegraide_core::SymbolKind::Method
+                    codegraide_core::SymbolKind::Function
+                        | codegraide_core::SymbolKind::Method
+                        | codegraide_core::SymbolKind::Lambda
                 ) {
                     return None;
                 }
@@ -590,6 +764,16 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
                             .unwrap_or_else(|| "unavailable".to_owned())
                     );
                 }
+                for event in &symbol.decision_events {
+                    println!(
+                        "      decision {}: {}:{}-{}:{}",
+                        event.kind.as_str(),
+                        event.span.start.line,
+                        event.span.start.column,
+                        event.span.end.line,
+                        event.span.end.column
+                    );
+                }
             }
             for dependency in &file.facts.dependencies {
                 println!(
@@ -623,6 +807,10 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
         println!("  (none)");
     }
     Ok(())
+}
+
+fn review_exit_code(status: ReviewStatus) -> ExitCode {
+    ExitCode::from(review_status_code(status))
 }
 
 fn normalize_diagnostic_path(
@@ -839,6 +1027,6 @@ mod tests {
             list_files,
             [FileListSelection::Source, FileListSelection::Uncategorized]
         );
-        assert_eq!(format, OutputFormat::Terminal);
+        assert_eq!(format, InventoryOutputFormat::Terminal);
     }
 }

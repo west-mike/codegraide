@@ -1,0 +1,11 @@
+(if_statement) @decision.conditional
+(elif_clause) @decision.conditional
+(for_statement) @decision.loop
+(for_in_clause) @decision.comprehension_loop
+(while_statement) @decision.loop
+(except_clause) @decision.exception_handler
+(case_clause) @decision.pattern_branch
+(if_clause) @decision.filter_or_guard
+(boolean_operator) @decision.boolean_short_circuit
+(conditional_expression) @decision.conditional_expression
+(assert_statement) @decision.assertion

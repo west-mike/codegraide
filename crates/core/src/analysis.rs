@@ -13,12 +13,16 @@ use crate::analyzer::{
 use crate::error::InventoryError;
 use crate::inventory::{InventoryOptions, detect_language, inventory_repository_with_options};
 use crate::report::{FileCategory, LanguageId};
+use crate::review::{
+    ReviewEvaluation, ReviewOptions, ReviewPolicy, ReviewPolicyError, evaluate_review,
+};
 
 #[derive(Debug, Clone)]
 pub struct AnalysisOptions {
     pub target: PathBuf,
     pub match_patterns: Vec<String>,
     pub include_ignored: Vec<String>,
+    pub review: ReviewOptions,
 }
 
 impl Default for AnalysisOptions {
@@ -27,6 +31,7 @@ impl Default for AnalysisOptions {
             target: PathBuf::from("."),
             match_patterns: Vec::new(),
             include_ignored: Vec::new(),
+            review: ReviewOptions::default(),
         }
     }
 }
@@ -79,6 +84,7 @@ pub struct RepositoryAnalysis {
     pub inventory_only_languages: BTreeMap<LanguageId, usize>,
     pub analyzers: Vec<AnalyzerRun>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
+    pub review: ReviewEvaluation,
 }
 
 #[derive(Debug)]
@@ -87,6 +93,7 @@ pub enum AnalysisError {
     InvalidInput { message: String },
     Inventory(InventoryError),
     Registry(AnalyzerRegistryError),
+    ReviewPolicy(ReviewPolicyError),
 }
 
 impl AnalysisError {
@@ -111,6 +118,7 @@ impl fmt::Display for AnalysisError {
             Self::InvalidInput { message } => write!(formatter, "invalid input: {message}"),
             Self::Inventory(error) => write!(formatter, "inventory failed: {error}"),
             Self::Registry(error) => write!(formatter, "analyzer registry failed: {error}"),
+            Self::ReviewPolicy(error) => write!(formatter, "review policy failed: {error}"),
         }
     }
 }
@@ -121,6 +129,7 @@ impl std::error::Error for AnalysisError {
             Self::Io { source, .. } => Some(source),
             Self::Inventory(error) => Some(error),
             Self::Registry(error) => Some(error),
+            Self::ReviewPolicy(error) => Some(error),
             Self::InvalidInput { .. } => None,
         }
     }
@@ -232,6 +241,7 @@ fn analyze_directory(
             span: None,
         });
     }
+    finalize_analysis(&mut result, &options.review).map_err(AnalysisError::ReviewPolicy)?;
     Ok(result)
 }
 
@@ -299,13 +309,28 @@ fn analyze_file(
         selected_files: vec![relative_path.clone()],
     };
 
-    Ok(run_analyzers(
+    let mut result = run_analyzers(
         selection,
         1,
         [(language.clone(), 1)].into_iter().collect(),
         vec![(relative_path, language, source)],
         registry,
-    ))
+    );
+    finalize_analysis(&mut result, &options.review).map_err(AnalysisError::ReviewPolicy)?;
+    Ok(result)
+}
+
+fn finalize_analysis(
+    analysis: &mut RepositoryAnalysis,
+    options: &ReviewOptions,
+) -> Result<(), ReviewPolicyError> {
+    let policy = ReviewPolicy::resolve(options)?;
+    analysis.review = evaluate_review(
+        &analysis.selection.selected_files,
+        &analysis.analyzers,
+        policy,
+    );
+    Ok(())
 }
 
 fn run_analyzers(
@@ -364,6 +389,24 @@ fn run_analyzers(
         inventory_only_languages,
         analyzers,
         diagnostics: Vec::new(),
+        review: ReviewEvaluation {
+            status: crate::review::ReviewStatus::HumanReviewRequired,
+            policy: ReviewPolicy::resolve(&ReviewOptions::default())
+                .expect("built-in review policy is valid"),
+            coverage: crate::review::ReviewCoverage {
+                selected_language_files: 0,
+                unsupported_selected_files: 0,
+                analyzed_files: 0,
+                successful_files: 0,
+                partial_files: 0,
+                failed_files: 0,
+                eligible_callables: 0,
+                measured_callables: 0,
+                unavailable_callables: 0,
+            },
+            rankings: Vec::new(),
+            findings: Vec::new(),
+        },
     }
 }
 
