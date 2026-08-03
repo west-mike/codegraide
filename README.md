@@ -2,7 +2,7 @@
 
 codegraide is an early-stage Rust CLI for understanding source repositories through code-quality metrics, dependency graphs, change hotspots, and database ERDs.
 
-The end goal is to give developers and automated agents enough measurable evidence to identify good and bad code, explain why, and find the code that deserves attention.
+The end goal is to give developers and automated agents enough measurable evidence to identify good and bad code, explain why, and find code that needs attention.
 
 The project is currently being developed and is in its pre-alpha stage.
 
@@ -13,6 +13,8 @@ The project is currently being developed and is in its pre-alpha stage.
 - `crates/analyzers/python`: the first Tree-sitter language analyzer
 
 The project is in its initial foundation stage. User-facing behavior and contribution documentation will expand as the first repository-inventory milestone is implemented.
+
+In the future, community-developed analyzers for other languages will be welcomed. The idea is to develop an evaluation framework, and plug in additional language support packages for the framework
 
 ## Repository inventory
 
@@ -120,7 +122,7 @@ The initial analyzer parses Python with Tree-sitter and reports modules,
 classes, functions, methods, decorators, parameters, syntactic imports, and
 basic function measurements. A valid syntax tree is `successful`; a tree
 containing parser recovery nodes is `partial`. Parse diagnostics are evidence
-of syntax recovery only—they are not lint, type, or code-quality findings.
+of syntax recovery only.
 Languages that inventory recognizes but cannot analyze are still shown as
 `inventory only`.
 
@@ -140,9 +142,9 @@ cargo run -p codegraide -- analyze . --include-ignored 'generated/**/*.py'
 Terminal output summarizes files with diagnostics without dumping every parser
 message. Add `--diagnostics` to print all details, or pass one or more exact
 selected file paths to print only those files. Use `--details` for complete
-symbols, imports, and measurements, optionally restricted to exact files. JSON
-always contains every fact and diagnostic and includes analyzer versions, grammar and query
-provenance, capability claims, source spans, file statuses, measurements, and
+symbols, imports, and measurements, optionally restricted to exact files. The JSON
+will always contain every fact and diagnostic, including: analyzer versions, grammar and query
+provenance, capability claims, source spans, file status, measurements, and
 limitations:
 
 ```sh
@@ -160,18 +162,24 @@ until a Python interpreter and project environment are explicitly selected.
 
 ## Deterministic review gate
 
-Syntax analysis also produces a review evaluation for the selected snapshot.
-It is evidence for an agent or reviewer, not a universal code-quality score.
-The default policy reports human review when a callable's Python cyclomatic
-complexity is 11 or higher. Risk bands are low (1-5), moderate (6-10), high
+Syntax analysis also produces a review evaluation for the selected snapshot, meant as a source of
+evidence for an agent or reviewer, not a code-quality "score".
+The default policy reports human review when a Python callable's cyclomatic
+complexity is 11 or higher. Default risk bands are defined as: low (1-5), moderate (6-10), high
 (11-20), and critical (21+). A finding uses `risk` for the measured band and
 `required_action` for the policy result: `none`, `human-review`, or `block`.
 The overall status is `pass`, `human-review-required`, or `blocked`.
 
-Ordinary `analyze` remains informational and exits successfully after a
-completed analysis. Add `--gate` when an automation needs policy exit codes:
+The goal of this functionality is to allow an agent to deterministically evaluate and identify
+areas of code that, according to some defined metrics and corresponding threshold for said metric,
+require certain actions, such as in-depth agent review, further codegraide analysis (via future tooling),
+human/SME review, etc.
+
+Ordinary `analyze` is purely informational and should always exit successfully after completion. 
+Add `--gate` when an automation needs policy exit codes:
 0 means pass, 2 means human review is required, and 3 means the configured
-policy blocks. Operational, input, policy, and serialization errors use exit
+policy blocks the inputted source from "passing". 
+Operational, input, policy, and serialization errors use exit
 code 1.
 
 ```sh
@@ -186,19 +194,19 @@ cargo run -p codegraide -- analyze . --format json --profile review --top 20 --g
 cargo run -p codegraide -- analyze . --format gate --top 10 --gate
 ```
 
-`--format json` keeps the full analysis report by default, including symbols,
+`--format json` spits out the full analysis report by default, including symbols,
 decision events, dependencies, and diagnostics. Use `--profile review` to
 return only the review-oriented projection. The separate `gate` format is
-smaller still: it reports status, the process-equivalent exit code, total
-finding count, and a bounded list of top findings. `--top` limits compact
-rankings/findings; review defaults to 20 and gate defaults to 10 when omitted.
-The full report remains available for targeted follow-up investigations.
+even more compact; it reports: status, the process-equivalent exit code, total
+finding count, and a bounded list of top findings, controlled by `--top`.
+Reviews default to 20 and `gate` defaults to 10 when the optional parameter is omitted.
 
-The optional policy file is selected explicitly and can configure thresholds,
-risk bands, and documented exceptions. CLI threshold options override matching
-policy-file values. A bounded exception acknowledges a named symbol only up to
-`approved_max`; an `unbounded: true` exception suppresses the action while
-keeping the ranking and evidence visible. Every exception requires a reason.
+An optional policy file can be selected explicitly, allowing consumers to configure thresholds,
+risk bands, and document exceptions. CLI threshold options are also available, it should be noted
+that they will always override matching policy-file values when conflicts are present. 
+A bounded exception provides a "pass" for a named symbol up to
+a number, `approved_max`; `unbounded: true` prevents the action from providing an exception at all,
+while still calculating the ranking and evidence. Every exception requires a reason for documentation purposes.
 
 ```json
 {
@@ -218,12 +226,28 @@ keeping the ranking and evidence visible. Every exception requires a reason.
 }
 ```
 
-For Python callables, the implemented metric is `1 + decision events`. The
-explicit v1 rules count `if`/`elif`, `for`/`while`, exception handlers,
-refutable `match` cases, match guards, boolean short-circuit expressions,
-conditional expressions, each comprehension loop/filter, and `assert`.
-`else`, `with`, `try` itself, `finally`, and unconditional match cases do not
-add a point. Named functions, methods, nested functions, and lambdas are
-measured independently; module and class bodies are outside this v1 scope.
-Every counted event is emitted with a source span in JSON so an agent can cite
-the exact evidence instead of treating the score as a verdict.
+### How Python complexity is calculated
+
+For each Python function-like callable, Codegraide starts with a score of `1`.
+It adds one point for every decision point inside that callable. In v1, those
+decision points are:
+
+- `if` and `elif`
+- `for` and `while` loops
+- exception handlers such as `except ValueError`
+- refutable `match` cases and match guards
+- short-circuit boolean expressions such as `a and b`
+- conditional expressions such as `x if condition else y`
+- each loop or filter in a comprehension
+- `assert` statements
+
+The following do not add points: `else`, `with`, the `try` statement itself,
+`finally`, or an unconditional `match` case. Named functions, methods, nested
+functions, and lambdas are scored separately. Module and class bodies are not
+scored in v1.
+
+The JSON report includes the source location of every counted decision. This
+lets a user inspect the evidence behind the score themselves, instead of
+treating it as a final verdict about code quality. This is particularly useful
+for adjusting custom exception boundaries or disabling exceptions for frequently-flagged
+areas of code deemed "satisfactory" to the user.
