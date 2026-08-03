@@ -48,7 +48,7 @@ cargo run -p codegraide -- inventory . --format json
 ```
 
 The JSON report includes category paths, language counts, ignored populations,
-line counts, diagnostics, and `report_schema_version: "0.1.0"`. It is sorted and
+line counts, diagnostics, and `report_schema_version: "0.2.0"`. It is sorted and
 does not include timestamps or absolute repository paths, so it is suitable for
 fixtures and other automated consumers. Non-UTF-8 Unix path bytes are percent-
 encoded and described by `inventory.path_encoding`. Warnings are included in
@@ -152,8 +152,78 @@ cargo run -p codegraide -- analyze . --details src/service.py
 cargo run -p codegraide -- analyze . --format json
 ```
 
-The syntax report uses the independent `syntax-analysis-v1` definition and the
-same `0.1.0` report schema version as inventory. Symbols, imports, project
+The syntax report uses the independent `syntax-analysis-v2` definition and the
+same `0.2.0` report schema version as inventory. Symbols, imports, project
 resolution, installed-package lookup, and runtime-complexity claims are
 deliberately not made yet. Module identities are repository-relative paths
 until a Python interpreter and project environment are explicitly selected.
+
+## Deterministic review gate
+
+Syntax analysis also produces a review evaluation for the selected snapshot.
+It is evidence for an agent or reviewer, not a universal code-quality score.
+The default policy reports human review when a callable's Python cyclomatic
+complexity is 11 or higher. Risk bands are low (1-5), moderate (6-10), high
+(11-20), and critical (21+). A finding uses `risk` for the measured band and
+`required_action` for the policy result: `none`, `human-review`, or `block`.
+The overall status is `pass`, `human-review-required`, or `blocked`.
+
+Ordinary `analyze` remains informational and exits successfully after a
+completed analysis. Add `--gate` when an automation needs policy exit codes:
+0 means pass, 2 means human review is required, and 3 means the configured
+policy blocks. Operational, input, policy, and serialization errors use exit
+code 1.
+
+```sh
+cargo run -p codegraide -- analyze . --format json --gate
+cargo run -p codegraide -- analyze . --gate --complexity-block-at 21
+cargo run -p codegraide -- analyze . --policy review-policy.json --gate
+
+# Compact agent review report: policy, coverage, findings, and top rankings
+cargo run -p codegraide -- analyze . --format json --profile review --top 20 --gate
+
+# Minimal CI/orchestration report
+cargo run -p codegraide -- analyze . --format gate --top 10 --gate
+```
+
+`--format json` keeps the full analysis report by default, including symbols,
+decision events, dependencies, and diagnostics. Use `--profile review` to
+return only the review-oriented projection. The separate `gate` format is
+smaller still: it reports status, the process-equivalent exit code, total
+finding count, and a bounded list of top findings. `--top` limits compact
+rankings/findings; review defaults to 20 and gate defaults to 10 when omitted.
+The full report remains available for targeted follow-up investigations.
+
+The optional policy file is selected explicitly and can configure thresholds,
+risk bands, and documented exceptions. CLI threshold options override matching
+policy-file values. A bounded exception acknowledges a named symbol only up to
+`approved_max`; an `unbounded: true` exception suppresses the action while
+keeping the ranking and evidence visible. Every exception requires a reason.
+
+```json
+{
+  "policy_version": "0.1.0",
+  "cyclomatic_complexity": {
+    "human_review_at": 11,
+    "block_at": 21,
+    "risk_bands": {"moderate_at": 6, "high_at": 11, "critical_at": 21},
+    "exceptions": [
+      {
+        "symbol_id": "src/legacy.py::function:legacy#1",
+        "reason": "Reviewed parser generated from an external protocol",
+        "approved_max": 24
+      }
+    ]
+  }
+}
+```
+
+For Python callables, the implemented metric is `1 + decision events`. The
+explicit v1 rules count `if`/`elif`, `for`/`while`, exception handlers,
+refutable `match` cases, match guards, boolean short-circuit expressions,
+conditional expressions, each comprehension loop/filter, and `assert`.
+`else`, `with`, `try` itself, `finally`, and unconditional match cases do not
+add a point. Named functions, methods, nested functions, and lambdas are
+measured independently; module and class bodies are outside this v1 scope.
+Every counted event is emitted with a source span in JSON so an agent can cite
+the exact evidence instead of treating the score as a verdict.

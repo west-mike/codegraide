@@ -122,6 +122,7 @@ pub enum SymbolKind {
     Class,
     Function,
     Method,
+    Lambda,
 }
 
 impl SymbolKind {
@@ -131,6 +132,7 @@ impl SymbolKind {
             Self::Class => "class",
             Self::Function => "function",
             Self::Method => "method",
+            Self::Lambda => "lambda",
         }
     }
 }
@@ -226,6 +228,43 @@ impl NestingEventKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum DecisionEventKind {
+    Conditional,
+    Loop,
+    ExceptionHandler,
+    PatternBranch,
+    MatchGuard,
+    BooleanShortCircuit,
+    ConditionalExpression,
+    ComprehensionLoop,
+    ComprehensionFilter,
+    Assertion,
+}
+
+impl DecisionEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conditional => "conditional",
+            Self::Loop => "loop",
+            Self::ExceptionHandler => "exception-handler",
+            Self::PatternBranch => "pattern-branch",
+            Self::MatchGuard => "match-guard",
+            Self::BooleanShortCircuit => "boolean-short-circuit",
+            Self::ConditionalExpression => "conditional-expression",
+            Self::ComprehensionLoop => "comprehension-loop",
+            Self::ComprehensionFilter => "comprehension-filter",
+            Self::Assertion => "assertion",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct DecisionEvent {
+    pub kind: DecisionEventKind,
+    pub span: SourceSpan,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NestingEvent {
     pub kind: NestingEventKind,
@@ -316,6 +355,7 @@ pub struct Symbol {
     pub parameters: Vec<Parameter>,
     pub decorators: Vec<Decorator>,
     pub nesting_events: Vec<NestingEvent>,
+    pub decision_events: Vec<DecisionEvent>,
     pub measurements: Vec<Measurement>,
 }
 

@@ -66,6 +66,7 @@ fn directory_analysis_selects_full_match_paths_and_preserves_inventory_only_lang
             target: repository.path().to_path_buf(),
             match_patterns: vec![r"src/main\.py".to_owned()],
             include_ignored: Vec::new(),
+            review: Default::default(),
         },
         &mut registry,
     )
@@ -92,6 +93,7 @@ fn an_invalid_regex_is_a_fatal_input_error() {
             target: repository.path().to_path_buf(),
             match_patterns: vec!["[".to_owned()],
             include_ignored: Vec::new(),
+            review: Default::default(),
         },
         &mut registry,
     )

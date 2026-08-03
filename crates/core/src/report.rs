@@ -4,11 +4,15 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::lines::RepositoryLineCounts;
+use crate::review::{ReviewEvaluation, review_status_code};
 
-pub const INVENTORY_REPORT_SCHEMA_VERSION: &str = "0.1.0";
+pub const INVENTORY_REPORT_SCHEMA_VERSION: &str = "0.2.0";
 pub const INVENTORY_REPORT_DEFINITION_VERSION: &str = "inventory-report-v1";
 pub const PHYSICAL_LINE_DEFINITION_VERSION: &str = "physical-lines-v1";
-pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v1";
+pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v2";
+pub const REVIEW_REPORT_SCHEMA_VERSION: &str = "0.1.0";
+pub const GATE_REPORT_SCHEMA_VERSION: &str = "0.1.0";
+pub const REVIEW_ANALYSIS_DEFINITION_VERSION: &str = "review-analysis-v1";
 
 #[cfg(unix)]
 const JSON_PATH_ENCODING: &str = "utf8-with-percent-encoded-bytes";
@@ -168,7 +172,46 @@ pub struct AnalysisJsonReport {
     pub analysis: JsonSyntaxAnalysis,
     pub inventory: JsonAnalysisInventory,
     pub analyzers: Vec<JsonAnalyzerRun>,
+    pub review: JsonReview,
     pub diagnostics: Vec<JsonAnalysisDiagnostic>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewJsonReport {
+    pub report_schema_version: &'static str,
+    pub tool: JsonTool,
+    pub analysis: JsonReviewAnalysis,
+    pub ranking_count: usize,
+    pub finding_count: usize,
+    pub review: JsonReview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonReviewAnalysis {
+    pub kind: &'static str,
+    pub definition_version: &'static str,
+    pub selected_files: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GateJsonReport {
+    pub report_schema_version: &'static str,
+    pub tool: JsonTool,
+    pub status: &'static str,
+    pub exit_code: u8,
+    pub finding_count: usize,
+    pub top_findings: Vec<JsonGateFinding>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonGateFinding {
+    pub rule_id: String,
+    pub path: Option<String>,
+    pub qualified_name: Option<String>,
+    pub score: Option<u64>,
+    pub risk: &'static str,
+    pub required_action: &'static str,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -251,6 +294,7 @@ pub struct JsonSymbol {
     pub parameters: Vec<JsonParameter>,
     pub decorators: Vec<JsonDecorator>,
     pub nesting_events: Vec<JsonNestingEvent>,
+    pub decision_events: Vec<JsonDecisionEvent>,
     pub measurements: Vec<JsonMeasurement>,
 }
 
@@ -273,6 +317,12 @@ pub struct JsonDecorator {
 pub struct JsonNestingEvent {
     pub kind: &'static str,
     pub depth: usize,
+    pub span: JsonSourceSpan,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonDecisionEvent {
+    pub kind: &'static str,
     pub span: JsonSourceSpan,
 }
 
@@ -308,6 +358,80 @@ pub struct JsonAnalysisDiagnostic {
 }
 
 #[derive(Debug, Serialize)]
+pub struct JsonReview {
+    pub status: &'static str,
+    pub policy: JsonReviewPolicy,
+    pub coverage: JsonReviewCoverage,
+    pub rankings: Vec<JsonReviewRankingEntry>,
+    pub findings: Vec<JsonReviewFinding>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonReviewPolicy {
+    pub definition_version: &'static str,
+    pub sources: Vec<String>,
+    pub risk_bands: JsonRiskBands,
+    pub complexity_review_at: u64,
+    pub complexity_block_at: Option<u64>,
+    pub exceptions: Vec<JsonReviewException>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonRiskBands {
+    pub moderate_at: u64,
+    pub high_at: u64,
+    pub critical_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonReviewException {
+    pub symbol_id: String,
+    pub reason: String,
+    pub approved_max: Option<u64>,
+    pub unbounded: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonReviewCoverage {
+    pub selected_language_files: usize,
+    pub unsupported_selected_files: usize,
+    pub analyzed_files: usize,
+    pub successful_files: usize,
+    pub partial_files: usize,
+    pub failed_files: usize,
+    pub eligible_callables: usize,
+    pub measured_callables: usize,
+    pub unavailable_callables: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonReviewRankingEntry {
+    pub rank: usize,
+    pub path: String,
+    pub symbol_id: String,
+    pub qualified_name: String,
+    pub kind: &'static str,
+    pub span: JsonSourceSpan,
+    pub score: u64,
+    pub risk: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonReviewFinding {
+    pub rule_id: String,
+    pub risk: &'static str,
+    pub required_action: &'static str,
+    pub path: Option<String>,
+    pub symbol_id: Option<String>,
+    pub qualified_name: Option<String>,
+    pub span: Option<JsonSourceSpan>,
+    pub observed_value: Option<u64>,
+    pub threshold: Option<u64>,
+    pub acknowledged: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct JsonSourceSpan {
     pub start_byte: usize,
     pub end_byte: usize,
@@ -323,6 +447,13 @@ pub struct JsonSourcePosition {
 
 impl AnalysisJsonReport {
     pub fn from_analysis(analysis: &crate::analysis::RepositoryAnalysis) -> Self {
+        Self::from_analysis_with_top(analysis, None)
+    }
+
+    pub fn from_analysis_with_top(
+        analysis: &crate::analysis::RepositoryAnalysis,
+        top: Option<usize>,
+    ) -> Self {
         let analyzers = analysis
             .analyzers
             .iter()
@@ -423,11 +554,73 @@ impl AnalysisJsonReport {
                     .collect(),
             },
             analyzers,
+            review: match top {
+                Some(limit) => JsonReview::from_review_with_top(&analysis.review, Some(limit)),
+                None => JsonReview::from_review(&analysis.review),
+            },
             diagnostics: analysis
                 .diagnostics
                 .iter()
                 .map(JsonAnalysisDiagnostic::from_diagnostic)
                 .collect(),
+        }
+    }
+}
+
+impl ReviewJsonReport {
+    pub fn from_analysis(
+        analysis: &crate::analysis::RepositoryAnalysis,
+        top: Option<usize>,
+    ) -> Self {
+        let complete_review = JsonReview::from_review(&analysis.review);
+        let review = JsonReview::from_review_with_top(&analysis.review, top);
+        Self {
+            report_schema_version: REVIEW_REPORT_SCHEMA_VERSION,
+            tool: JsonTool {
+                name: "codegraide",
+                version: env!("CARGO_PKG_VERSION"),
+            },
+            analysis: JsonReviewAnalysis {
+                kind: "review-analysis",
+                definition_version: REVIEW_ANALYSIS_DEFINITION_VERSION,
+                selected_files: analysis.selection.selected_files.len(),
+            },
+            ranking_count: complete_review.rankings.len(),
+            finding_count: complete_review.findings.len(),
+            review,
+        }
+    }
+}
+
+impl GateJsonReport {
+    pub fn from_analysis(
+        analysis: &crate::analysis::RepositoryAnalysis,
+        top: Option<usize>,
+    ) -> Self {
+        let findings = &analysis.review.findings;
+        let top_findings = findings
+            .iter()
+            .take(top.unwrap_or(10))
+            .map(|finding| JsonGateFinding {
+                rule_id: finding.rule_id.clone(),
+                path: finding.path.as_deref().map(json_path),
+                qualified_name: finding.qualified_name.clone(),
+                score: finding.observed_value,
+                risk: finding.risk.as_str(),
+                required_action: finding.required_action.as_str(),
+                message: finding.message.clone(),
+            })
+            .collect();
+        Self {
+            report_schema_version: GATE_REPORT_SCHEMA_VERSION,
+            tool: JsonTool {
+                name: "codegraide",
+                version: env!("CARGO_PKG_VERSION"),
+            },
+            status: analysis.review.status.as_str(),
+            exit_code: review_status_code(analysis.review.status),
+            finding_count: findings.len(),
+            top_findings,
         }
     }
 }
@@ -486,12 +679,107 @@ impl JsonSymbol {
                 .iter()
                 .map(JsonNestingEvent::from_event)
                 .collect(),
+            decision_events: symbol
+                .decision_events
+                .iter()
+                .map(JsonDecisionEvent::from_event)
+                .collect(),
             measurements: symbol
                 .measurements
                 .iter()
                 .map(JsonMeasurement::from_measurement)
                 .collect(),
         }
+    }
+}
+
+impl JsonDecisionEvent {
+    fn from_event(event: &crate::analyzer::DecisionEvent) -> Self {
+        Self {
+            kind: event.kind.as_str(),
+            span: JsonSourceSpan::from_span(event.span),
+        }
+    }
+}
+
+impl JsonReview {
+    fn from_review(review: &ReviewEvaluation) -> Self {
+        Self::from_review_with_top(review, None)
+    }
+
+    fn from_review_with_top(review: &ReviewEvaluation, top: Option<usize>) -> Self {
+        let mut output = Self {
+            status: review.status.as_str(),
+            policy: JsonReviewPolicy {
+                definition_version: review.policy.definition_version,
+                sources: review.policy.sources.clone(),
+                risk_bands: JsonRiskBands {
+                    moderate_at: review.policy.risk_bands.moderate_at,
+                    high_at: review.policy.risk_bands.high_at,
+                    critical_at: review.policy.risk_bands.critical_at,
+                },
+                complexity_review_at: review.policy.complexity_review_at,
+                complexity_block_at: review.policy.complexity_block_at,
+                exceptions: review
+                    .policy
+                    .exceptions
+                    .iter()
+                    .map(|exception| JsonReviewException {
+                        symbol_id: exception.symbol_id.clone(),
+                        reason: exception.reason.clone(),
+                        approved_max: exception.approved_max,
+                        unbounded: exception.unbounded,
+                    })
+                    .collect(),
+            },
+            coverage: JsonReviewCoverage {
+                selected_language_files: review.coverage.selected_language_files,
+                unsupported_selected_files: review.coverage.unsupported_selected_files,
+                analyzed_files: review.coverage.analyzed_files,
+                successful_files: review.coverage.successful_files,
+                partial_files: review.coverage.partial_files,
+                failed_files: review.coverage.failed_files,
+                eligible_callables: review.coverage.eligible_callables,
+                measured_callables: review.coverage.measured_callables,
+                unavailable_callables: review.coverage.unavailable_callables,
+            },
+            rankings: review
+                .rankings
+                .iter()
+                .map(|entry| JsonReviewRankingEntry {
+                    rank: entry.rank,
+                    path: json_path(&entry.path),
+                    symbol_id: entry.symbol_id.clone(),
+                    qualified_name: entry.qualified_name.clone(),
+                    kind: entry.kind.as_str(),
+                    span: JsonSourceSpan::from_span(entry.span),
+                    score: entry.score,
+                    risk: entry.risk.as_str(),
+                })
+                .collect(),
+            findings: review
+                .findings
+                .iter()
+                .map(|finding| JsonReviewFinding {
+                    rule_id: finding.rule_id.clone(),
+                    risk: finding.risk.as_str(),
+                    required_action: finding.required_action.as_str(),
+                    path: finding.path.as_deref().map(json_path),
+                    symbol_id: finding.symbol_id.clone(),
+                    qualified_name: finding.qualified_name.clone(),
+                    span: finding.span.map(JsonSourceSpan::from_span),
+                    observed_value: finding.observed_value,
+                    threshold: finding.threshold,
+                    acknowledged: finding.acknowledged,
+                    message: finding.message.clone(),
+                })
+                .collect(),
+        };
+        if let Some(limit) = top {
+            output.rankings.truncate(limit);
+            output.findings.truncate(limit);
+        }
+        output
     }
 }
 
