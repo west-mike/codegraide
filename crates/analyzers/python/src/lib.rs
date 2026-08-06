@@ -4,13 +4,24 @@ use std::path::Path;
 
 use codegraide_core::{
     AnalysisDiagnostic, AnalysisFacts, AnalysisInput, AnalysisLevel, AnalyzerCapability,
-    AnalyzerDescriptor, DecisionEvent, DecisionEventKind, Decorator, DependencyKind,
-    DependencyReference, DiagnosticSeverity, FileAnalysis, FileAnalysisStatus, GrammarDescriptor,
-    LanguageAnalyzer, LanguageId, Measurement, MeasurementStatus, NestingEvent, NestingEventKind,
-    PYTHON_CYCLOMATIC_COMPLEXITY, Parameter, ParameterKind, QueryDescriptor, ResolutionLevel,
-    SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolId, SymbolKind, SymbolModifier,
+    AnalyzerDescriptor, CallArgumentShape, CallReference, DecisionEvent, DecisionEventKind,
+    Decorator, DependencyKind, DependencyReference, DiagnosticSeverity, FileAnalysis,
+    FileAnalysisStatus, GrammarDescriptor, ImportContext, ImportRequirement, ImportScope,
+    ImportUsage, LanguageAnalyzer, LanguageId, Measurement, MeasurementStatus, NestingEvent,
+    NestingEventKind, PYTHON_CYCLOMATIC_COMPLEXITY, Parameter, ParameterKind, QueryDescriptor,
+    ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolId, SymbolKind,
+    SymbolModifier,
 };
 use tree_sitter::{Language, Node, Parser, Query};
+
+mod call_resolution;
+mod resolution;
+
+pub use call_resolution::{PythonCallResolution, resolve_python_calls};
+pub use resolution::{
+    PythonDependencyResolution, PythonEnvironmentSelection, PythonEnvironmentSummary,
+    PythonResolutionError, PythonResolutionOptions, resolve_python_dependencies,
+};
 
 const ANALYZER_VERSION: &str = "0.1.0";
 const GRAMMAR_VERSION: &str = "0.25.0";
@@ -65,6 +76,7 @@ impl PythonAnalyzer {
                     AnalyzerCapability::Parse,
                     AnalyzerCapability::Symbols,
                     AnalyzerCapability::DependencyReferences,
+                    AnalyzerCapability::CallReferences,
                     AnalyzerCapability::DecisionEvents,
                     AnalyzerCapability::NestingEvents,
                     AnalyzerCapability::Measurements,
@@ -85,6 +97,14 @@ impl PythonAnalyzer {
                         version: "python-imports-v1".to_owned(),
                     },
                     QueryDescriptor {
+                        name: "import-context".to_owned(),
+                        version: "python-import-context-v1".to_owned(),
+                    },
+                    QueryDescriptor {
+                        name: "calls".to_owned(),
+                        version: "python-call-references-v1".to_owned(),
+                    },
+                    QueryDescriptor {
                         name: "nesting".to_owned(),
                         version: "python-nesting-v1".to_owned(),
                     },
@@ -99,6 +119,8 @@ impl PythonAnalyzer {
                     "Module names are repository-relative paths until project or environment resolution is added."
                         .to_owned(),
                     "Dynamic imports and runtime metaprogramming are not resolved."
+                        .to_owned(),
+                    "Call resolution is conservative: arbitrary instance dispatch, inheritance lookup, decorators, assignment aliases, and higher-order values are not guessed."
                         .to_owned(),
                     "Non-UTF-8 source text is parsed by byte span but names and snippets use lossy decoding."
                         .to_owned(),
@@ -162,6 +184,7 @@ impl LanguageAnalyzer for PythonAnalyzer {
             facts: AnalysisFacts {
                 symbols: extraction.symbols,
                 dependencies: extraction.dependencies,
+                calls: extraction.calls,
             },
         }
     }
@@ -172,7 +195,10 @@ struct Extraction<'a> {
     source: &'a [u8],
     symbols: Vec<Symbol>,
     dependencies: Vec<DependencyReference>,
+    calls: Vec<CallReference>,
     id_counts: BTreeMap<String, usize>,
+    typing_aliases: BTreeSet<String>,
+    type_checking_names: BTreeSet<String>,
 }
 
 impl<'a> Extraction<'a> {
@@ -182,11 +208,20 @@ impl<'a> Extraction<'a> {
             source,
             symbols: Vec::new(),
             dependencies: Vec::new(),
+            calls: Vec::new(),
             id_counts: BTreeMap::new(),
+            typing_aliases: BTreeSet::new(),
+            type_checking_names: BTreeSet::new(),
         }
     }
 
     fn extract_module(&mut self, root: Node<'_>) {
+        collect_type_checking_aliases(
+            root,
+            self.source,
+            &mut self.typing_aliases,
+            &mut self.type_checking_names,
+        );
         let module_path = path_string(self.path);
         let module_id = SymbolId::new(format!("{module_path}::module"));
         self.symbols.push(Symbol {
@@ -235,14 +270,21 @@ impl<'a> Extraction<'a> {
     ) {
         match node.kind() {
             "decorated_definition" => {
-                let decorators = node
+                let decorator_nodes = node
                     .named_children(&mut node.walk())
                     .filter(|child| child.kind() == "decorator")
+                    .collect::<Vec<_>>();
+                let decorators = decorator_nodes
+                    .iter()
+                    .copied()
                     .map(|child| Decorator {
                         expression: decorator_expression(child, self.source),
                         span: source_span(child),
                     })
                     .collect::<Vec<_>>();
+                for decorator in decorator_nodes {
+                    self.visit_children(decorator, parent_id.clone(), callable_id.clone(), depth);
+                }
                 let definition = node.named_children(&mut node.walk()).find(|child| {
                     matches!(child.kind(), "function_definition" | "class_definition")
                 });
@@ -264,7 +306,11 @@ impl<'a> Extraction<'a> {
                 self.process_lambda(node, parent_id, callable_id);
             }
             "import_statement" | "import_from_statement" | "future_import_statement" => {
-                self.extract_import(node, callable_id);
+                self.extract_import(node, parent_id, callable_id);
+            }
+            "call" => {
+                self.extract_call(node, callable_id.clone().or_else(|| parent_id.clone()));
+                self.visit_children(node, parent_id, callable_id, depth);
             }
             _ => {
                 if let Some(kind) = decision_kind(node, self.source) {
@@ -301,8 +347,8 @@ impl<'a> Extraction<'a> {
         &mut self,
         node: Node<'_>,
         parent_id: Option<SymbolId>,
-        _callable_id: Option<SymbolId>,
-        _depth: usize,
+        callable_id: Option<SymbolId>,
+        depth: usize,
         wrapper_span: Option<SourceSpan>,
         decorators: Vec<Decorator>,
     ) {
@@ -356,10 +402,13 @@ impl<'a> Extraction<'a> {
                 modifiers.insert(SymbolModifier::ClassMethod);
             }
         }
-        let parameters = node
-            .child_by_field_name("parameters")
+        let parameter_node = node.child_by_field_name("parameters");
+        let parameters = parameter_node
             .map(|parameters| parse_parameters(parameters, self.source))
             .unwrap_or_default();
+        if let Some(parameters) = parameter_node {
+            self.visit_children(parameters, parent_id.clone(), callable_id, depth);
+        }
         self.symbols.push(Symbol {
             id: id.clone(),
             parent_id: parent_id.clone(),
@@ -447,7 +496,12 @@ impl<'a> Extraction<'a> {
         }
     }
 
-    fn extract_import(&mut self, node: Node<'_>, callable_id: Option<SymbolId>) {
+    fn extract_import(
+        &mut self,
+        node: Node<'_>,
+        parent_id: Option<SymbolId>,
+        callable_id: Option<SymbolId>,
+    ) {
         match node.kind() {
             "import_statement" => {
                 let mut cursor = node.walk();
@@ -466,6 +520,7 @@ impl<'a> Extraction<'a> {
                             alias,
                             0,
                             false,
+                            parent_id.clone(),
                             callable_id.clone(),
                         );
                     } else if child.kind() == "dotted_name" {
@@ -476,6 +531,7 @@ impl<'a> Extraction<'a> {
                             None,
                             0,
                             false,
+                            parent_id.clone(),
                             callable_id.clone(),
                         );
                     }
@@ -498,6 +554,7 @@ impl<'a> Extraction<'a> {
                             alias,
                             0,
                             false,
+                            parent_id.clone(),
                             callable_id.clone(),
                         );
                     } else if child.kind() == "dotted_name" {
@@ -508,6 +565,7 @@ impl<'a> Extraction<'a> {
                             None,
                             0,
                             false,
+                            parent_id.clone(),
                             callable_id.clone(),
                         );
                     }
@@ -534,6 +592,7 @@ impl<'a> Extraction<'a> {
                             None,
                             relative_level,
                             true,
+                            parent_id.clone(),
                             callable_id.clone(),
                         );
                     } else if child.kind() == "aliased_import" {
@@ -550,6 +609,7 @@ impl<'a> Extraction<'a> {
                             alias,
                             relative_level,
                             false,
+                            parent_id.clone(),
                             callable_id.clone(),
                         );
                     } else if child.kind() == "dotted_name" {
@@ -560,6 +620,7 @@ impl<'a> Extraction<'a> {
                             None,
                             relative_level,
                             false,
+                            parent_id.clone(),
                             callable_id.clone(),
                         );
                     }
@@ -578,8 +639,10 @@ impl<'a> Extraction<'a> {
         alias: Option<String>,
         relative_level: usize,
         wildcard: bool,
+        parent_id: Option<SymbolId>,
         enclosing_symbol: Option<SymbolId>,
     ) {
+        let context = self.import_context(node, parent_id.as_ref(), enclosing_symbol.as_ref());
         self.dependencies.push(DependencyReference {
             kind: DependencyKind::Import,
             module,
@@ -589,8 +652,137 @@ impl<'a> Extraction<'a> {
             wildcard,
             resolution: ResolutionLevel::Syntactic,
             enclosing_symbol,
+            context,
             span: source_span(node),
         });
+    }
+
+    fn import_context(
+        &self,
+        node: Node<'_>,
+        parent_id: Option<&SymbolId>,
+        callable_id: Option<&SymbolId>,
+    ) -> ImportContext {
+        let scope = if callable_id.is_some() {
+            ImportScope::Callable
+        } else if parent_id
+            .and_then(|id| self.symbol(id))
+            .is_some_and(|symbol| symbol.kind == SymbolKind::Class)
+        {
+            ImportScope::Class
+        } else {
+            ImportScope::Module
+        };
+        let usage = if self.in_type_checking_branch(node) {
+            ImportUsage::TypeCheckingOnly
+        } else {
+            ImportUsage::Runtime
+        };
+        let optional = self.in_optional_import_guard(node);
+        ImportContext {
+            scope,
+            usage,
+            requirement: if optional {
+                ImportRequirement::Optional
+            } else {
+                ImportRequirement::Required
+            },
+            conditional: optional || is_conditionally_executed(node),
+        }
+    }
+
+    fn extract_call(&mut self, node: Node<'_>, enclosing_symbol: Option<SymbolId>) {
+        let Some(function) = node.child_by_field_name("function") else {
+            return;
+        };
+        let arguments = node.child_by_field_name("arguments");
+        let mut shape = CallArgumentShape {
+            positional: 0,
+            keywords: Vec::new(),
+            has_star_args: false,
+            has_star_kwargs: false,
+        };
+        if let Some(arguments) = arguments {
+            if arguments.kind() == "generator_expression" {
+                shape.positional = 1;
+            } else {
+                let mut cursor = arguments.walk();
+                for argument in arguments.named_children(&mut cursor) {
+                    match argument.kind() {
+                        "keyword_argument" => {
+                            if let Some(name) = argument.child_by_field_name("name") {
+                                shape.keywords.push(node_text(name, self.source));
+                            }
+                        }
+                        "list_splat" => shape.has_star_args = true,
+                        "dictionary_splat" => shape.has_star_kwargs = true,
+                        _ => shape.positional += 1,
+                    }
+                }
+            }
+        }
+        shape.keywords.sort();
+        self.calls.push(CallReference {
+            callee: node_text(function, self.source),
+            components: call_components(function, self.source).unwrap_or_default(),
+            enclosing_symbol,
+            arguments: shape,
+            span: source_span(node),
+            syntax_complete: !node.has_error(),
+        });
+    }
+
+    fn in_type_checking_branch(&self, node: Node<'_>) -> bool {
+        let mut descendant = node;
+        let mut parent = node.parent();
+        while let Some(ancestor) = parent {
+            if matches!(ancestor.kind(), "if_statement" | "elif_clause")
+                && ancestor
+                    .child_by_field_name("consequence")
+                    .is_some_and(|branch| contains_node(branch, descendant))
+                && ancestor
+                    .child_by_field_name("condition")
+                    .is_some_and(|condition| self.is_type_checking_condition(condition))
+            {
+                return true;
+            }
+            if is_scope_boundary(ancestor.kind()) {
+                break;
+            }
+            descendant = ancestor;
+            parent = ancestor.parent();
+        }
+        false
+    }
+
+    fn is_type_checking_condition(&self, condition: Node<'_>) -> bool {
+        let text = trim_parentheses(node_text(condition, self.source));
+        self.type_checking_names.contains(&text)
+            || self
+                .typing_aliases
+                .iter()
+                .any(|alias| text == format!("{alias}.TYPE_CHECKING"))
+    }
+
+    fn in_optional_import_guard(&self, node: Node<'_>) -> bool {
+        let mut descendant = node;
+        let mut parent = node.parent();
+        while let Some(ancestor) = parent {
+            if ancestor.kind() == "try_statement"
+                && ancestor
+                    .child_by_field_name("body")
+                    .is_some_and(|body| contains_node(body, descendant))
+                && try_catches_import_error(ancestor, self.source)
+            {
+                return true;
+            }
+            if is_scope_boundary(ancestor.kind()) {
+                break;
+            }
+            descendant = ancestor;
+            parent = ancestor.parent();
+        }
+        false
     }
 
     fn finish_measurements(&mut self) {
@@ -689,6 +881,12 @@ impl<'a> Extraction<'a> {
                 .cmp(&right.span.start_byte)
                 .then_with(|| left.span.end_byte.cmp(&right.span.end_byte))
         });
+        self.calls.sort_by(|left, right| {
+            left.span
+                .start_byte
+                .cmp(&right.span.start_byte)
+                .then_with(|| left.span.end_byte.cmp(&right.span.end_byte))
+        });
     }
 
     fn symbol(&self, id: &SymbolId) -> Option<&Symbol> {
@@ -698,6 +896,157 @@ impl<'a> Extraction<'a> {
     fn symbol_mut(&mut self, id: &SymbolId) -> Option<&mut Symbol> {
         self.symbols.iter_mut().find(|symbol| &symbol.id == id)
     }
+}
+
+fn call_components(node: Node<'_>, source: &[u8]) -> Option<Vec<String>> {
+    match node.kind() {
+        "identifier" => Some(vec![node_text(node, source)]),
+        "attribute" => {
+            let mut components = call_components(node.child_by_field_name("object")?, source)?;
+            components.push(node_text(node.child_by_field_name("attribute")?, source));
+            Some(components)
+        }
+        _ => None,
+    }
+}
+
+fn collect_type_checking_aliases(
+    node: Node<'_>,
+    source: &[u8],
+    typing_aliases: &mut BTreeSet<String>,
+    type_checking_names: &mut BTreeSet<String>,
+) {
+    if node.kind() == "import_statement" {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "aliased_import" {
+                let name = child
+                    .child_by_field_name("name")
+                    .map(|name| node_text(name, source));
+                if name.as_deref() == Some("typing") {
+                    typing_aliases.insert(
+                        child
+                            .child_by_field_name("alias")
+                            .map(|alias| node_text(alias, source))
+                            .unwrap_or_else(|| "typing".to_owned()),
+                    );
+                }
+            } else if node_text(child, source) == "typing" {
+                typing_aliases.insert("typing".to_owned());
+            }
+        }
+    } else if node.kind() == "import_from_statement"
+        && node
+            .child_by_field_name("module_name")
+            .is_some_and(|module| node_text(module, source) == "typing")
+    {
+        let module = node.child_by_field_name("module_name");
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if module.is_some_and(|module| {
+                module.start_byte() == child.start_byte() && module.end_byte() == child.end_byte()
+            }) {
+                continue;
+            }
+            let (name, alias) = if child.kind() == "aliased_import" {
+                (
+                    child
+                        .child_by_field_name("name")
+                        .map(|name| node_text(name, source)),
+                    child
+                        .child_by_field_name("alias")
+                        .map(|alias| node_text(alias, source)),
+                )
+            } else {
+                (Some(node_text(child, source)), None)
+            };
+            if name.as_deref() == Some("TYPE_CHECKING") {
+                type_checking_names.insert(alias.unwrap_or_else(|| "TYPE_CHECKING".to_owned()));
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_type_checking_aliases(child, source, typing_aliases, type_checking_names);
+    }
+}
+
+fn contains_node(container: Node<'_>, descendant: Node<'_>) -> bool {
+    container.start_byte() <= descendant.start_byte()
+        && container.end_byte() >= descendant.end_byte()
+}
+
+fn is_scope_boundary(kind: &str) -> bool {
+    matches!(
+        kind,
+        "function_definition" | "class_definition" | "lambda" | "lambda_within_for_in_clause"
+    )
+}
+
+fn trim_parentheses(mut value: String) -> String {
+    loop {
+        let trimmed = value.trim();
+        if trimmed.starts_with('(') && trimmed.ends_with(')') {
+            value = trimmed[1..trimmed.len() - 1].to_owned();
+        } else {
+            return trimmed.to_owned();
+        }
+    }
+}
+
+fn try_catches_import_error(node: Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|child| child.kind() == "except_clause")
+        .filter_map(|handler| handler.child_by_field_name("value"))
+        .any(|value| contains_import_error_name(value, source))
+}
+
+fn contains_import_error_name(node: Node<'_>, source: &[u8]) -> bool {
+    if matches!(node.kind(), "identifier" | "dotted_name")
+        && matches!(
+            node_text(node, source).as_str(),
+            "ImportError" | "ModuleNotFoundError"
+        )
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| contains_import_error_name(child, source))
+}
+
+fn is_conditionally_executed(node: Node<'_>) -> bool {
+    let mut descendant = node;
+    let mut parent = node.parent();
+    while let Some(ancestor) = parent {
+        if matches!(
+            ancestor.kind(),
+            "if_statement"
+                | "elif_clause"
+                | "else_clause"
+                | "for_statement"
+                | "while_statement"
+                | "case_clause"
+                | "except_clause"
+        ) {
+            return true;
+        }
+        if ancestor.kind() == "try_statement"
+            && !ancestor
+                .child_by_field_name("body")
+                .is_some_and(|body| contains_node(body, descendant))
+        {
+            return true;
+        }
+        if is_scope_boundary(ancestor.kind()) {
+            break;
+        }
+        descendant = ancestor;
+        parent = ancestor.parent();
+    }
+    false
 }
 
 fn parse_parameters(node: Node<'_>, source: &[u8]) -> Vec<Parameter> {
@@ -993,6 +1342,105 @@ mod tests {
         assert!(function.measurements.iter().any(|measurement| {
             measurement.id == PYTHON_CYCLOMATIC_COMPLEXITY && measurement.value == Some(3)
         }));
+    }
+
+    #[test]
+    fn classifies_orthogonal_import_contexts() {
+        let result = analyze(
+            br#"import typing as t
+from typing import TYPE_CHECKING as TC
+import always
+
+class Client:
+    import class_dependency
+
+    def send(self):
+        import callable_dependency
+
+if t.TYPE_CHECKING:
+    import type_dependency
+else:
+    import runtime_else_dependency
+
+if TC:
+    import aliased_type_dependency
+
+try:
+    import optional_dependency
+except (ImportError, ValueError):
+    import handler_dependency
+
+try:
+    import required_dependency
+except ValueError:
+    pass
+
+for item in items:
+    import loop_dependency
+"#,
+        );
+        assert_eq!(result.status, FileAnalysisStatus::Successful);
+        let dependency = |name: &str| {
+            result
+                .facts
+                .dependencies
+                .iter()
+                .find(|dependency| dependency.module.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing dependency {name}"))
+        };
+
+        assert_eq!(dependency("always").context, ImportContext::default());
+        assert_eq!(
+            dependency("class_dependency").context.scope,
+            ImportScope::Class
+        );
+        assert_eq!(
+            dependency("callable_dependency").context.scope,
+            ImportScope::Callable
+        );
+        for name in ["type_dependency", "aliased_type_dependency"] {
+            assert_eq!(
+                dependency(name).context.usage,
+                ImportUsage::TypeCheckingOnly
+            );
+            assert!(dependency(name).context.conditional);
+        }
+        assert_eq!(
+            dependency("runtime_else_dependency").context.usage,
+            ImportUsage::Runtime
+        );
+        assert!(dependency("runtime_else_dependency").context.conditional);
+        assert_eq!(
+            dependency("optional_dependency").context.requirement,
+            ImportRequirement::Optional
+        );
+        assert!(dependency("optional_dependency").context.conditional);
+        assert_eq!(
+            dependency("handler_dependency").context.requirement,
+            ImportRequirement::Required
+        );
+        assert!(dependency("handler_dependency").context.conditional);
+        assert!(!dependency("required_dependency").context.conditional);
+        assert!(dependency("loop_dependency").context.conditional);
+    }
+
+    #[test]
+    fn extracts_normalized_call_references_and_argument_shapes() {
+        let result = analyze(
+            b"def run(args, kwargs):\n    helper(1, key=2, *args, **kwargs)\n    service.send()\n",
+        );
+        assert_eq!(result.facts.calls.len(), 2);
+        let helper = &result.facts.calls[0];
+        assert_eq!(helper.callee, "helper");
+        assert_eq!(helper.components, ["helper"]);
+        assert_eq!(helper.arguments.positional, 1);
+        assert_eq!(helper.arguments.keywords, ["key"]);
+        assert!(helper.arguments.has_star_args);
+        assert!(helper.arguments.has_star_kwargs);
+        assert!(helper.enclosing_symbol.is_some());
+        assert!(helper.syntax_complete);
+
+        assert_eq!(result.facts.calls[1].components, ["service", "send"]);
     }
 
     #[test]

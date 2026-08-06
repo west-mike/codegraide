@@ -1,0 +1,80 @@
+"""Emit deterministic metadata for codegraide without importing installed packages."""
+
+import importlib.metadata
+import json
+import pathlib
+import re
+import sys
+import sysconfig
+
+
+def normalized_name(value):
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def top_level_names(distribution):
+    names = set()
+    declared = distribution.read_text("top_level.txt")
+    if declared:
+        names.update(line.strip() for line in declared.splitlines() if line.strip())
+    files = distribution.files or ()
+    for entry in files:
+        parts = pathlib.PurePosixPath(str(entry)).parts
+        if not parts:
+            continue
+        first = parts[0]
+        if first.endswith((".dist-info", ".egg-info")):
+            continue
+        if first.endswith(".py"):
+            first = first[:-3]
+        if first and first.isidentifier():
+            names.add(first)
+    return names
+
+
+stdlib_names = set(getattr(sys, "stdlib_module_names", ()))
+if not stdlib_names:
+    stdlib_names.update(sys.builtin_module_names)
+    stdlib = pathlib.Path(sysconfig.get_path("stdlib"))
+    if stdlib.is_dir():
+        for entry in stdlib.iterdir():
+            name = entry.stem if entry.is_file() and entry.suffix == ".py" else entry.name
+            if name.isidentifier() and name != "site-packages":
+                stdlib_names.add(name)
+
+distributions = {}
+for distribution in importlib.metadata.distributions():
+    display_name = distribution.metadata.get("Name")
+    if not display_name:
+        continue
+    normalized = normalized_name(display_name)
+    record = distributions.setdefault(
+        normalized,
+        {
+            "normalized_name": normalized,
+            "display_name": display_name,
+            "version": distribution.version or None,
+            "import_names": set(),
+        },
+    )
+    record["import_names"].update(top_level_names(distribution))
+
+if hasattr(importlib.metadata, "packages_distributions"):
+    for import_name, providers in importlib.metadata.packages_distributions().items():
+        for provider in providers:
+            normalized = normalized_name(provider)
+            if normalized in distributions:
+                distributions[normalized]["import_names"].add(import_name)
+
+for record in distributions.values():
+    record["import_names"] = sorted(record["import_names"])
+
+payload = {
+    "schema_version": "codegraide-python-environment-v1",
+    "implementation": sys.implementation.name,
+    "version": [sys.version_info.major, sys.version_info.minor, sys.version_info.micro],
+    "is_virtual_environment": sys.prefix != sys.base_prefix,
+    "stdlib_names": sorted(stdlib_names),
+    "distributions": sorted(distributions.values(), key=lambda value: value["normalized_name"]),
+}
+json.dump(payload, sys.stdout, sort_keys=True, separators=(",", ":"))

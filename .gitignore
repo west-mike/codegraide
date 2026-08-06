@@ -8,6 +8,9 @@
 !.env.example
 *.log
 
+# Locally rendered dependency and call graph artifacts
+/generated-graphs/
+
 # OS and IDE state
 .DS_Store
 **/.DS_Store

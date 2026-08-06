@@ -54,7 +54,7 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
     let repository = tempdir().expect("temporary repository should be created");
     fs::write(
         repository.path().join("main.py"),
-        "def main(value):\n    return value\n",
+        "import os\ndef main(value):\n    print(value)\n    return value\n",
     )
     .expect("Python fixture");
     fs::write(repository.path().join("main.rs"), "fn main() {}\n").expect("Rust fixture");
@@ -69,7 +69,7 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert_eq!(report["report_schema_version"], "0.2.0");
+    assert_eq!(report["report_schema_version"], "0.4.0");
     assert_eq!(report["analysis"]["kind"], "syntax-analysis");
     assert_eq!(
         report["analysis"]["definition_version"],
@@ -99,6 +99,15 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
                         .any(|measurement| measurement["status"] == "measured")
                 })
     }));
+    let dependency = &report["analyzers"][0]["files"][0]["dependencies"][0];
+    assert_eq!(dependency["scope"], "module");
+    assert_eq!(dependency["usage"], "runtime");
+    assert_eq!(dependency["requirement"], "required");
+    assert_eq!(dependency["conditional"], false);
+    let call = &report["analyzers"][0]["files"][0]["calls"][0];
+    assert_eq!(call["callee"], "print");
+    assert_eq!(call["positional_arguments"], 1);
+    assert_eq!(call["syntax_complete"], true);
 }
 
 #[test]

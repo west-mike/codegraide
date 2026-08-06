@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codegraide Dependency Explorer</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f8fa;
+      --surface: #ffffff;
+      --surface-raised: #ffffff;
+      --text: #18202b;
+      --muted: #667085;
+      --border: #d9dee7;
+      --border-strong: #aab4c3;
+      --accent: #3159d8;
+      --accent-soft: #e9efff;
+      --local: #3467d6;
+      --local-fill: #edf3ff;
+      --standard: #697586;
+      --standard-fill: #f1f3f6;
+      --installed: #16835f;
+      --installed-fill: #e8f7f1;
+      --ambiguous: #b65d13;
+      --ambiguous-fill: #fff3e6;
+      --unresolved: #c53c4b;
+      --unresolved-fill: #fff0f2;
+      --cycle: #8b4dcc;
+      --cycle-fill: #f5edff;
+      --edge: #8792a2;
+      --edge-dim: #cbd1db;
+      --shadow: 0 12px 32px rgba(19, 30, 54, 0.10);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #11151c;
+        --surface: #181e27;
+        --surface-raised: #202733;
+        --text: #edf1f7;
+        --muted: #a8b2c1;
+        --border: #303947;
+        --border-strong: #566276;
+        --accent: #8aa6ff;
+        --accent-soft: #27355f;
+        --local: #8eb0ff;
+        --local-fill: #1d3158;
+        --standard: #bcc5d2;
+        --standard-fill: #2a313c;
+        --installed: #72d6b4;
+        --installed-fill: #183d34;
+        --ambiguous: #f0ad6f;
+        --ambiguous-fill: #4b301c;
+        --unresolved: #ff8f9a;
+        --unresolved-fill: #4b252c;
+        --cycle: #c99aff;
+        --cycle-fill: #382550;
+        --edge: #788599;
+        --edge-dim: #3b4553;
+        --shadow: 0 14px 38px rgba(0, 0, 0, 0.32);
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { margin: 0; min-height: 100%; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input { font: inherit; }
+
+    button {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      min-height: 34px;
+      padding: 6px 11px;
+    }
+
+    button:hover { border-color: var(--border-strong); }
+    button:focus-visible, input:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 1px; }
+    button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: white; }
+    button:disabled { cursor: not-allowed; opacity: 0.45; }
+
+    .app { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+
+    .header {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      padding: 15px 18px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand { min-width: 220px; }
+    .brand h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.015em; }
+    .summary { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .breadcrumbs { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; margin-top: 5px; }
+    .breadcrumbs button { min-height: 0; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; }
+    .breadcrumbs span { color: var(--muted); font-size: 11px; }
+
+    .controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+
+    .search-wrap { position: relative; }
+    .search-wrap input {
+      width: min(310px, 46vw);
+      min-height: 36px;
+      padding: 7px 10px 7px 34px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .search-icon { position: absolute; left: 11px; top: 8px; color: var(--muted); pointer-events: none; }
+
+    .button-group { display: inline-flex; }
+    .button-group button { border-radius: 0; margin-left: -1px; }
+    .button-group button:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+    .button-group button:last-child { border-radius: 0 8px 8px 0; }
+
+    .workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 330px; }
+
+    .stage { position: relative; min-height: 620px; overflow: hidden; background: var(--bg); }
+    .stage::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
+      background-size: 22px 22px;
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    #graph { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+    #graph.is-panning { cursor: grabbing; }
+
+    .stage-tools {
+      position: absolute;
+      z-index: 1;
+      left: 14px;
+      bottom: 14px;
+      display: flex;
+      gap: 6px;
+      padding: 5px;
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+    }
+    .stage-tools button { min-width: 36px; padding: 5px 9px; }
+
+    .legend {
+      position: absolute;
+      z-index: 1;
+      right: 14px;
+      bottom: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px 14px;
+      max-width: calc(100% - 170px);
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      box-shadow: var(--shadow);
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .legend-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .legend-dot { width: 9px; height: 9px; border-radius: 3px; background: var(--legend-color); }
+    .legend-line { width: 18px; border-top: 2px solid var(--edge); }
+    .legend-line.dashed { border-top-style: dashed; }
+
+    .sidebar {
+      overflow: auto;
+      border-left: 1px solid var(--border);
+      background: var(--surface);
+      padding: 18px;
+    }
+
+    .sidebar h2 { margin: 0 0 4px; font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
+    .sidebar h3 { margin: 22px 0 8px; font-size: 12px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .sidebar p { margin: 5px 0; }
+    .placeholder { color: var(--muted); max-width: 28ch; }
+    .kind-label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+    .context-badge { display: inline-block; margin: 5px 4px 0 0; padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; }
+    .kind-swatch { width: 10px; height: 10px; border-radius: 3px; background: var(--kind-color); }
+    .path { display: block; margin-top: 8px; padding: 8px; border-radius: 7px; background: var(--bg); color: var(--muted); overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+    .check { display: flex; gap: 7px; align-items: center; color: var(--muted); font-size: 12px; }
+    .check input { accent-color: var(--accent); }
+
+    .link-list { display: grid; gap: 5px; }
+    .node-link {
+      display: block;
+      min-height: 0;
+      padding: 5px 7px;
+      text-align: left;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      overflow-wrap: anywhere;
+    }
+    .node-link:hover { background: var(--accent-soft); }
+    .empty-list { color: var(--muted); font-size: 12px; }
+    .detail-action { margin-top: 12px; width: 100%; }
+    .evidence { margin: 6px 0; padding-left: 17px; color: var(--muted); }
+    .evidence li { margin: 5px 0; overflow-wrap: anywhere; }
+
+    .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; marker-end: url(#arrow); pointer-events: stroke; cursor: pointer; }
+    .edge.uncertain { stroke-dasharray: 7 5; }
+    .edge.is-dimmed { stroke: var(--edge-dim); opacity: 0.28; }
+    .edge.is-selected { stroke: var(--accent); stroke-width: 3; opacity: 1; }
+    .edge.is-witness { stroke: var(--cycle); stroke-width: 3; opacity: 1; }
+
+    .node { cursor: pointer; }
+    .node rect { stroke-width: 1.5; filter: drop-shadow(0 3px 6px rgba(20, 30, 48, 0.10)); }
+    .node text { pointer-events: none; fill: var(--text); }
+    .node .node-title { font-size: 13px; font-weight: 650; }
+    .node .node-subtitle { font-size: 10px; fill: var(--muted); }
+    .node.is-dimmed { opacity: 0.24; }
+    .node.is-match rect { stroke-width: 4; }
+    .node.is-selected rect { stroke: var(--accent); stroke-width: 4; filter: drop-shadow(0 6px 12px color-mix(in srgb, var(--accent) 35%, transparent)); }
+    .node.local-module rect { fill: var(--local-fill); stroke: var(--local); }
+    .node.standard-library rect { fill: var(--standard-fill); stroke: var(--standard); }
+    .node.installed-distribution rect { fill: var(--installed-fill); stroke: var(--installed); }
+    .node.ambiguous rect { fill: var(--ambiguous-fill); stroke: var(--ambiguous); }
+    .node.unresolved rect { fill: var(--unresolved-fill); stroke: var(--unresolved); }
+    .node.cycle rect { fill: var(--cycle-fill); stroke: var(--cycle); stroke-width: 2.5; }
+    .node.package rect { fill: var(--cycle-fill); stroke: var(--cycle); stroke-width: 2; }
+    .cycle-mark { fill: none; stroke: var(--cycle); stroke-width: 2; }
+
+    .empty-graph { position: absolute; inset: 0; display: none; place-items: center; color: var(--muted); pointer-events: none; }
+    .empty-graph.is-visible { display: grid; }
+
+    @media (max-width: 900px) {
+      .workspace { grid-template-columns: 1fr; grid-template-rows: minmax(520px, 65vh) auto; }
+      .stage { min-height: 520px; }
+      .sidebar { border-left: 0; border-top: 1px solid var(--border); }
+    }
+
+    @media (max-width: 620px) {
+      .header { align-items: stretch; }
+      .controls { justify-content: flex-start; }
+      .search-wrap, .search-wrap input { width: 100%; max-width: none; }
+      .legend { display: none; }
+      .workspace { grid-template-rows: minmax(480px, 62vh) auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="brand">
+        <h1>Codegraide Dependency Explorer</h1>
+        <div class="summary" id="summary"></div>
+        <nav class="breadcrumbs" id="breadcrumbs" aria-label="Package hierarchy"></nav>
+      </div>
+      <div class="controls">
+        <label class="search-wrap">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Find a module</span>
+          <input id="search" type="search" list="module-names" placeholder="Find a module…" autocomplete="off">
+          <datalist id="module-names"></datalist>
+        </label>
+        <div class="button-group" aria-label="Graph view">
+          <button type="button" data-view="overview" aria-pressed="true">Overview</button>
+          <button type="button" data-view="neighborhood" aria-pressed="false" disabled>Neighborhood</button>
+          <button type="button" data-view="full" aria-pressed="false">Full graph</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="stage" aria-label="Interactive dependency graph">
+        <svg id="graph" role="img" aria-labelledby="graph-title graph-description">
+          <title id="graph-title">Repository dependency graph</title>
+          <desc id="graph-description">Modules are connected by directed import relationships. Select a module to inspect its dependencies and dependents.</desc>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path>
+            </marker>
+          </defs>
+          <g id="viewport"><g id="edges"></g><g id="nodes"></g></g>
+        </svg>
+        <div class="empty-graph" id="empty-graph">No nodes match the selected filters.</div>
+        <div class="stage-tools" aria-label="Graph navigation">
+          <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+          <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+          <button type="button" id="fit">Fit</button>
+        </div>
+        <div class="legend" aria-label="Graph legend">
+          <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--local)"></span>Local</span>
+          <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--standard)"></span>Standard library</span>
+          <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--installed)"></span>Installed</span>
+          <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--unresolved)"></span>Unresolved</span>
+          <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--cycle)"></span>Cycle</span>
+          <span class="legend-item"><span class="legend-line"></span>Exact</span>
+          <span class="legend-item"><span class="legend-line dashed"></span>Uncertain</span>
+        </div>
+      </section>
+
+      <aside class="sidebar" aria-live="polite">
+        <div id="details"></div>
+        <h3>Visible boundaries</h3>
+        <div class="filters">
+          <label class="check"><input type="checkbox" data-kind="local-module" checked> Local</label>
+          <label class="check"><input type="checkbox" data-kind="standard-library" checked> Standard library</label>
+          <label class="check"><input type="checkbox" data-kind="installed-distribution" checked> Installed</label>
+          <label class="check"><input type="checkbox" data-kind="ambiguous" checked> Ambiguous</label>
+          <label class="check"><input type="checkbox" data-kind="unresolved" checked> Unresolved</label>
+          <label class="check"><input type="checkbox" id="uncertain" checked> Uncertain edges</label>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script id="graph-data" type="application/json">__CODEGRAIDE_GRAPH_DATA__</script>
+  <script>
+    (() => {
+      "use strict";
+
+      const data = JSON.parse(document.getElementById("graph-data").textContent);
+      const isCallGraph = data.graph_kind === "calls";
+      document.querySelector(".brand h1").textContent = isCallGraph ? "Codegraide Call Explorer" : "Codegraide Dependency Explorer";
+      const svg = document.getElementById("graph");
+      const viewport = document.getElementById("viewport");
+      const edgeLayer = document.getElementById("edges");
+      const nodeLayer = document.getElementById("nodes");
+      const details = document.getElementById("details");
+      const summary = document.getElementById("summary");
+      const breadcrumbs = document.getElementById("breadcrumbs");
+      const search = document.getElementById("search");
+      const emptyGraph = document.getElementById("empty-graph");
+      const nodeById = new Map(data.nodes.map(node => [node.id, node]));
+      const cycleByNumber = new Map(data.cycles.map(cycle => [cycle.number, cycle]));
+      const cycleByMember = new Map(data.cycles.flatMap(cycle => cycle.members.map(id => [id, cycle])));
+      const witnessEdges = new Set(data.cycles.flatMap(cycle => cycle.witness_relations.map(relation => `${relation.source}|${relation.target}`)));
+      const groupById = new Map(data.hierarchy.map(group => [group.id, group]));
+      const directGroupByMember = new Map(data.hierarchy.flatMap(group => group.direct_members.map(id => [id, group])));
+      const rootGroups = data.hierarchy.filter(group => !group.parent);
+      const outgoing = new Map(data.nodes.map(node => [node.id, []]));
+      const incoming = new Map(data.nodes.map(node => [node.id, []]));
+      data.relations.forEach(relation => {
+        outgoing.get(relation.source)?.push(relation);
+        incoming.get(relation.target)?.push(relation);
+      });
+
+      const state = {
+        mode: "overview",
+        currentGroup: rootGroups.length === 1 ? rootGroups[0].id : null,
+        selected: null,
+        selectedEdge: null,
+        query: "",
+        visibleKinds: new Set(["local-module", "standard-library", "installed-distribution", "ambiguous", "unresolved"]),
+        showUncertain: true,
+        transform: { x: 30, y: 30, scale: 1 },
+        items: [],
+        relations: [],
+        positions: new Map()
+      };
+
+      const kindLabels = {
+        "local-module": isCallGraph ? "Project symbol" : "Local module",
+        "standard-library": "Python standard library",
+        "installed-distribution": isCallGraph ? "External call boundary" : "Installed distribution",
+        "ambiguous": "Ambiguous import",
+        "unresolved": "Unresolved import",
+        "cycle": isCallGraph ? "Recursive call group" : "Dependency cycle",
+        "package": isCallGraph ? "Module or class" : "Package"
+      };
+
+      const kindColors = {
+        "local-module": "var(--local)",
+        "standard-library": "var(--standard)",
+        "installed-distribution": "var(--installed)",
+        "ambiguous": "var(--ambiguous)",
+        "unresolved": "var(--unresolved)",
+        "cycle": "var(--cycle)",
+        "package": "var(--cycle)"
+      };
+
+      summary.textContent = data.query
+        ? `${data.query.label} · ${data.query.found ? `${data.nodes.length} nodes` : "no path found"}`
+        : `${data.nodes.length} nodes · ${data.relations.length} relationships · ${data.cycles.length} ${data.cycles.length === 1 ? "cycle" : "cycles"}`;
+      document.getElementById("module-names").innerHTML = data.nodes
+        .filter(node => node.kind === "local-module")
+        .map(node => `<option value="${escapeHtml(node.name)}"></option>`)
+        .join("");
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, character => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+        })[character]);
+      }
+
+      function truncate(value, length) {
+        return value.length <= length ? value : `${value.slice(0, length - 1)}…`;
+      }
+
+      function visibleNode(node) {
+        return state.visibleKinds.has(node.kind);
+      }
+
+      function rawVisibleRelations() {
+        return data.relations.filter(relation => {
+          const source = nodeById.get(relation.source);
+          const target = nodeById.get(relation.target);
+          return visibleNode(source) && visibleNode(target) && (state.showUncertain || relation.kind === "exact");
+        });
+      }
+
+      function overviewGraph() {
+        const visible = data.nodes.filter(visibleNode);
+        const memberToGroup = new Map();
+        let items = [];
+        const current = state.currentGroup ? groupById.get(state.currentGroup) : null;
+        const childGroups = data.hierarchy.filter(group => group.parent === (current?.id || null));
+
+        childGroups.forEach(group => {
+          const members = group.members.filter(id => visibleNode(nodeById.get(id)));
+          if (!members.length) return;
+          items.push({
+            id: `package-${group.id}`,
+            name: group.qualified_name,
+            short_name: group.name,
+            subtitle: `${members.length} ${members.length === 1 ? "module" : "modules"} · open package`,
+            kind: "package",
+            packageGroup: group.id,
+            members
+          });
+          members.forEach(id => memberToGroup.set(id, `package-${group.id}`));
+        });
+
+        visible.forEach(node => {
+          if (node.kind !== "local-module") return;
+          const directGroup = directGroupByMember.get(node.id);
+          const belongsHere = current ? directGroup?.id === current.id : !directGroup;
+          if (belongsHere && !memberToGroup.has(node.id)) {
+            const displayNode = node.name === current?.qualified_name
+              ? { ...node, short_name: "__init__", subtitle: node.path }
+              : node;
+            items.push({ ...displayNode, members: [node.id] });
+            memberToGroup.set(node.id, node.id);
+          }
+        });
+
+        visible.filter(node => node.kind !== "local-module").forEach(node => {
+          items.push({ ...node, members: [node.id] });
+          memberToGroup.set(node.id, node.id);
+        });
+
+        data.cycles.forEach(cycle => {
+          const members = cycle.members.filter(id => memberToGroup.get(id) === id);
+          if (!members.length || members.length !== cycle.members.filter(id => memberToGroup.has(id)).length) return;
+          const memberIds = new Set(members);
+          items = items.filter(item => !memberIds.has(item.id));
+          const cycleItem = {
+            id: `cycle-${cycle.number}`,
+            name: `Cycle ${cycle.number}`,
+            short_name: `Cycle ${cycle.number}`,
+            subtitle: `${members.length} ${members.length === 1 ? "module" : "modules"} · select to inspect`,
+            kind: "cycle",
+            cycle: cycle.number,
+            members
+          };
+          items.push(cycleItem);
+          members.forEach(id => memberToGroup.set(id, cycleItem.id));
+        });
+
+        const combined = new Map();
+        rawVisibleRelations().forEach(relation => {
+          const source = memberToGroup.get(relation.source);
+          const target = memberToGroup.get(relation.target);
+          if (!source || !target || source === target) return;
+          const key = `${source}|${target}|${relation.kind}`;
+          if (!combined.has(key)) combined.set(key, { source, target, kind: relation.kind, originals: [] });
+          combined.get(key).originals.push(relation);
+        });
+        return { items, relations: [...combined.values()] };
+      }
+
+      function updateBreadcrumbs() {
+        const chain = [];
+        let current = state.currentGroup ? groupById.get(state.currentGroup) : null;
+        while (current) {
+          chain.unshift(current);
+          current = current.parent ? groupById.get(current.parent) : null;
+        }
+        const parts = [{ id: null, name: "All packages" }, ...chain.map(group => ({ id: group.id, name: group.name }))];
+        breadcrumbs.replaceChildren();
+        parts.forEach((part, index) => {
+          if (index) {
+            const separator = document.createElement("span");
+            separator.textContent = "/";
+            breadcrumbs.appendChild(separator);
+          }
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = part.name;
+          button.disabled = part.id === state.currentGroup;
+          button.addEventListener("click", () => {
+            state.currentGroup = part.id;
+            state.selected = null;
+            showPlaceholder();
+            render();
+          });
+          breadcrumbs.appendChild(button);
+        });
+      }
+
+      function fullGraph() {
+        const items = data.nodes.filter(visibleNode).map(node => ({ ...node, members: [node.id] }));
+        const ids = new Set(items.map(item => item.id));
+        const relations = rawVisibleRelations()
+          .filter(relation => ids.has(relation.source) && ids.has(relation.target))
+          .map(relation => ({ ...relation, originals: [relation] }));
+        return { items, relations };
+      }
+
+      function neighborhoodGraph() {
+        if (!state.selected) return overviewGraph();
+        const seeds = state.selected.startsWith("cycle-")
+          ? (cycleByNumber.get(Number(state.selected.slice(6)))?.members || [])
+          : [state.selected];
+        const ids = new Set(seeds);
+        const allRelations = rawVisibleRelations();
+        allRelations.forEach(relation => {
+          if (seeds.includes(relation.source) || seeds.includes(relation.target)) {
+            ids.add(relation.source);
+            ids.add(relation.target);
+          }
+        });
+        seeds.forEach(id => {
+          const cycle = cycleByMember.get(id);
+          cycle?.members.forEach(member => ids.add(member));
+        });
+        const items = data.nodes.filter(node => ids.has(node.id) && visibleNode(node)).map(node => ({ ...node, members: [node.id] }));
+        const visibleIds = new Set(items.map(item => item.id));
+        const relations = allRelations
+          .filter(relation => visibleIds.has(relation.source) && visibleIds.has(relation.target))
+          .map(relation => ({ ...relation, originals: [relation] }));
+        return { items, relations };
+      }
+
+      function graphForMode() {
+        if (state.mode === "full") return fullGraph();
+        if (state.mode === "neighborhood") return neighborhoodGraph();
+        return overviewGraph();
+      }
+
+      function componentId(item) {
+        if (item.kind === "cycle") return item.id;
+        const cycle = cycleByMember.get(item.id);
+        return cycle ? `component-${cycle.number}` : item.id;
+      }
+
+      function layout(items, relations) {
+        const itemById = new Map(items.map(item => [item.id, item]));
+        const components = new Map();
+        items.forEach(item => {
+          const id = componentId(item);
+          if (!components.has(id)) components.set(id, []);
+          components.get(id).push(item.id);
+        });
+        const adjacency = new Map([...components.keys()].map(id => [id, new Set()]));
+        const indegree = new Map([...components.keys()].map(id => [id, 0]));
+        relations.forEach(relation => {
+          const sourceItem = itemById.get(relation.source);
+          const targetItem = itemById.get(relation.target);
+          if (!sourceItem || !targetItem) return;
+          const source = componentId(sourceItem);
+          const target = componentId(targetItem);
+          if (source !== target && !adjacency.get(source).has(target)) {
+            adjacency.get(source).add(target);
+            indegree.set(target, indegree.get(target) + 1);
+          }
+        });
+
+        const rank = new Map([...components.keys()].map(id => [id, 0]));
+        const queue = [...components.keys()].filter(id => indegree.get(id) === 0).sort();
+        const processed = new Set();
+        while (queue.length) {
+          const current = queue.shift();
+          processed.add(current);
+          [...adjacency.get(current)].sort().forEach(target => {
+            rank.set(target, Math.max(rank.get(target), rank.get(current) + 1));
+            indegree.set(target, indegree.get(target) - 1);
+            if (indegree.get(target) === 0) queue.push(target);
+          });
+          queue.sort();
+        }
+
+        const remaining = [...components.keys()].filter(id => !processed.has(id)).sort();
+        remaining.forEach(id => {
+          const predecessors = relations
+            .filter(relation => componentId(itemById.get(relation.target)) === id)
+            .map(relation => componentId(itemById.get(relation.source)))
+            .filter(source => source !== id && processed.has(source));
+          rank.set(id, predecessors.length ? Math.max(...predecessors.map(source => rank.get(source) + 1)) : 0);
+        });
+
+        const columns = new Map();
+        items.forEach(item => {
+          const itemRank = rank.get(componentId(item)) || 0;
+          if (!columns.has(itemRank)) columns.set(itemRank, []);
+          columns.get(itemRank).push(item);
+        });
+        columns.forEach(column => column.sort((a, b) => a.name.localeCompare(b.name)));
+
+        const maxRows = Math.max(1, ...[...columns.values()].map(column => column.length));
+        const positions = new Map();
+        [...columns.entries()].sort((a, b) => a[0] - b[0]).forEach(([columnNumber, column]) => {
+          const offset = (maxRows - column.length) * 48;
+          column.forEach((item, row) => {
+            positions.set(item.id, { x: 70 + columnNumber * 285, y: 60 + offset + row * 96 });
+          });
+        });
+        return positions;
+      }
+
+      function render() {
+        const graph = graphForMode();
+        state.items = graph.items;
+        state.relations = graph.relations;
+        state.positions = layout(graph.items, graph.relations);
+        edgeLayer.replaceChildren();
+        nodeLayer.replaceChildren();
+        emptyGraph.classList.toggle("is-visible", graph.items.length === 0);
+
+        graph.relations.forEach((relation, index) => edgeLayer.appendChild(renderEdge(relation, index)));
+        graph.items.forEach(item => nodeLayer.appendChild(renderNode(item)));
+        updateSelectionStyles();
+        updateViewButtons();
+        updateBreadcrumbs();
+        requestAnimationFrame(fitGraph);
+      }
+
+      function renderEdge(relation, index) {
+        const source = state.positions.get(relation.source);
+        const target = state.positions.get(relation.target);
+        const sourceItem = state.items.find(item => item.id === relation.source);
+        const targetItem = state.items.find(item => item.id === relation.target);
+        const sourceExpanded = sourceItem.kind === "cycle" || sourceItem.kind === "package";
+        const targetExpanded = targetItem.kind === "cycle" || targetItem.kind === "package";
+        const sourceWidth = sourceExpanded ? 220 : 190;
+        const targetWidth = targetExpanded ? 220 : 190;
+        const sourceHeight = sourceExpanded ? 70 : 58;
+        const targetHeight = targetExpanded ? 70 : 58;
+        const forward = target.x > source.x;
+        const sx = forward ? source.x + sourceWidth : source.x;
+        const tx = forward ? target.x : target.x + targetWidth;
+        const sy = source.y + sourceHeight / 2;
+        const ty = target.y + targetHeight / 2;
+        const distance = Math.max(70, Math.abs(tx - sx) * 0.48);
+        const c1x = forward ? sx + distance : sx - 70 - (index % 4) * 18;
+        const c2x = forward ? tx - distance : tx + 70 + (index % 4) * 18;
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ty}, ${tx} ${ty}`);
+        const originals = relation.originals || [relation];
+        const witness = originals.some(original => witnessEdges.has(`${original.source}|${original.target}`));
+        path.setAttribute("class", `edge${relation.kind === "exact" ? "" : " uncertain"}${witness ? " is-witness" : ""}`);
+        path.dataset.edgeIndex = String(index);
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        title.textContent = `${sourceItem.name} → ${targetItem.name} (${relation.kind})`;
+        path.appendChild(title);
+        path.addEventListener("click", event => {
+          event.stopPropagation();
+          state.selectedEdge = index;
+          state.selected = null;
+          showEdgeDetails(relation, sourceItem, targetItem);
+          updateSelectionStyles();
+        });
+        return path;
+      }
+
+      function renderNode(item) {
+        const position = state.positions.get(item.id);
+        const expanded = item.kind === "cycle" || item.kind === "package";
+        const width = expanded ? 220 : 190;
+        const height = expanded ? 70 : 58;
+        const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        group.setAttribute("class", `node ${item.kind}`);
+        group.setAttribute("transform", `translate(${position.x} ${position.y})`);
+        group.dataset.nodeId = item.id;
+        group.setAttribute("role", "button");
+        group.setAttribute("tabindex", "0");
+        group.setAttribute("aria-label", `${item.name}, ${kindLabels[item.kind]}`);
+
+        const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        rect.setAttribute("width", width);
+        rect.setAttribute("height", height);
+        rect.setAttribute("rx", "10");
+        group.appendChild(rect);
+
+        if (item.kind === "cycle") {
+          const mark = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          mark.setAttribute("class", "cycle-mark");
+          mark.setAttribute("d", "M 18 25 A 10 10 0 1 1 18 45 M 14 25 L 20 25 L 18 19");
+          group.appendChild(mark);
+        }
+
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        title.setAttribute("class", "node-title");
+        title.setAttribute("x", item.kind === "cycle" ? 38 : 14);
+        title.setAttribute("y", expanded ? 29 : 24);
+        title.textContent = truncate(item.short_name, 24);
+        group.appendChild(title);
+
+        const subtitle = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        subtitle.setAttribute("class", "node-subtitle");
+        subtitle.setAttribute("x", item.kind === "cycle" ? 38 : 14);
+        subtitle.setAttribute("y", expanded ? 49 : 43);
+        subtitle.textContent = truncate(item.subtitle, expanded ? 31 : 28);
+        group.appendChild(subtitle);
+
+        const tooltip = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        tooltip.textContent = item.kind === "cycle"
+          ? `${item.name}: ${item.members.map(id => nodeById.get(id).name).join(", ")}`
+          : `${item.name}${item.path ? `\n${item.path}` : ""}`;
+        group.appendChild(tooltip);
+
+        group.addEventListener("click", event => {
+          event.stopPropagation();
+          if (item.kind === "package") {
+            state.currentGroup = item.packageGroup;
+            state.selected = null;
+            showPlaceholder();
+            render();
+            return;
+          }
+          selectItem(item.id);
+        });
+        group.addEventListener("keydown", event => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          selectItem(item.id);
+        });
+        return group;
+      }
+
+      function selectItem(id) {
+        state.selected = id;
+        state.selectedEdge = null;
+        document.querySelector('[data-view="neighborhood"]').disabled = false;
+        const item = state.items.find(candidate => candidate.id === id);
+        if (item?.kind === "cycle") showCycleDetails(item);
+        else showNodeDetails(nodeById.get(id));
+        updateSelectionStyles();
+      }
+
+      function selectOriginalNode(id, useNeighborhood = false) {
+        const node = nodeById.get(id);
+        if (!node) return;
+        state.selected = id;
+        state.selectedEdge = null;
+        if (useNeighborhood) {
+          state.mode = "neighborhood";
+        } else if (state.mode === "overview") {
+          state.currentGroup = directGroupByMember.get(id)?.id || null;
+        }
+        document.querySelector('[data-view="neighborhood"]').disabled = false;
+        render();
+        showNodeDetails(node);
+      }
+
+      function showNodeDetails(node) {
+        if (!node) return;
+        const imports = (outgoing.get(node.id) || []).map(relation => nodeById.get(relation.target));
+        const dependents = (incoming.get(node.id) || []).map(relation => nodeById.get(relation.source));
+        const cycle = cycleByMember.get(node.id);
+        details.innerHTML = `
+          <h2>${escapeHtml(node.name)}</h2>
+          <div class="kind-label"><span class="kind-swatch" style="--kind-color:${kindColors[node.kind]}"></span>${kindLabels[node.kind]}</div>
+          ${node.path ? `<code class="path">${escapeHtml(node.path)}</code>` : ""}
+          ${node.version ? `<p>Version ${escapeHtml(node.version)}</p>` : ""}
+          ${node.unresolved_reason ? `<p>Reason: ${escapeHtml(node.unresolved_reason.replaceAll("-", " "))}</p>` : ""}
+          ${cycle ? `<p>Member of <strong>Cycle ${cycle.number}</strong>.</p>` : ""}
+          ${node.candidates.length ? candidateMarkup(node.candidates) : ""}
+          <h3>${isCallGraph ? "Calls" : "Imports"}</h3>${linkList(imports)}
+          <h3>${isCallGraph ? "Called by" : "Imported by"}</h3>${linkList(dependents)}
+          ${cycle ? `<button type="button" class="detail-action" id="show-cycle">Show complete cycle</button>` : ""}
+        `;
+        bindNodeLinks();
+        document.getElementById("show-cycle")?.addEventListener("click", () => {
+          state.mode = "neighborhood";
+          render();
+          showNodeDetails(node);
+        });
+      }
+
+      function showCycleDetails(item) {
+        const cycle = cycleByNumber.get(item.cycle);
+        const members = cycle.members.map(id => nodeById.get(id));
+        const witness = cycle.witness_nodes.map(id => nodeById.get(id)?.name).filter(Boolean);
+        details.innerHTML = `
+          <h2>Cycle ${cycle.number}</h2>
+          <div class="kind-label"><span class="kind-swatch" style="--kind-color:${kindColors.cycle}"></span>${isCallGraph ? "Recursive call group" : "Dependency cycle"}</div>
+          <p class="placeholder">${isCallGraph ? "These symbols call one another recursively." : "These modules depend on one another. They are collapsed in the overview to keep the rest of the architecture readable."}</p>
+          ${isCallGraph ? "" : `<h3>Shortest witness loop</h3><p><code>${escapeHtml(witness.join(" → "))}</code></p><h3>Recommended cuts</h3>${cycle.recommended_cuts.length ? `<ul class="evidence">${cycle.recommended_cuts.map((relation, index) => `<li><button type="button" class="node-link" data-cut="${index}">${escapeHtml(nodeById.get(relation.source)?.name || relation.source)} → ${escapeHtml(nodeById.get(relation.target)?.name || relation.target)}</button><br>${relation.evidence.length} import ${relation.evidence.length === 1 ? "site" : "sites"} to reconsider</li>`).join("")}</ul>` : `<p class="empty-list">No recommendation available.</p>`}<p class="placeholder">Recommendations are deterministic approximations, not guaranteed optimal architectural fixes.</p>`}
+          <h3>Members</h3>${linkList(members)}
+          <button type="button" class="detail-action" id="expand-cycle">Expand this cycle</button>
+        `;
+        bindNodeLinks();
+        details.querySelectorAll("[data-cut]").forEach(button => {
+          button.addEventListener("click", () => {
+            const relation = cycle.recommended_cuts[Number(button.dataset.cut)];
+            showEdgeDetails(relation, nodeById.get(relation.source), nodeById.get(relation.target));
+          });
+        });
+        document.getElementById("expand-cycle").addEventListener("click", () => {
+          state.mode = "neighborhood";
+          state.selected = cycle.members[0];
+          render();
+          showNodeDetails(nodeById.get(state.selected));
+        });
+      }
+
+      function showEdgeDetails(relation, sourceItem, targetItem) {
+        const originals = relation.originals || [relation];
+        const evidence = originals.flatMap(original => original.evidence || []);
+        details.innerHTML = `
+          <h2>${escapeHtml(sourceItem.name)} → ${escapeHtml(targetItem.name)}</h2>
+          <div class="kind-label">${relation.kind === "exact" ? `Exact ${isCallGraph ? "call" : "dependency"}` : `${escapeHtml(relation.kind)} ${isCallGraph ? "call" : "dependency"}`}</div>
+          <h3>Source evidence</h3>
+          ${evidence.length ? `<ul class="evidence">${evidence.map(item => `<li><code>${escapeHtml(item.source_path)}:${item.line}:${item.column}</code><br>${isCallGraph ? "calls" : "imports"} ${escapeHtml(item.import_name)}${isCallGraph ? "" : `<br><span class="context-badge">${escapeHtml(item.scope)}</span><span class="context-badge">${escapeHtml(item.usage)}</span><span class="context-badge">${escapeHtml(item.requirement)}</span>${item.conditional ? `<span class="context-badge">conditional</span>` : ""}`}</li>`).join("")}</ul>` : `<p class="empty-list">Collapsed relationship between graph groups.</p>`}
+        `;
+      }
+
+      function candidateMarkup(candidates) {
+        return `<h3>Possible targets</h3><div class="link-list">${candidates.map(candidate => `<div>${escapeHtml(candidate.name)}${candidate.detail ? `<br><span class="empty-list">${escapeHtml(candidate.detail)}</span>` : ""}</div>`).join("")}</div>`;
+      }
+
+      function linkList(nodes) {
+        const unique = [...new Map(nodes.filter(Boolean).map(node => [node.id, node])).values()];
+        if (!unique.length) return `<div class="empty-list">None in this graph</div>`;
+        return `<div class="link-list">${unique.map(node => `<button type="button" class="node-link" data-select-node="${node.id}">${escapeHtml(node.name)}</button>`).join("")}</div>`;
+      }
+
+      function bindNodeLinks() {
+        details.querySelectorAll("[data-select-node]").forEach(button => {
+          button.addEventListener("click", () => selectOriginalNode(button.dataset.selectNode, true));
+        });
+      }
+
+      function showPlaceholder() {
+        if (data.query) {
+          const ordered = data.query.ordered_nodes.map(id => nodeById.get(id)).filter(Boolean);
+          details.innerHTML = `
+            <h2>${escapeHtml(data.query.label)}</h2>
+            <div class="kind-label">Exact local ${data.query.kind === "closure" ? "reachability" : "path"} query</div>
+            ${data.query.found ? `<h3>Result</h3>${linkList(ordered)}` : `<p class="empty-list">No connecting exact local dependency path was found.</p>`}
+          `;
+          bindNodeLinks();
+          return;
+        }
+        details.innerHTML = `
+          <h2>Explore the graph</h2>
+          <p class="placeholder">Select a node to see its full ${isCallGraph ? "symbol selector, source path, callees, and callers" : "module name, source path, imports, and dependents"}. Use Neighborhood to isolate just the surrounding relationships.</p>
+        `;
+      }
+
+      function updateSelectionStyles() {
+        const selectedItem = state.items.find(item => item.id === state.selected);
+        const related = new Set(selectedItem ? [selectedItem.id] : []);
+        if (selectedItem) {
+          state.relations.forEach(relation => {
+            if (relation.source === selectedItem.id) related.add(relation.target);
+            if (relation.target === selectedItem.id) related.add(relation.source);
+          });
+        }
+        const query = state.query.trim().toLowerCase();
+        nodeLayer.querySelectorAll(".node").forEach(element => {
+          const item = state.items.find(candidate => candidate.id === element.dataset.nodeId);
+          const memberNames = item.members.map(id => nodeById.get(id)?.name || "").join(" ");
+          const matches = query && `${item.name} ${memberNames}`.toLowerCase().includes(query);
+          element.classList.toggle("is-selected", item.id === state.selected);
+          element.classList.toggle("is-match", Boolean(matches));
+          element.classList.toggle("is-dimmed", Boolean(selectedItem) && !related.has(item.id));
+        });
+        edgeLayer.querySelectorAll(".edge").forEach(element => {
+          const index = Number(element.dataset.edgeIndex);
+          const relation = state.relations[index];
+          const incident = selectedItem && (relation.source === selectedItem.id || relation.target === selectedItem.id);
+          element.classList.toggle("is-selected", index === state.selectedEdge || Boolean(incident));
+          element.classList.toggle("is-dimmed", Boolean(selectedItem) && !incident);
+        });
+      }
+
+      function updateViewButtons() {
+        document.querySelectorAll("[data-view]").forEach(button => {
+          button.setAttribute("aria-pressed", String(button.dataset.view === state.mode));
+        });
+      }
+
+      function applyTransform() {
+        viewport.setAttribute("transform", `translate(${state.transform.x} ${state.transform.y}) scale(${state.transform.scale})`);
+      }
+
+      function fitGraph() {
+        if (!state.items.length) return;
+        const bounds = state.items.reduce((result, item) => {
+          const position = state.positions.get(item.id);
+          const expanded = item.kind === "cycle" || item.kind === "package";
+          const width = expanded ? 220 : 190;
+          const height = expanded ? 70 : 58;
+          result.minX = Math.min(result.minX, position.x);
+          result.minY = Math.min(result.minY, position.y);
+          result.maxX = Math.max(result.maxX, position.x + width);
+          result.maxY = Math.max(result.maxY, position.y + height);
+          return result;
+        }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+        const rect = svg.getBoundingClientRect();
+        const graphWidth = Math.max(1, bounds.maxX - bounds.minX);
+        const graphHeight = Math.max(1, bounds.maxY - bounds.minY);
+        const scale = Math.min(1.35, Math.max(0.18, Math.min((rect.width - 90) / graphWidth, (rect.height - 110) / graphHeight)));
+        state.transform.scale = scale;
+        state.transform.x = (rect.width - graphWidth * scale) / 2 - bounds.minX * scale;
+        state.transform.y = (rect.height - graphHeight * scale) / 2 - bounds.minY * scale;
+        applyTransform();
+      }
+
+      function zoom(factor, centerX = svg.clientWidth / 2, centerY = svg.clientHeight / 2) {
+        const oldScale = state.transform.scale;
+        const newScale = Math.min(2.5, Math.max(0.15, oldScale * factor));
+        const worldX = (centerX - state.transform.x) / oldScale;
+        const worldY = (centerY - state.transform.y) / oldScale;
+        state.transform.x = centerX - worldX * newScale;
+        state.transform.y = centerY - worldY * newScale;
+        state.transform.scale = newScale;
+        applyTransform();
+      }
+
+      document.querySelectorAll("[data-view]").forEach(button => {
+        button.addEventListener("click", () => {
+          state.mode = button.dataset.view;
+          state.selectedEdge = null;
+          render();
+          if (state.selected && !state.selected.startsWith("cycle-")) showNodeDetails(nodeById.get(state.selected));
+        });
+      });
+
+      document.querySelectorAll("[data-kind]").forEach(input => {
+        input.addEventListener("change", () => {
+          if (input.checked) state.visibleKinds.add(input.dataset.kind);
+          else state.visibleKinds.delete(input.dataset.kind);
+          state.selected = null;
+          state.selectedEdge = null;
+          showPlaceholder();
+          render();
+        });
+      });
+
+      document.getElementById("uncertain").addEventListener("change", event => {
+        state.showUncertain = event.target.checked;
+        state.selectedEdge = null;
+        render();
+      });
+
+      search.addEventListener("input", () => {
+        state.query = search.value;
+        updateSelectionStyles();
+        const exact = data.nodes.find(node => node.name.toLowerCase() === state.query.trim().toLowerCase());
+        if (exact) selectOriginalNode(exact.id, false);
+      });
+      search.addEventListener("keydown", event => {
+        if (event.key !== "Enter") return;
+        const query = search.value.trim().toLowerCase();
+        const match = data.nodes.find(node => node.name.toLowerCase().includes(query));
+        if (match) selectOriginalNode(match.id, true);
+      });
+
+      let drag = null;
+      svg.addEventListener("pointerdown", event => {
+        if (event.button !== 0 || event.target.closest(".node") || event.target.closest(".edge")) return;
+        drag = { x: event.clientX, y: event.clientY, originX: state.transform.x, originY: state.transform.y };
+        svg.setPointerCapture(event.pointerId);
+        svg.classList.add("is-panning");
+      });
+      svg.addEventListener("pointermove", event => {
+        if (!drag) return;
+        state.transform.x = drag.originX + event.clientX - drag.x;
+        state.transform.y = drag.originY + event.clientY - drag.y;
+        applyTransform();
+      });
+      svg.addEventListener("pointerup", () => { drag = null; svg.classList.remove("is-panning"); });
+      svg.addEventListener("pointercancel", () => { drag = null; svg.classList.remove("is-panning"); });
+      svg.addEventListener("wheel", event => {
+        event.preventDefault();
+        const rect = svg.getBoundingClientRect();
+        zoom(event.deltaY < 0 ? 1.12 : 0.89, event.clientX - rect.left, event.clientY - rect.top);
+      }, { passive: false });
+      svg.addEventListener("click", () => {
+        state.selected = null;
+        state.selectedEdge = null;
+        showPlaceholder();
+        updateSelectionStyles();
+      });
+
+      document.getElementById("zoom-in").addEventListener("click", () => zoom(1.2));
+      document.getElementById("zoom-out").addEventListener("click", () => zoom(0.82));
+      document.getElementById("fit").addEventListener("click", fitGraph);
+      window.addEventListener("resize", fitGraph);
+
+      showPlaceholder();
+      render();
+    })();
+  </script>
+</body>
+</html>
