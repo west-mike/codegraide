@@ -154,11 +154,195 @@ cargo run -p codegraide -- analyze . --details src/service.py
 cargo run -p codegraide -- analyze . --format json
 ```
 
-The syntax report uses the independent `syntax-analysis-v2` definition and the
-same `0.2.0` report schema version as inventory. Symbols, imports, project
-resolution, installed-package lookup, and runtime-complexity claims are
-deliberately not made yet. Module identities are repository-relative paths
-until a Python interpreter and project environment are explicitly selected.
+The syntax report uses the independent `syntax-analysis-v2` definition and
+schema version `0.4.0`; inventory remains on schema `0.2.0`. Syntax output
+preserves import evidence without labeling it as project-resolved; the separate
+dependency command performs that enrichment.
+
+## Python dependency graphs
+
+Build a project-level Python dependency graph with local module resolution:
+
+```sh
+cargo run -p codegraide -- dependencies .
+```
+
+Codegraide discovers import roots from supported `pyproject.toml` Setuptools or
+Poetry layout fields, then falls back to `src/` or a flat project layout. Local
+modules resolve without starting Python. Select an interpreter or virtual
+environment explicitly to classify standard-library imports and packages
+installed in that environment:
+
+```sh
+cargo run -p codegraide -- dependencies . --python /path/to/python
+cargo run -p codegraide -- dependencies . --venv .venv
+```
+
+Codegraide does not infer an activated environment, install anything, access a
+package index, or import the packages being inspected. Starting the selected
+interpreter is a trusted operation; its ordinary site initialization still
+applies. Python 3.8 or newer is required for environment enrichment.
+
+The default terminal report shows resolution coverage, global node and relation
+counts, fan-in and fan-out rankings, strongly connected cycle groups, and
+unresolved or ambiguous investigation nodes.
+
+For a graph you can explore, generate a self-contained HTML file. It works
+offline and does not require Mermaid, Graphviz, Node, or a web server:
+
+```sh
+cargo run -p codegraide -- dependencies . \
+  --local-only --format html --output dependencies.html --open
+```
+
+The overview starts at package level and automatically enters a project with a
+single root package. Select a package to drill into its immediate modules and
+child packages, then use the breadcrumbs to move back up. Package edges retain
+all underlying import evidence. Searching for a module opens its package
+ancestors automatically. The overview also collapses each dependency cycle at
+the current level so cyclic packages do not dominate the diagram. Switch to
+Neighborhood to isolate a selected module's immediate context, or use Full
+graph to expand every module. The details panel shows full module names,
+repository-relative paths, imports, dependents, and source evidence without
+putting fan-in or fan-out counts into node labels.
+
+`--open` uses the operating system's default browser. To open the generated
+file specifically in Google Chrome on macOS:
+
+```sh
+open -a "Google Chrome" dependencies.html
+```
+
+Static visual and machine-readable formats are emitted directly to stdout:
+
+```sh
+cargo run -p codegraide -- dependencies . --format mermaid > dependencies.mmd
+cargo run -p codegraide -- dependencies . --format dot > dependencies.dot
+cargo run -p codegraide -- dependencies . --format json > dependencies.json
+dot -Tsvg dependencies.dot > dependencies.svg
+```
+
+The dependency JSON API has its own `0.4.0` report schema. It includes graph and
+metric definition versions, environment provenance without machine-local
+paths, global resolution coverage, applied view filters, typed nodes, evidence-
+backed relations, SCCs, and an optional query result.
+
+Cycle output keeps SCCs as the cycle-group definition and adds a compact,
+evidence-backed explanation: one deterministic shortest witness loop plus an
+approximate set of relations to reconsider. The recommendation weights each
+relation by its source import-site count and verifies that removing the whole
+set makes the component acyclic. It is a navigation aid, not a claim that the
+suggested changes are optimal or architecturally correct. Terminal and HTML
+details show the supporting file, line, and column for every suggested cut.
+
+Use focused views to keep large diagrams readable. Filters select presentation
+nodes and relations; they never recalculate the global fan metrics or cycles:
+
+```sh
+# One module and its direct dependencies and dependents
+cargo run -p codegraide -- dependencies . \
+  --focus shop.service --depth 1 --direction both --format mermaid
+
+# Exact repository-local relationships only
+cargo run -p codegraide -- dependencies . --local-only --exact-only --format dot
+
+# Only cyclic local SCCs
+cargo run -p codegraide -- dependencies . --cycles-only --format mermaid
+```
+
+Ask exact-local reachability questions without treating uncertain imports or
+external package boundaries as traversable edges:
+
+```sh
+# Deterministic shortest path; a missing path is a successful `found: false`
+cargo run -p codegraide -- dependencies . \
+  --path-from shop.api --path-to shop.models --format html \
+  --output dependency-path.html --open
+
+# All transitive local dependencies (the default closure direction)
+cargo run -p codegraide -- dependencies . --closure shop.api
+
+# Every local module that transitively depends on shop.models
+cargo run -p codegraide -- dependencies . \
+  --closure shop.models --direction dependents --format mermaid
+```
+
+Path queries use sorted-neighbor breadth-first search, so equally short paths
+have deterministic tie-breaking. Closure output is sorted. Query views retain
+the same stable full-graph node IDs used by ordinary filtered views.
+
+Every Python import records independent context dimensions: module/class/
+callable scope, runtime/type-checking-only usage, required/optional requirement,
+and conditional execution. All imports remain included by default. Exclude
+selected contexts before graph construction when you want to ask how those
+imports affect coupling, paths, or cycles:
+
+```sh
+cargo run -p codegraide -- dependencies . --exclude-type-only
+cargo run -p codegraide -- dependencies . --exclude-optional --format html \
+  --output runtime-required-dependencies.html --open
+cargo run -p codegraide -- dependencies . \
+  --exclude-callable-local --exclude-conditional --format json
+```
+
+These are analysis-input exclusions, not visual filters: coverage, relations,
+fan-in/out, SCCs, cycle explanations, and path/closure queries are recalculated.
+JSON records the applied exclusions, and terminal/HTML evidence shows context
+badges. Import context classification is
+versioned as `python-import-context-v1`.
+
+A representative graph looks like this:
+
+```mermaid
+flowchart LR
+  api["shop.api"]
+  requests["Requests==2.32.0"]
+  json["json · standard library"]
+  missing["missing_package · unresolved"]
+  subgraph cycle["Cycle 1"]
+    service["shop.service"]
+    models["shop.models"]
+  end
+  api --> service
+  service --> models
+  models --> service
+  api --> requests
+  api --> json
+  api -. unresolved .-> missing
+```
+
+Exact relations alone contribute to fan-in and fan-out. SCCs and cycles use
+exact local-module relations only. Dynamic imports, custom import hooks,
+runtime re-exports, and the internals of external packages remain outside the
+static graph contract.
+
+## Python call graphs
+
+Build an evidence-backed symbol call graph with a separate command and report:
+
+```sh
+cargo run -p codegraide -- calls .
+cargo run -p codegraide -- calls . --local-only --format html \
+  --output calls.html --open
+cargo run -p codegraide -- calls . \
+  --focus shop.service::Client.send --direction both --depth 1 \
+  --format mermaid
+cargo run -p codegraide -- calls . --cycles-only --format dot > calls.dot
+```
+
+Call extraction is `python-call-references-v1`; syntax JSON is `0.4.0`, and the
+independent call-report JSON schema starts at `0.1.0` with `call-graph-v1`.
+Selectors use `module::qualified.symbol`, such as
+`shop.service::Client.send`; duplicate definitions require `#N`.
+
+Version 1 resolves same-module and nested functions, imported function aliases,
+local module aliases, `self.method()`/`cls.method()` in the same class, local
+constructors, and direct recursion. It preserves external, ambiguous, and
+unresolved call boundaries. Arbitrary instance dispatch, assignment aliases,
+inheritance lookup, decorators, monkey patching, higher-order values, and
+runtime metaprogramming are deliberately not guessed. The HTML output reuses
+the offline explorer, including hierarchy drill-down, search, neighborhood
+views, evidence inspection, recursion groups, pan, and zoom.
 
 ## Deterministic review gate
 

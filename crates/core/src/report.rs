@@ -7,6 +7,7 @@ use crate::lines::RepositoryLineCounts;
 use crate::review::{ReviewEvaluation, review_status_code};
 
 pub const INVENTORY_REPORT_SCHEMA_VERSION: &str = "0.2.0";
+pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.4.0";
 pub const INVENTORY_REPORT_DEFINITION_VERSION: &str = "inventory-report-v1";
 pub const PHYSICAL_LINE_DEFINITION_VERSION: &str = "physical-lines-v1";
 pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v2";
@@ -277,6 +278,7 @@ pub struct JsonFileAnalysis {
     pub diagnostics: Vec<JsonAnalysisDiagnostic>,
     pub symbols: Vec<JsonSymbol>,
     pub dependencies: Vec<JsonDependencyReference>,
+    pub calls: Vec<JsonCallReference>,
 }
 
 #[derive(Debug, Serialize)]
@@ -346,6 +348,23 @@ pub struct JsonDependencyReference {
     pub wildcard: bool,
     pub resolution: &'static str,
     pub enclosing_symbol: Option<String>,
+    pub scope: &'static str,
+    pub usage: &'static str,
+    pub requirement: &'static str,
+    pub conditional: bool,
+    pub span: JsonSourceSpan,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonCallReference {
+    pub callee: String,
+    pub components: Vec<String>,
+    pub enclosing_symbol: Option<String>,
+    pub positional_arguments: usize,
+    pub keyword_arguments: Vec<String>,
+    pub has_star_args: bool,
+    pub has_star_kwargs: bool,
+    pub syntax_complete: bool,
     pub span: JsonSourceSpan,
 }
 
@@ -511,13 +530,19 @@ impl AnalysisJsonReport {
                             .iter()
                             .map(JsonDependencyReference::from_dependency)
                             .collect(),
+                        calls: file
+                            .facts
+                            .calls
+                            .iter()
+                            .map(JsonCallReference::from_call)
+                            .collect(),
                     })
                     .collect(),
             })
             .collect();
 
         Self {
-            report_schema_version: INVENTORY_REPORT_SCHEMA_VERSION,
+            report_schema_version: SYNTAX_REPORT_SCHEMA_VERSION,
             tool: JsonTool {
                 name: "codegraide",
                 version: env!("CARGO_PKG_VERSION"),
@@ -841,7 +866,30 @@ impl JsonDependencyReference {
                 .enclosing_symbol
                 .as_ref()
                 .map(|id| id.as_str().to_owned()),
+            scope: dependency.context.scope.as_str(),
+            usage: dependency.context.usage.as_str(),
+            requirement: dependency.context.requirement.as_str(),
+            conditional: dependency.context.conditional,
             span: JsonSourceSpan::from_span(dependency.span),
+        }
+    }
+}
+
+impl JsonCallReference {
+    fn from_call(call: &crate::analyzer::CallReference) -> Self {
+        Self {
+            callee: call.callee.clone(),
+            components: call.components.clone(),
+            enclosing_symbol: call
+                .enclosing_symbol
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            positional_arguments: call.arguments.positional,
+            keyword_arguments: call.arguments.keywords.clone(),
+            has_star_args: call.arguments.has_star_args,
+            has_star_kwargs: call.arguments.has_star_kwargs,
+            syntax_complete: call.syntax_complete,
+            span: JsonSourceSpan::from_span(call.span),
         }
     }
 }
@@ -978,7 +1026,7 @@ impl JsonLineCountValues {
     }
 }
 
-fn json_path(path: &Path) -> String {
+pub(crate) fn json_path(path: &Path) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;

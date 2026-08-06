@@ -26,6 +26,7 @@ pub enum AnalyzerCapability {
     Parse,
     Symbols,
     DependencyReferences,
+    CallReferences,
     DecisionEvents,
     NestingEvents,
     Measurements,
@@ -37,6 +38,7 @@ impl AnalyzerCapability {
             Self::Parse => "parse",
             Self::Symbols => "symbols",
             Self::DependencyReferences => "dependency-references",
+            Self::CallReferences => "call-references",
             Self::DecisionEvents => "decision-events",
             Self::NestingEvents => "nesting-events",
             Self::Measurements => "measurements",
@@ -95,7 +97,7 @@ pub struct SourcePosition {
     pub column: usize,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SourceSpan {
     pub start_byte: usize,
     pub end_byte: usize,
@@ -317,6 +319,72 @@ pub enum ResolutionLevel {
     Semantic,
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ImportScope {
+    Module,
+    Class,
+    Callable,
+}
+
+impl ImportScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Module => "module",
+            Self::Class => "class",
+            Self::Callable => "callable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ImportUsage {
+    Runtime,
+    TypeCheckingOnly,
+}
+
+impl ImportUsage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::TypeCheckingOnly => "type-checking-only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ImportRequirement {
+    Required,
+    Optional,
+}
+
+impl ImportRequirement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Required => "required",
+            Self::Optional => "optional",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ImportContext {
+    pub scope: ImportScope,
+    pub usage: ImportUsage,
+    pub requirement: ImportRequirement,
+    pub conditional: bool,
+}
+
+impl Default for ImportContext {
+    fn default() -> Self {
+        Self {
+            scope: ImportScope::Module,
+            usage: ImportUsage::Runtime,
+            requirement: ImportRequirement::Required,
+            conditional: false,
+        }
+    }
+}
+
 impl ResolutionLevel {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -337,7 +405,26 @@ pub struct DependencyReference {
     pub wildcard: bool,
     pub resolution: ResolutionLevel,
     pub enclosing_symbol: Option<SymbolId>,
+    pub context: ImportContext,
     pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CallArgumentShape {
+    pub positional: usize,
+    pub keywords: Vec<String>,
+    pub has_star_args: bool,
+    pub has_star_kwargs: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CallReference {
+    pub callee: String,
+    pub components: Vec<String>,
+    pub enclosing_symbol: Option<SymbolId>,
+    pub arguments: CallArgumentShape,
+    pub span: SourceSpan,
+    pub syntax_complete: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -363,6 +450,7 @@ pub struct Symbol {
 pub struct AnalysisFacts {
     pub symbols: Vec<Symbol>,
     pub dependencies: Vec<DependencyReference>,
+    pub calls: Vec<CallReference>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

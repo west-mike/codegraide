@@ -1,15 +1,28 @@
 use std::collections::BTreeSet;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use codegraide_analyzer_python::PythonAnalyzer;
+use codegraide_analyzer_python::{
+    PythonAnalyzer, PythonEnvironmentSelection, PythonResolutionOptions, resolve_python_calls,
+    resolve_python_dependencies,
+};
 use codegraide_core::{
-    AnalysisJsonReport, AnalysisOptions, AnalyzerRegistry, FileCategory, GateJsonReport,
-    InventoryJsonReport, InventoryOptions, RepositoryAnalysis, RepositoryInventory,
-    ReviewJsonReport, ReviewOptions, ReviewStatus, analyze_repository,
-    inventory_repository_with_options, review_status_code,
+    AnalysisJsonReport, AnalysisOptions, AnalyzerRegistry, CallDirection, CallGraphAnalysis,
+    CallGraphFilter, CallGraphView, CallJsonReport, DependencyDirection,
+    DependencyEnvironmentReport, DependencyGraphAnalysis, DependencyGraphFilter,
+    DependencyGraphInputExclusions, DependencyGraphQuery, DependencyGraphQueryResult,
+    DependencyGraphView, DependencyJsonReport, DependencyNode, DependencyNodeKind,
+    DependencyQueryDirection, FileCategory, GateJsonReport, InventoryJsonReport, InventoryOptions,
+    RepositoryAnalysis, RepositoryInventory, ReviewJsonReport, ReviewOptions, ReviewStatus,
+    analyze_call_graph, analyze_dependency_graph, analyze_repository, call_node_name,
+    dependency_query_view, explain_dependency_cycles, filter_call_graph, filter_dependency_graph,
+    inventory_repository_with_options, query_dependency_graph, render_call_dot, render_call_html,
+    render_call_mermaid, render_dependency_dot, render_dependency_html,
+    render_dependency_html_with_query, render_dependency_mermaid, review_status_code,
 };
 
 #[derive(Debug, Parser)]
@@ -121,6 +134,157 @@ enum Command {
         #[arg(long, value_enum, default_value_t = AnalyzeOutputFormat::Terminal)]
         format: AnalyzeOutputFormat,
     },
+    /// Resolve Python imports and build a dependency graph
+    Dependencies {
+        /// Project directory to analyze
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+
+        /// Python interpreter used for standard-library and installed-package resolution
+        #[arg(long, value_name = "EXECUTABLE", conflicts_with = "venv")]
+        python: Option<PathBuf>,
+
+        /// Virtual-environment directory used for installed-package resolution
+        #[arg(long, value_name = "DIRECTORY", conflicts_with = "python")]
+        venv: Option<PathBuf>,
+
+        /// Focus the view on one local module; may repeat
+        #[arg(
+            long,
+            value_name = "MODULE",
+            action = clap::ArgAction::Append,
+            conflicts_with_all = ["path_from", "path_to", "closure"]
+        )]
+        focus: Vec<String>,
+
+        /// Traverse dependencies, dependents, or both from a focus or closure root
+        #[arg(long, value_enum, conflicts_with_all = ["path_from", "path_to"])]
+        direction: Option<DependencyDirectionArgument>,
+
+        /// Traversal depth from focused modules; zero shows only the focus and its cycle
+        #[arg(long, value_name = "N", requires = "focus")]
+        depth: Option<usize>,
+
+        /// Find the shortest exact local dependency path from this module
+        #[arg(
+            long,
+            value_name = "MODULE",
+            requires = "path_to",
+            conflicts_with_all = ["focus", "depth", "cycles_only", "closure", "direction"]
+        )]
+        path_from: Option<String>,
+
+        /// Find the shortest exact local dependency path to this module
+        #[arg(
+            long,
+            value_name = "MODULE",
+            requires = "path_from",
+            conflicts_with_all = ["focus", "depth", "cycles_only", "closure", "direction"]
+        )]
+        path_to: Option<String>,
+
+        /// Show the complete exact local dependency or dependent closure
+        #[arg(
+            long,
+            value_name = "MODULE",
+            conflicts_with_all = ["focus", "depth", "cycles_only", "path_from", "path_to"]
+        )]
+        closure: Option<String>,
+
+        /// Hide ambiguous and unresolved relations
+        #[arg(long)]
+        exact_only: bool,
+
+        /// Show repository-local modules and exact local relations only
+        #[arg(long)]
+        local_only: bool,
+
+        /// Show only cyclic local strongly connected components
+        #[arg(long)]
+        cycles_only: bool,
+
+        /// Exclude type-checking-only imports before graph construction
+        #[arg(long)]
+        exclude_type_only: bool,
+
+        /// Exclude imports guarded by ImportError handling before graph construction
+        #[arg(long)]
+        exclude_optional: bool,
+
+        /// Exclude imports inside functions, methods, or lambdas before graph construction
+        #[arg(long)]
+        exclude_callable_local: bool,
+
+        /// Exclude conditionally executed imports before graph construction
+        #[arg(long)]
+        exclude_conditional: bool,
+
+        /// Limit terminal fan-in and fan-out rankings
+        #[arg(long, value_name = "COUNT", value_parser = parse_positive_usize)]
+        top: Option<usize>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = DependencyOutputFormat::Terminal)]
+        format: DependencyOutputFormat,
+
+        /// Write an interactive HTML graph to this file
+        #[arg(long, value_name = "FILE")]
+        output: Option<PathBuf>,
+
+        /// Open the interactive HTML graph in the default browser
+        #[arg(long)]
+        open: bool,
+    },
+    /// Resolve conservative Python call targets and build a symbol call graph
+    Calls {
+        /// Project directory to analyze
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+
+        /// Python interpreter used for import-boundary resolution
+        #[arg(long, value_name = "EXECUTABLE", conflicts_with = "venv")]
+        python: Option<PathBuf>,
+
+        /// Virtual-environment directory used for import-boundary resolution
+        #[arg(long, value_name = "DIRECTORY", conflicts_with = "python")]
+        venv: Option<PathBuf>,
+
+        /// Focus on one symbol selector such as shop.service::Client.send; may repeat
+        #[arg(long, value_name = "SYMBOL", action = clap::ArgAction::Append)]
+        focus: Vec<String>,
+
+        /// Traverse callers, callees, or both from focused symbols
+        #[arg(long, value_enum, requires = "focus")]
+        direction: Option<CallDirectionArgument>,
+
+        /// Traversal depth from focused symbols
+        #[arg(long, value_name = "N", requires = "focus")]
+        depth: Option<usize>,
+
+        /// Hide ambiguous, unresolved, and external call boundaries
+        #[arg(long)]
+        exact_only: bool,
+
+        /// Show project symbols and exact local calls only
+        #[arg(long)]
+        local_only: bool,
+
+        /// Show only recursive local strongly connected components
+        #[arg(long)]
+        cycles_only: bool,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = CallOutputFormat::Terminal)]
+        format: CallOutputFormat,
+
+        /// Write HTML output to this file
+        #[arg(long, value_name = "FILE")]
+        output: Option<PathBuf>,
+
+        /// Open HTML output in the default browser
+        #[arg(long)]
+        open: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
@@ -134,6 +298,58 @@ enum AnalyzeOutputFormat {
     Terminal,
     Json,
     Gate,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum DependencyOutputFormat {
+    Terminal,
+    Json,
+    Mermaid,
+    Dot,
+    Html,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum CallOutputFormat {
+    Terminal,
+    Json,
+    Html,
+    Mermaid,
+    Dot,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum DependencyDirectionArgument {
+    Dependencies,
+    Dependents,
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum CallDirectionArgument {
+    Callers,
+    Callees,
+    Both,
+}
+
+impl From<CallDirectionArgument> for CallDirection {
+    fn from(value: CallDirectionArgument) -> Self {
+        match value {
+            CallDirectionArgument::Callers => Self::Callers,
+            CallDirectionArgument::Callees => Self::Callees,
+            CallDirectionArgument::Both => Self::Both,
+        }
+    }
+}
+
+impl From<DependencyDirectionArgument> for DependencyDirection {
+    fn from(value: DependencyDirectionArgument) -> Self {
+        match value {
+            DependencyDirectionArgument::Dependencies => Self::Dependencies,
+            DependencyDirectionArgument::Dependents => Self::Dependents,
+            DependencyDirectionArgument::Both => Self::Both,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
@@ -227,6 +443,78 @@ fn main() -> ExitCode {
             top: *top,
             format: *format,
         }),
+        Command::Dependencies {
+            path,
+            python,
+            venv,
+            focus,
+            direction,
+            depth,
+            path_from,
+            path_to,
+            closure,
+            exact_only,
+            local_only,
+            cycles_only,
+            exclude_type_only,
+            exclude_optional,
+            exclude_callable_local,
+            exclude_conditional,
+            top,
+            format,
+            output,
+            open,
+        } => run_dependencies(&DependencyRequest {
+            path,
+            python: python.as_deref(),
+            venv: venv.as_deref(),
+            focus,
+            direction: *direction,
+            depth: *depth,
+            path_from: path_from.as_deref(),
+            path_to: path_to.as_deref(),
+            closure: closure.as_deref(),
+            exact_only: *exact_only,
+            local_only: *local_only,
+            cycles_only: *cycles_only,
+            exclusions: DependencyGraphInputExclusions {
+                type_only: *exclude_type_only,
+                optional: *exclude_optional,
+                callable_local: *exclude_callable_local,
+                conditional: *exclude_conditional,
+            },
+            top: *top,
+            format: *format,
+            output: output.as_deref(),
+            open: *open,
+        }),
+        Command::Calls {
+            path,
+            python,
+            venv,
+            focus,
+            direction,
+            depth,
+            exact_only,
+            local_only,
+            cycles_only,
+            format,
+            output,
+            open,
+        } => run_calls(&CallRequest {
+            path,
+            python: python.as_deref(),
+            venv: venv.as_deref(),
+            focus,
+            direction: *direction,
+            depth: *depth,
+            exact_only: *exact_only,
+            local_only: *local_only,
+            cycles_only: *cycles_only,
+            format: *format,
+            output: output.as_deref(),
+            open: *open,
+        }),
     }
 }
 
@@ -301,6 +589,792 @@ fn print_json(inventory: &RepositoryInventory) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DependencyRequest<'a> {
+    path: &'a Path,
+    python: Option<&'a Path>,
+    venv: Option<&'a Path>,
+    focus: &'a [String],
+    direction: Option<DependencyDirectionArgument>,
+    depth: Option<usize>,
+    path_from: Option<&'a str>,
+    path_to: Option<&'a str>,
+    closure: Option<&'a str>,
+    exact_only: bool,
+    local_only: bool,
+    cycles_only: bool,
+    exclusions: DependencyGraphInputExclusions,
+    top: Option<usize>,
+    format: DependencyOutputFormat,
+    output: Option<&'a Path>,
+    open: bool,
+}
+
+fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
+    if request.output.is_some() && request.format != DependencyOutputFormat::Html {
+        eprintln!("error: --output requires --format html");
+        return ExitCode::FAILURE;
+    }
+    if request.open && request.format != DependencyOutputFormat::Html {
+        eprintln!("error: --open requires --format html");
+        return ExitCode::FAILURE;
+    }
+    if request.direction.is_some() && request.focus.is_empty() && request.closure.is_none() {
+        eprintln!("error: --direction requires --focus or --closure");
+        return ExitCode::FAILURE;
+    }
+    if request.closure.is_some() && request.direction == Some(DependencyDirectionArgument::Both) {
+        eprintln!("error: --closure direction must be dependencies or dependents, not both");
+        return ExitCode::FAILURE;
+    }
+    let metadata = match request.path.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            eprintln!(
+                "error: cannot access dependency project {}: {error}",
+                request.path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    if !metadata.is_dir() {
+        eprintln!(
+            "error: dependency analysis requires a project directory: {}",
+            request.path.display()
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let mut registry = AnalyzerRegistry::new();
+    let analyzer = match PythonAnalyzer::new() {
+        Ok(analyzer) => analyzer,
+        Err(error) => {
+            eprintln!("error: could not initialize Python analyzer: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = registry.register(Box::new(analyzer)) {
+        eprintln!("error: could not register Python analyzer: {error}");
+        return ExitCode::FAILURE;
+    }
+    let analysis = match analyze_repository(
+        &AnalysisOptions {
+            target: request.path.to_path_buf(),
+            ..AnalysisOptions::default()
+        },
+        &mut registry,
+    ) {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            eprintln!(
+                "error: failed to analyze dependency project {}: {error}",
+                request.path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let environment = request
+        .python
+        .map(|path| PythonEnvironmentSelection::Interpreter(path.to_path_buf()))
+        .or_else(|| {
+            request
+                .venv
+                .map(|path| PythonEnvironmentSelection::VirtualEnvironment(path.to_path_buf()))
+        });
+    let resolution =
+        match resolve_python_dependencies(&analysis, &PythonResolutionOptions { environment }) {
+            Ok(resolution) => resolution,
+            Err(error) => {
+                eprintln!("error: could not resolve Python dependencies: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let included_resolutions = resolution
+        .resolutions
+        .iter()
+        .filter(|resolution| request.exclusions.retains(&resolution.reference))
+        .cloned()
+        .collect::<Vec<_>>();
+    let graph = match analyze_dependency_graph(&resolution.local_modules, &included_resolutions) {
+        Ok(graph) => graph,
+        Err(error) => {
+            eprintln!("error: could not build dependency graph: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let filter = DependencyGraphFilter {
+        focus_modules: request.focus.to_vec(),
+        direction: request
+            .direction
+            .map(Into::into)
+            .unwrap_or(DependencyDirection::Both),
+        depth: request.depth.unwrap_or(1),
+        exact_only: request.exact_only,
+        local_only: request.local_only,
+        cycles_only: request.cycles_only,
+    };
+    let query = request
+        .path_from
+        .zip(request.path_to)
+        .map(|(from, to)| DependencyGraphQuery::ShortestPath {
+            from: from.to_owned(),
+            to: to.to_owned(),
+        })
+        .or_else(|| {
+            request.closure.map(|module| DependencyGraphQuery::Closure {
+                module: module.to_owned(),
+                direction: match request.direction {
+                    Some(DependencyDirectionArgument::Dependents) => {
+                        DependencyQueryDirection::Dependents
+                    }
+                    _ => DependencyQueryDirection::Dependencies,
+                },
+            })
+        });
+    let query_result = match query
+        .as_ref()
+        .map(|query| query_dependency_graph(&graph, query))
+        .transpose()
+    {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("error: could not query dependency graph: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let view = if let Some(result) = &query_result {
+        dependency_query_view(&graph, result)
+    } else {
+        match filter_dependency_graph(&graph, &filter) {
+            Ok(view) => view,
+            Err(error) => {
+                eprintln!("error: could not filter dependency graph: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+    for diagnostic in &resolution.diagnostics {
+        eprintln!("warning: {diagnostic}");
+    }
+    if matches!(
+        request.format,
+        DependencyOutputFormat::Mermaid | DependencyOutputFormat::Dot
+    ) && view.nodes.len() > 200
+    {
+        eprintln!(
+            "warning: graph contains {} nodes; use --focus, --local-only, or --cycles-only for a more readable view",
+            view.nodes.len()
+        );
+    }
+
+    match request.format {
+        DependencyOutputFormat::Terminal => {
+            if let Some(result) = &query_result {
+                print_dependency_query(result);
+            } else {
+                print_dependency_summary(
+                    request.path,
+                    &resolution,
+                    &graph,
+                    &view,
+                    request.exclusions,
+                    request.top,
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        DependencyOutputFormat::Mermaid => {
+            print!("{}", render_dependency_mermaid(&view));
+            ExitCode::SUCCESS
+        }
+        DependencyOutputFormat::Dot => {
+            print!("{}", render_dependency_dot(&view));
+            ExitCode::SUCCESS
+        }
+        DependencyOutputFormat::Json => {
+            let environment =
+                resolution
+                    .environment
+                    .as_ref()
+                    .map(|environment| DependencyEnvironmentReport {
+                        selection: environment.selection_kind,
+                        implementation: environment.implementation.clone(),
+                        python_version: environment.version.clone(),
+                        virtual_environment: environment.is_virtual_environment,
+                        distribution_count: environment.distribution_count,
+                    });
+            match serde_json::to_string_pretty(
+                &DependencyJsonReport::from_analysis_with_query_and_exclusions(
+                    &graph,
+                    &view,
+                    environment,
+                    query_result.as_ref(),
+                    request.exclusions,
+                ),
+            ) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("error: could not serialize dependency report: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        DependencyOutputFormat::Html => {
+            emit_dependency_html(&view, query_result.as_ref(), request.output, request.open)
+        }
+    }
+}
+
+fn print_dependency_query(result: &DependencyGraphQueryResult) {
+    match &result.query {
+        DependencyGraphQuery::ShortestPath { from, to } => {
+            if result.found {
+                println!("Shortest dependency path ({from} -> {to}):");
+                println!(
+                    "  {}",
+                    result
+                        .nodes
+                        .iter()
+                        .map(dependency_node_name)
+                        .collect::<Vec<_>>()
+                        .join(" -> ")
+                );
+            } else {
+                println!("No exact local dependency path found from {from} to {to}.");
+            }
+        }
+        DependencyGraphQuery::Closure { module, direction } => {
+            println!("{} closure for {module}:", direction.as_str());
+            for node in &result.nodes {
+                println!("  {}", dependency_node_name(node));
+            }
+        }
+    }
+}
+
+fn emit_dependency_html(
+    view: &DependencyGraphView,
+    query: Option<&DependencyGraphQueryResult>,
+    output: Option<&Path>,
+    open: bool,
+) -> ExitCode {
+    let html = match if query.is_some() {
+        render_dependency_html_with_query(view, query)
+    } else {
+        render_dependency_html(view)
+    } {
+        Ok(html) => html,
+        Err(error) => {
+            eprintln!("error: could not render interactive dependency graph: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if output.is_none() && !open {
+        print!("{html}");
+        return ExitCode::SUCCESS;
+    }
+
+    let output = output.unwrap_or_else(|| Path::new("codegraide-dependency-graph.html"));
+    if let Err(error) = fs::write(output, html) {
+        eprintln!(
+            "error: could not write interactive dependency graph {}: {error}",
+            output.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    eprintln!("wrote interactive dependency graph to {}", output.display());
+
+    if open {
+        if let Err(error) = open_in_default_browser(output) {
+            eprintln!(
+                "error: could not open interactive dependency graph {}: {error}",
+                output.display()
+            );
+            return ExitCode::FAILURE;
+        }
+        eprintln!("opened interactive dependency graph in the default browser");
+    }
+    ExitCode::SUCCESS
+}
+
+fn open_in_default_browser(path: &Path) -> io::Result<()> {
+    let path = path.canonicalize()?;
+    let mut command = if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg(&path);
+        command
+    } else if cfg!(target_os = "windows") {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]).arg(&path);
+        command
+    } else {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(&path);
+        command
+    };
+    let status = command.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "browser opener exited with status {status}"
+        )))
+    }
+}
+
+fn print_dependency_summary(
+    path: &Path,
+    resolution: &codegraide_analyzer_python::PythonDependencyResolution,
+    graph: &DependencyGraphAnalysis,
+    view: &DependencyGraphView,
+    exclusions: DependencyGraphInputExclusions,
+    top: Option<usize>,
+) {
+    println!("Dependency project: {}", path.display());
+    println!(
+        "Package roots: {}",
+        resolution
+            .package_roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    match &resolution.environment {
+        Some(environment) => println!(
+            "Python environment: {} {} ({}, packages={})\n  executable: {}",
+            environment.implementation,
+            environment.version,
+            environment.selection_kind,
+            environment.distribution_count,
+            environment.executable.display()
+        ),
+        None => println!("Python environment: not selected (external imports remain unresolved)"),
+    }
+    println!(
+        "Resolution coverage: total={} exact={} ambiguous={} unresolved={}",
+        graph.coverage.total_references,
+        graph.coverage.exact_references,
+        graph.coverage.ambiguous_references,
+        graph.coverage.unresolved_references
+    );
+    let contexts = graph
+        .relations
+        .iter()
+        .flat_map(|relation| {
+            relation
+                .evidence
+                .iter()
+                .map(|evidence| evidence.reference.context)
+        })
+        .collect::<Vec<_>>();
+    println!(
+        "Import contexts: type-only={} optional={} callable-local={} conditional={}",
+        contexts
+            .iter()
+            .filter(|context| context.usage.as_str() == "type-checking-only")
+            .count(),
+        contexts
+            .iter()
+            .filter(|context| context.requirement.as_str() == "optional")
+            .count(),
+        contexts
+            .iter()
+            .filter(|context| context.scope.as_str() == "callable")
+            .count(),
+        contexts
+            .iter()
+            .filter(|context| context.conditional)
+            .count()
+    );
+    let mut excluded = Vec::new();
+    if exclusions.type_only {
+        excluded.push("type-only");
+    }
+    if exclusions.optional {
+        excluded.push("optional");
+    }
+    if exclusions.callable_local {
+        excluded.push("callable-local");
+    }
+    if exclusions.conditional {
+        excluded.push("conditional");
+    }
+    println!(
+        "Graph input exclusions: {}",
+        if excluded.is_empty() {
+            "none".to_owned()
+        } else {
+            excluded.join(", ")
+        }
+    );
+    println!(
+        "Graph: nodes={} relations={} cycles={} | view: nodes={} relations={}",
+        graph.nodes.len(),
+        graph.relations.len(),
+        graph.cycles.len(),
+        view.nodes.len(),
+        view.relations.len()
+    );
+    let limit = top.unwrap_or(10);
+    print_dependency_ranking("Highest fan-in", view, limit, true);
+    print_dependency_ranking("Highest fan-out", view, limit, false);
+    println!("\nCycles:");
+    let visible = view
+        .nodes
+        .iter()
+        .map(|node| &node.node)
+        .collect::<BTreeSet<_>>();
+    let explanations = explain_dependency_cycles(graph)
+        .into_iter()
+        .filter(|explanation| {
+            explanation
+                .members
+                .iter()
+                .all(|member| visible.contains(member))
+        })
+        .collect::<Vec<_>>();
+    if explanations.is_empty() {
+        println!("  (none)");
+    } else {
+        for explanation in explanations {
+            println!(
+                "  {} witness: {}",
+                explanation.component_number,
+                explanation
+                    .witness_nodes
+                    .iter()
+                    .map(dependency_node_name)
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            );
+            println!("    recommended cuts (approximate):");
+            for relation in explanation.recommended_cuts {
+                println!(
+                    "      {} -> {} ({} import {})",
+                    dependency_node_name(&relation.source),
+                    dependency_node_name(&relation.target),
+                    relation.evidence.len(),
+                    if relation.evidence.len() == 1 {
+                        "site"
+                    } else {
+                        "sites"
+                    }
+                );
+                for evidence in relation.evidence {
+                    println!(
+                        "        {}:{}:{} [{}; {}; {}{}]",
+                        evidence.source_path.display(),
+                        evidence.reference.span.start.line,
+                        evidence.reference.span.start.column,
+                        evidence.reference.context.scope.as_str(),
+                        evidence.reference.context.usage.as_str(),
+                        evidence.reference.context.requirement.as_str(),
+                        if evidence.reference.context.conditional {
+                            "; conditional"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
+        }
+    }
+    let unresolved = view
+        .nodes
+        .iter()
+        .filter(|node| node.node.kind() == DependencyNodeKind::Unresolved)
+        .count();
+    let ambiguous = view
+        .nodes
+        .iter()
+        .filter(|node| node.node.kind() == DependencyNodeKind::Ambiguous)
+        .count();
+    println!("\nInvestigation nodes: ambiguous={ambiguous} unresolved={unresolved}");
+}
+
+fn print_dependency_ranking(heading: &str, view: &DependencyGraphView, limit: usize, fan_in: bool) {
+    let mut nodes = view
+        .nodes
+        .iter()
+        .filter(|node| node.node.kind() == DependencyNodeKind::LocalModule)
+        .collect::<Vec<_>>();
+    nodes.sort_by(|left, right| {
+        let left_value = if fan_in { left.fan_in } else { left.fan_out };
+        let right_value = if fan_in { right.fan_in } else { right.fan_out };
+        right_value
+            .cmp(&left_value)
+            .then_with(|| dependency_node_name(&left.node).cmp(&dependency_node_name(&right.node)))
+    });
+    println!("\n{heading}:");
+    if nodes.is_empty() {
+        println!("  (none)");
+    } else {
+        for node in nodes.into_iter().take(limit) {
+            let value = if fan_in { node.fan_in } else { node.fan_out };
+            println!("  {value:>4}  {}", dependency_node_name(&node.node));
+        }
+    }
+}
+
+fn dependency_node_name(node: &DependencyNode) -> String {
+    match node {
+        DependencyNode::LocalModule(module) => module.id.qualified_name().to_owned(),
+        DependencyNode::StandardLibrary(module) => module.qualified_name().to_owned(),
+        DependencyNode::InstalledDistribution {
+            distribution_display_name,
+            version,
+            ..
+        } => format!(
+            "{}{}",
+            distribution_display_name,
+            version
+                .as_ref()
+                .map(|version| format!("=={version}"))
+                .unwrap_or_default()
+        ),
+        DependencyNode::Ambiguous { requested, .. }
+        | DependencyNode::Unresolved { requested, .. } => requested.clone(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CallRequest<'a> {
+    path: &'a Path,
+    python: Option<&'a Path>,
+    venv: Option<&'a Path>,
+    focus: &'a [String],
+    direction: Option<CallDirectionArgument>,
+    depth: Option<usize>,
+    exact_only: bool,
+    local_only: bool,
+    cycles_only: bool,
+    format: CallOutputFormat,
+    output: Option<&'a Path>,
+    open: bool,
+}
+
+fn run_calls(request: &CallRequest<'_>) -> ExitCode {
+    if request.output.is_some() && request.format != CallOutputFormat::Html {
+        eprintln!("error: --output requires --format html");
+        return ExitCode::FAILURE;
+    }
+    if request.open && request.format != CallOutputFormat::Html {
+        eprintln!("error: --open requires --format html");
+        return ExitCode::FAILURE;
+    }
+    if !request.path.is_dir() {
+        eprintln!(
+            "error: call analysis requires a project directory: {}",
+            request.path.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    let mut registry = AnalyzerRegistry::new();
+    let analyzer = match PythonAnalyzer::new() {
+        Ok(analyzer) => analyzer,
+        Err(error) => {
+            eprintln!("error: could not initialize Python analyzer: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = registry.register(Box::new(analyzer)) {
+        eprintln!("error: could not register Python analyzer: {error}");
+        return ExitCode::FAILURE;
+    }
+    let analysis = match analyze_repository(
+        &AnalysisOptions {
+            target: request.path.to_path_buf(),
+            ..AnalysisOptions::default()
+        },
+        &mut registry,
+    ) {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            eprintln!("error: failed to analyze call project: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let environment = request
+        .python
+        .map(|path| PythonEnvironmentSelection::Interpreter(path.to_path_buf()))
+        .or_else(|| {
+            request
+                .venv
+                .map(|path| PythonEnvironmentSelection::VirtualEnvironment(path.to_path_buf()))
+        });
+    let dependencies =
+        match resolve_python_dependencies(&analysis, &PythonResolutionOptions { environment }) {
+            Ok(resolution) => resolution,
+            Err(error) => {
+                eprintln!("error: could not resolve Python imports for call analysis: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let resolution = resolve_python_calls(&analysis, &dependencies);
+    let graph = analyze_call_graph(&resolution.symbols, &resolution.resolutions);
+    let filter = CallGraphFilter {
+        focus_symbols: request.focus.to_vec(),
+        direction: request
+            .direction
+            .map(Into::into)
+            .unwrap_or(CallDirection::Both),
+        depth: request.depth.unwrap_or(1),
+        exact_only: request.exact_only,
+        local_only: request.local_only,
+        cycles_only: request.cycles_only,
+    };
+    let view = match filter_call_graph(&graph, &filter) {
+        Ok(view) => view,
+        Err(error) => {
+            eprintln!("error: could not filter call graph: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    for diagnostic in dependencies
+        .diagnostics
+        .iter()
+        .chain(resolution.diagnostics.iter())
+    {
+        eprintln!("warning: {diagnostic}");
+    }
+    if matches!(
+        request.format,
+        CallOutputFormat::Mermaid | CallOutputFormat::Dot
+    ) && view.nodes.len() > 200
+    {
+        eprintln!(
+            "warning: call graph contains {} nodes; use --focus, --local-only, or --cycles-only",
+            view.nodes.len()
+        );
+    }
+    match request.format {
+        CallOutputFormat::Terminal => {
+            print_call_summary(request.path, &graph, &view);
+            ExitCode::SUCCESS
+        }
+        CallOutputFormat::Json => {
+            match serde_json::to_string_pretty(&CallJsonReport::from_analysis(&graph, &view)) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("error: could not serialize call report: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        CallOutputFormat::Mermaid => {
+            print!("{}", render_call_mermaid(&view));
+            ExitCode::SUCCESS
+        }
+        CallOutputFormat::Dot => {
+            print!("{}", render_call_dot(&view));
+            ExitCode::SUCCESS
+        }
+        CallOutputFormat::Html => emit_call_html(&view, request.output, request.open),
+    }
+}
+
+fn print_call_summary(path: &Path, graph: &CallGraphAnalysis, view: &CallGraphView) {
+    println!("Call project: {}", path.display());
+    println!(
+        "Resolution coverage: total={} exact={} external={} ambiguous={} unresolved={}",
+        graph.coverage.total_calls,
+        graph.coverage.exact_calls,
+        graph.coverage.external_calls,
+        graph.coverage.ambiguous_calls,
+        graph.coverage.unresolved_calls
+    );
+    println!(
+        "Graph: nodes={} calls={} recursive-groups={} | view: nodes={} calls={}",
+        graph.nodes.len(),
+        graph.relations.len(),
+        graph.cycles.len(),
+        view.nodes.len(),
+        view.relations.len()
+    );
+    print_call_ranking("Highest caller fan-in", view, true);
+    print_call_ranking("Highest callee fan-out", view, false);
+    println!("\nRecursive groups:");
+    let cycles = view
+        .strongly_connected_components
+        .iter()
+        .filter(|component| component.cyclic)
+        .collect::<Vec<_>>();
+    if cycles.is_empty() {
+        println!("  (none)");
+    } else {
+        for (index, cycle) in cycles.iter().enumerate() {
+            println!(
+                "  {}: {}",
+                index + 1,
+                cycle
+                    .members
+                    .iter()
+                    .map(call_node_name)
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            );
+        }
+    }
+}
+
+fn print_call_ranking(heading: &str, view: &CallGraphView, fan_in: bool) {
+    let mut nodes = view
+        .nodes
+        .iter()
+        .filter(|node| matches!(node.node, codegraide_core::CallNode::LocalSymbol(_)))
+        .collect::<Vec<_>>();
+    nodes.sort_by(|left, right| {
+        let left_value = if fan_in { left.fan_in } else { left.fan_out };
+        let right_value = if fan_in { right.fan_in } else { right.fan_out };
+        right_value
+            .cmp(&left_value)
+            .then_with(|| call_node_name(&left.node).cmp(&call_node_name(&right.node)))
+    });
+    println!("\n{heading}:");
+    for node in nodes.into_iter().take(10) {
+        let value = if fan_in { node.fan_in } else { node.fan_out };
+        println!("  {value:>4}  {}", call_node_name(&node.node));
+    }
+}
+
+fn emit_call_html(view: &CallGraphView, output: Option<&Path>, open: bool) -> ExitCode {
+    let html = match render_call_html(view) {
+        Ok(html) => html,
+        Err(error) => {
+            eprintln!("error: could not render interactive call graph: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if output.is_none() && !open {
+        print!("{html}");
+        return ExitCode::SUCCESS;
+    }
+    let output = output.unwrap_or_else(|| Path::new("codegraide-call-graph.html"));
+    if let Err(error) = fs::write(output, html) {
+        eprintln!(
+            "error: could not write call graph {}: {error}",
+            output.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    eprintln!("wrote interactive call graph to {}", output.display());
+    if open && let Err(error) = open_in_default_browser(output) {
+        eprintln!(
+            "error: could not open call graph {}: {error}",
+            output.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
 }
 
 #[derive(Debug, Clone, Copy)]
