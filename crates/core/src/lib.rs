@@ -9,6 +9,7 @@ mod dependency_hierarchy;
 mod dependency_html;
 mod dependency_output;
 mod dependency_query;
+mod documentation;
 mod error;
 mod graph;
 mod inventory;
@@ -24,10 +25,11 @@ pub use analyzer::{
     AnalysisDiagnostic, AnalysisFacts, AnalysisInput, AnalysisLevel, AnalyzerCapability,
     AnalyzerDescriptor, AnalyzerRegistry, AnalyzerRegistryError, CallArgumentShape, CallReference,
     DecisionEvent, DecisionEventKind, Decorator, DependencyKind, DependencyReference,
-    DiagnosticSeverity, FileAnalysis, FileAnalysisStatus, GrammarDescriptor, ImportContext,
-    ImportRequirement, ImportScope, ImportUsage, LanguageAnalyzer, Measurement, MeasurementStatus,
-    NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor, ResolutionLevel,
-    SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolId, SymbolKind, SymbolModifier,
+    DiagnosticSeverity, DocumentationStatus, FileAnalysis, FileAnalysisStatus, GrammarDescriptor,
+    ImportContext, ImportRequirement, ImportScope, ImportUsage, LanguageAnalyzer, Measurement,
+    MeasurementStatus, NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor,
+    ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolDocumentation,
+    SymbolId, SymbolKind, SymbolModifier,
 };
 pub use call_output::CallJsonReport;
 pub use calls::{
@@ -66,6 +68,11 @@ pub use dependency_query::{
     DependencyGraphQuery, DependencyGraphQueryError, DependencyGraphQueryResult,
     DependencyQueryDirection, dependency_query_view, query_dependency_graph,
 };
+pub use documentation::{
+    DocumentationCounts, DocumentationCoverage, DocumentationCoverageStatus,
+    DocumentationFileCoverage, DocumentationSymbol,
+    PYTHON_DOCUMENTATION_COVERAGE_DEFINITION_VERSION, evaluate_documentation_coverage,
+};
 pub use error::InventoryError;
 pub use graph::{
     DependencyGraphAnalysis, DependencyGraphCoverage, DependencyGraphError, DependencyNode,
@@ -77,8 +84,9 @@ pub use inventory::{
 };
 pub use lines::{LineCounts, RepositoryLineCounts};
 pub use report::{
-    AnalysisJsonReport, ExtensionId, FileCategory, GateJsonReport, IgnoredInventory,
-    InventoryDiagnostic, InventoryJsonReport, LanguageId, RepositoryInventory, ReviewJsonReport,
+    AnalysisJsonReport, DocumentationJsonReport, ExtensionId, FileCategory, GateJsonReport,
+    IgnoredInventory, InventoryDiagnostic, InventoryJsonReport, LanguageId, RepositoryInventory,
+    ReviewJsonReport,
 };
 pub use review::{
     PYTHON_CYCLOMATIC_COMPLEXITY, PYTHON_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION,

@@ -10,6 +10,7 @@ use crate::analyzer::{
     AnalysisDiagnostic, AnalysisInput, AnalyzerDescriptor, AnalyzerRegistry, AnalyzerRegistryError,
     FileAnalysis, FileAnalysisStatus,
 };
+use crate::documentation::{DocumentationCoverage, evaluate_documentation_coverage};
 use crate::error::InventoryError;
 use crate::inventory::{InventoryOptions, detect_language, inventory_repository_with_options};
 use crate::report::{FileCategory, LanguageId};
@@ -22,6 +23,8 @@ pub struct AnalysisOptions {
     pub target: PathBuf,
     pub match_patterns: Vec<String>,
     pub include_ignored: Vec<String>,
+    pub documentation_coverage: bool,
+    pub documentation_include_tests: bool,
     pub review: ReviewOptions,
 }
 
@@ -31,6 +34,8 @@ impl Default for AnalysisOptions {
             target: PathBuf::from("."),
             match_patterns: Vec::new(),
             include_ignored: Vec::new(),
+            documentation_coverage: true,
+            documentation_include_tests: false,
             review: ReviewOptions::default(),
         }
     }
@@ -84,6 +89,7 @@ pub struct RepositoryAnalysis {
     pub inventory_only_languages: BTreeMap<LanguageId, usize>,
     pub analyzers: Vec<AnalyzerRun>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
+    pub documentation_coverage: DocumentationCoverage,
     pub review: ReviewEvaluation,
 }
 
@@ -241,7 +247,13 @@ fn analyze_directory(
             span: None,
         });
     }
-    finalize_analysis(&mut result, &options.review).map_err(AnalysisError::ReviewPolicy)?;
+    finalize_analysis(
+        &mut result,
+        options.documentation_coverage,
+        options.documentation_include_tests,
+        &options.review,
+    )
+    .map_err(AnalysisError::ReviewPolicy)?;
     Ok(result)
 }
 
@@ -316,18 +328,40 @@ fn analyze_file(
         vec![(relative_path, language, source)],
         registry,
     );
-    finalize_analysis(&mut result, &options.review).map_err(AnalysisError::ReviewPolicy)?;
+    finalize_analysis(
+        &mut result,
+        options.documentation_coverage,
+        options.documentation_include_tests,
+        &options.review,
+    )
+    .map_err(AnalysisError::ReviewPolicy)?;
     Ok(result)
 }
 
 fn finalize_analysis(
     analysis: &mut RepositoryAnalysis,
+    documentation_enabled: bool,
+    documentation_include_tests: bool,
     options: &ReviewOptions,
 ) -> Result<(), ReviewPolicyError> {
     let policy = ReviewPolicy::resolve(options)?;
+    if !documentation_enabled && policy.documentation_review_below.is_some() {
+        return Err(ReviewPolicyError::Invalid {
+            path: None,
+            message: "documentation coverage cannot be disabled while a documentation review threshold is configured"
+                .to_owned(),
+        });
+    }
+    analysis.documentation_coverage = evaluate_documentation_coverage(
+        documentation_enabled,
+        documentation_include_tests,
+        &analysis.selection.selected_files,
+        &analysis.analyzers,
+    );
     analysis.review = evaluate_review(
         &analysis.selection.selected_files,
         &analysis.analyzers,
+        &analysis.documentation_coverage,
         policy,
     );
     Ok(())
@@ -382,6 +416,7 @@ fn run_analyzers(
         run.files.sort_by(|left, right| left.path.cmp(&right.path));
     }
 
+    let documentation_coverage = DocumentationCoverage::disabled(&selection.selected_files);
     RepositoryAnalysis {
         selection,
         inventoried_files,
@@ -389,6 +424,7 @@ fn run_analyzers(
         inventory_only_languages,
         analyzers,
         diagnostics: Vec::new(),
+        documentation_coverage,
         review: ReviewEvaluation {
             status: crate::review::ReviewStatus::HumanReviewRequired,
             policy: ReviewPolicy::resolve(&ReviewOptions::default())

@@ -69,11 +69,11 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert_eq!(report["report_schema_version"], "0.4.0");
+    assert_eq!(report["report_schema_version"], "0.5.0");
     assert_eq!(report["analysis"]["kind"], "syntax-analysis");
     assert_eq!(
         report["analysis"]["definition_version"],
-        "syntax-analysis-v2"
+        "syntax-analysis-v3"
     );
     assert_eq!(report["inventory"]["inventory_only_languages"]["rust"], 1);
     assert_eq!(
@@ -85,6 +85,7 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
         "python-symbols-v1"
     );
     assert_eq!(report["analyzers"][0]["files"][0]["status"], "successful");
+    assert_eq!(report["documentation_coverage"]["status"], "complete");
     let symbols = report["analyzers"][0]["files"][0]["symbols"]
         .as_array()
         .expect("symbols should be an array");
@@ -201,6 +202,7 @@ fn json_review_reports_complexity_risk_and_gate_exit_codes() {
     let review_report: Value =
         serde_json::from_slice(&review.stdout).expect("review report should be JSON");
     assert!(review.status.success());
+    assert_eq!(review_report["report_schema_version"], "0.2.0");
     assert_eq!(review_report["review"]["status"], "human-review-required");
     assert!(review_report["analyzers"].is_null());
     assert_eq!(review_report["ranking_count"], 2);
@@ -217,9 +219,11 @@ fn json_review_reports_complexity_risk_and_gate_exit_codes() {
     let gate_report: Value =
         serde_json::from_slice(&gate_report_output.stdout).expect("gate report should be JSON");
     assert_eq!(gate_report_output.status.code(), Some(2));
+    assert_eq!(gate_report["report_schema_version"], "0.2.0");
     assert_eq!(gate_report["status"], "human-review-required");
     assert_eq!(gate_report["exit_code"], 2);
     assert_eq!(gate_report["finding_count"], 1);
+    assert_eq!(gate_report["top_findings"][0]["unit"], "score");
     assert_eq!(
         gate_report["top_findings"]
             .as_array()

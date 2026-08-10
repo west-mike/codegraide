@@ -5,12 +5,12 @@ use std::path::Path;
 use codegraide_core::{
     AnalysisDiagnostic, AnalysisFacts, AnalysisInput, AnalysisLevel, AnalyzerCapability,
     AnalyzerDescriptor, CallArgumentShape, CallReference, DecisionEvent, DecisionEventKind,
-    Decorator, DependencyKind, DependencyReference, DiagnosticSeverity, FileAnalysis,
-    FileAnalysisStatus, GrammarDescriptor, ImportContext, ImportRequirement, ImportScope,
-    ImportUsage, LanguageAnalyzer, LanguageId, Measurement, MeasurementStatus, NestingEvent,
-    NestingEventKind, PYTHON_CYCLOMATIC_COMPLEXITY, Parameter, ParameterKind, QueryDescriptor,
-    ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolId, SymbolKind,
-    SymbolModifier,
+    Decorator, DependencyKind, DependencyReference, DiagnosticSeverity, DocumentationStatus,
+    FileAnalysis, FileAnalysisStatus, GrammarDescriptor, ImportContext, ImportRequirement,
+    ImportScope, ImportUsage, LanguageAnalyzer, LanguageId, Measurement, MeasurementStatus,
+    NestingEvent, NestingEventKind, PYTHON_CYCLOMATIC_COMPLEXITY, Parameter, ParameterKind,
+    QueryDescriptor, ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness,
+    SymbolDocumentation, SymbolId, SymbolKind, SymbolModifier,
 };
 use tree_sitter::{Language, Node, Parser, Query};
 
@@ -23,12 +23,13 @@ pub use resolution::{
     PythonResolutionError, PythonResolutionOptions, resolve_python_dependencies,
 };
 
-const ANALYZER_VERSION: &str = "0.1.0";
+const ANALYZER_VERSION: &str = "0.2.0";
 const GRAMMAR_VERSION: &str = "0.25.0";
 
 pub struct PythonAnalyzer {
     descriptor: AnalyzerDescriptor,
     parser: Parser,
+    documentation_enabled: bool,
     _symbol_query: Query,
     _import_query: Query,
     _nesting_query: Query,
@@ -52,6 +53,14 @@ impl std::error::Error for PythonAnalyzerError {}
 
 impl PythonAnalyzer {
     pub fn new() -> Result<Self, PythonAnalyzerError> {
+        Self::with_documentation(true)
+    }
+
+    pub fn without_documentation() -> Result<Self, PythonAnalyzerError> {
+        Self::with_documentation(false)
+    }
+
+    fn with_documentation(documentation_enabled: bool) -> Result<Self, PythonAnalyzerError> {
         let language: Language = tree_sitter_python::LANGUAGE.into();
         let mut parser = Parser::new();
         parser
@@ -66,69 +75,87 @@ impl PythonAnalyzer {
         let decision_query = Query::new(&language, include_str!("../queries/decisions.scm"))
             .map_err(|error| PythonAnalyzerError(format!("invalid decision query: {error}")))?;
 
+        let mut capabilities = [
+            AnalyzerCapability::Parse,
+            AnalyzerCapability::Symbols,
+            AnalyzerCapability::DependencyReferences,
+            AnalyzerCapability::CallReferences,
+            AnalyzerCapability::DecisionEvents,
+            AnalyzerCapability::NestingEvents,
+            AnalyzerCapability::Measurements,
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        let mut queries = vec![
+            QueryDescriptor {
+                name: "symbols".to_owned(),
+                version: "python-symbols-v1".to_owned(),
+            },
+            QueryDescriptor {
+                name: "imports".to_owned(),
+                version: "python-imports-v1".to_owned(),
+            },
+            QueryDescriptor {
+                name: "import-context".to_owned(),
+                version: "python-import-context-v1".to_owned(),
+            },
+            QueryDescriptor {
+                name: "calls".to_owned(),
+                version: "python-call-references-v1".to_owned(),
+            },
+            QueryDescriptor {
+                name: "nesting".to_owned(),
+                version: "python-nesting-v1".to_owned(),
+            },
+            QueryDescriptor {
+                name: "decisions".to_owned(),
+                version: "python-decisions-v1".to_owned(),
+            },
+        ];
+        if documentation_enabled {
+            capabilities.insert(AnalyzerCapability::Documentation);
+            queries.push(QueryDescriptor {
+                name: "docstrings".to_owned(),
+                version: "python-docstrings-v1".to_owned(),
+            });
+        }
+
+        let mut limitations = vec![
+            "Reports parser recovery and syntax-derived facts; it does not lint or type-check Python."
+                .to_owned(),
+            "Module names are repository-relative paths until project or environment resolution is added."
+                .to_owned(),
+            "Dynamic imports and runtime metaprogramming are not resolved.".to_owned(),
+            "Call resolution is conservative: arbitrary instance dispatch, inheritance lookup, decorators, assignment aliases, and higher-order values are not guessed."
+                .to_owned(),
+            "Non-UTF-8 source text is parsed by byte span but names and snippets use lossy decoding."
+                .to_owned(),
+            "Cyclomatic complexity covers callable bodies; module and class initialization bodies are not scored in v1."
+                .to_owned(),
+        ];
+        if documentation_enabled {
+            limitations.push(
+                "Documentation coverage recognizes nonblank conventional docstrings lexically; escape sequences are not decoded."
+                    .to_owned(),
+            );
+        }
+
         Ok(Self {
             descriptor: AnalyzerDescriptor {
                 id: "python-tree-sitter".to_owned(),
                 language: LanguageId::new("python"),
                 version: ANALYZER_VERSION.to_owned(),
                 level: AnalysisLevel::Syntax,
-                capabilities: [
-                    AnalyzerCapability::Parse,
-                    AnalyzerCapability::Symbols,
-                    AnalyzerCapability::DependencyReferences,
-                    AnalyzerCapability::CallReferences,
-                    AnalyzerCapability::DecisionEvents,
-                    AnalyzerCapability::NestingEvents,
-                    AnalyzerCapability::Measurements,
-                ]
-                .into_iter()
-                .collect(),
+                capabilities,
                 grammar: Some(GrammarDescriptor {
                     name: "tree-sitter-python".to_owned(),
                     version: GRAMMAR_VERSION.to_owned(),
                 }),
-                queries: vec![
-                    QueryDescriptor {
-                        name: "symbols".to_owned(),
-                        version: "python-symbols-v1".to_owned(),
-                    },
-                    QueryDescriptor {
-                        name: "imports".to_owned(),
-                        version: "python-imports-v1".to_owned(),
-                    },
-                    QueryDescriptor {
-                        name: "import-context".to_owned(),
-                        version: "python-import-context-v1".to_owned(),
-                    },
-                    QueryDescriptor {
-                        name: "calls".to_owned(),
-                        version: "python-call-references-v1".to_owned(),
-                    },
-                    QueryDescriptor {
-                        name: "nesting".to_owned(),
-                        version: "python-nesting-v1".to_owned(),
-                    },
-                    QueryDescriptor {
-                        name: "decisions".to_owned(),
-                        version: "python-decisions-v1".to_owned(),
-                    },
-                ],
-                limitations: vec![
-                    "Reports parser recovery and syntax-derived facts; it does not lint or type-check Python."
-                        .to_owned(),
-                    "Module names are repository-relative paths until project or environment resolution is added."
-                        .to_owned(),
-                    "Dynamic imports and runtime metaprogramming are not resolved."
-                        .to_owned(),
-                    "Call resolution is conservative: arbitrary instance dispatch, inheritance lookup, decorators, assignment aliases, and higher-order values are not guessed."
-                        .to_owned(),
-                    "Non-UTF-8 source text is parsed by byte span but names and snippets use lossy decoding."
-                        .to_owned(),
-                    "Cyclomatic complexity covers callable bodies; module and class initialization bodies are not scored in v1."
-                        .to_owned(),
-                ],
+                queries,
+                limitations,
             },
             parser,
+            documentation_enabled,
             _symbol_query: symbol_query,
             _import_query: import_query,
             _nesting_query: nesting_query,
@@ -169,7 +196,7 @@ impl LanguageAnalyzer for PythonAnalyzer {
         collect_diagnostics(tree.root_node(), false, &mut diagnostics);
         diagnostics.sort_by(|left, right| diagnostic_key(left).cmp(&diagnostic_key(right)));
 
-        let mut extraction = Extraction::new(input.path, input.source);
+        let mut extraction = Extraction::new(input.path, input.source, self.documentation_enabled);
         extraction.extract_module(tree.root_node());
         extraction.finish_measurements();
 
@@ -199,10 +226,11 @@ struct Extraction<'a> {
     id_counts: BTreeMap<String, usize>,
     typing_aliases: BTreeSet<String>,
     type_checking_names: BTreeSet<String>,
+    documentation_enabled: bool,
 }
 
 impl<'a> Extraction<'a> {
-    fn new(path: &'a Path, source: &'a [u8]) -> Self {
+    fn new(path: &'a Path, source: &'a [u8], documentation_enabled: bool) -> Self {
         Self {
             path,
             source,
@@ -212,6 +240,7 @@ impl<'a> Extraction<'a> {
             id_counts: BTreeMap::new(),
             typing_aliases: BTreeSet::new(),
             type_checking_names: BTreeSet::new(),
+            documentation_enabled,
         }
     }
 
@@ -224,16 +253,21 @@ impl<'a> Extraction<'a> {
         );
         let module_path = path_string(self.path);
         let module_id = SymbolId::new(format!("{module_path}::module"));
+        let complete = !root.has_error();
+        let documentation = self
+            .documentation_enabled
+            .then(|| documentation_for_body(root, complete, self.source));
         self.symbols.push(Symbol {
             id: module_id.clone(),
             parent_id: None,
             kind: SymbolKind::Module,
+            direct_declaration: true,
             name: module_path.clone(),
             qualified_name: module_path,
             span: source_span(root),
             body_span: Some(source_span(root)),
             name_span: None,
-            completeness: if root.has_error() {
+            completeness: if !complete {
                 SymbolCompleteness::Partial
             } else {
                 SymbolCompleteness::Complete
@@ -241,6 +275,7 @@ impl<'a> Extraction<'a> {
             modifiers: BTreeSet::new(),
             parameters: Vec::new(),
             decorators: Vec::new(),
+            documentation,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
             measurements: Vec::new(),
@@ -294,7 +329,7 @@ impl<'a> Extraction<'a> {
                         parent_id,
                         callable_id,
                         depth,
-                        Some(source_span(node)),
+                        Some(node),
                         decorators,
                     );
                 }
@@ -349,7 +384,7 @@ impl<'a> Extraction<'a> {
         parent_id: Option<SymbolId>,
         callable_id: Option<SymbolId>,
         depth: usize,
-        wrapper_span: Option<SourceSpan>,
+        wrapper: Option<Node<'_>>,
         decorators: Vec<Decorator>,
     ) {
         let Some(name_node) = node.child_by_field_name("name") else {
@@ -381,7 +416,9 @@ impl<'a> Extraction<'a> {
         let ordinal = self.id_counts.entry(base_id.clone()).or_insert(0);
         *ordinal += 1;
         let id = SymbolId::new(format!("{base_id}#{}", *ordinal));
-        let span = wrapper_span.unwrap_or_else(|| source_span(node));
+        let declaration = wrapper.unwrap_or(node);
+        let span = source_span(declaration);
+        let direct_declaration = is_direct_declaration(declaration);
         let body_span = node.child_by_field_name("body").map(source_span);
         let complete = !node.has_error() && !span_has_error(node);
         let mut modifiers = BTreeSet::new();
@@ -409,10 +446,21 @@ impl<'a> Extraction<'a> {
         if let Some(parameters) = parameter_node {
             self.visit_children(parameters, parent_id.clone(), callable_id, depth);
         }
+        let documentation = self.documentation_enabled.then(|| {
+            node.child_by_field_name("body").map_or_else(
+                || SymbolDocumentation {
+                    status: DocumentationStatus::Unavailable,
+                    span: None,
+                    reason: Some("definition body is unavailable".to_owned()),
+                },
+                |body| documentation_for_body(body, complete, self.source),
+            )
+        });
         self.symbols.push(Symbol {
             id: id.clone(),
             parent_id: parent_id.clone(),
             kind,
+            direct_declaration,
             name,
             qualified_name,
             span,
@@ -426,6 +474,7 @@ impl<'a> Extraction<'a> {
             modifiers,
             parameters,
             decorators,
+            documentation,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
             measurements: Vec::new(),
@@ -474,6 +523,7 @@ impl<'a> Extraction<'a> {
             id: id.clone(),
             parent_id,
             kind: SymbolKind::Lambda,
+            direct_declaration: false,
             name: "<lambda>".to_owned(),
             qualified_name,
             span,
@@ -487,6 +537,7 @@ impl<'a> Extraction<'a> {
             modifiers: BTreeSet::new(),
             parameters,
             decorators: Vec::new(),
+            documentation: None,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
             measurements: Vec::new(),
@@ -896,6 +947,131 @@ impl<'a> Extraction<'a> {
     fn symbol_mut(&mut self, id: &SymbolId) -> Option<&mut Symbol> {
         self.symbols.iter_mut().find(|symbol| &symbol.id == id)
     }
+}
+
+fn is_direct_declaration(declaration: Node<'_>) -> bool {
+    let Some(parent) = declaration.parent() else {
+        return false;
+    };
+    if parent.kind() == "module" {
+        return true;
+    }
+    matches!(parent.kind(), "block" | "suite")
+        && parent
+            .parent()
+            .is_some_and(|owner| matches!(owner.kind(), "class_definition" | "function_definition"))
+}
+
+fn documentation_for_body(body: Node<'_>, complete: bool, source: &[u8]) -> SymbolDocumentation {
+    if !complete {
+        return SymbolDocumentation {
+            status: DocumentationStatus::Unavailable,
+            span: None,
+            reason: Some("symbol contains parser recovery nodes".to_owned()),
+        };
+    }
+
+    let mut cursor = body.walk();
+    let statement = body
+        .named_children(&mut cursor)
+        .find(|child| child.kind() != "comment");
+    let Some(statement) = statement else {
+        return SymbolDocumentation {
+            status: DocumentationStatus::Missing,
+            span: None,
+            reason: None,
+        };
+    };
+    if statement.kind() != "expression_statement" {
+        return SymbolDocumentation {
+            status: DocumentationStatus::Missing,
+            span: None,
+            reason: None,
+        };
+    }
+    let mut statement_cursor = statement.walk();
+    let Some(expression) = statement.named_children(&mut statement_cursor).next() else {
+        return SymbolDocumentation {
+            status: DocumentationStatus::Missing,
+            span: None,
+            reason: None,
+        };
+    };
+    let Some(has_content) = docstring_content(expression, source) else {
+        return SymbolDocumentation {
+            status: DocumentationStatus::Missing,
+            span: None,
+            reason: None,
+        };
+    };
+
+    SymbolDocumentation {
+        status: if has_content {
+            DocumentationStatus::Documented
+        } else {
+            DocumentationStatus::Missing
+        },
+        span: Some(source_span(expression)),
+        reason: None,
+    }
+}
+
+fn docstring_content(node: Node<'_>, source: &[u8]) -> Option<bool> {
+    match node.kind() {
+        "string" => plain_string_content(node, source),
+        "concatenated_string" => {
+            let mut found = false;
+            let mut has_content = false;
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() != "string" {
+                    return None;
+                }
+                found = true;
+                has_content |= plain_string_content(child, source)?;
+            }
+            found.then_some(has_content)
+        }
+        "parenthesized_expression" => {
+            let mut cursor = node.walk();
+            let mut children = node.named_children(&mut cursor);
+            let child = children.next()?;
+            if children.next().is_some() {
+                None
+            } else {
+                docstring_content(child, source)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn plain_string_content(node: Node<'_>, source: &[u8]) -> Option<bool> {
+    let mut cursor = node.walk();
+    let children = node.named_children(&mut cursor).collect::<Vec<_>>();
+    if children.iter().any(|child| child.kind() == "interpolation") {
+        return None;
+    }
+    let start = children
+        .iter()
+        .find(|child| child.kind() == "string_start")?;
+    let prefix = node_text(*start, source)
+        .chars()
+        .take_while(|character| *character != '\'' && *character != '"')
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    if prefix
+        .chars()
+        .any(|character| matches!(character, 'b' | 'f' | 't'))
+    {
+        return None;
+    }
+    Some(
+        children
+            .iter()
+            .filter(|child| child.kind() == "string_content")
+            .any(|child| !node_text(*child, source).trim().is_empty()),
+    )
 }
 
 fn call_components(node: Node<'_>, source: &[u8]) -> Option<Vec<String>> {
@@ -1345,6 +1521,181 @@ mod tests {
     }
 
     #[test]
+    fn extracts_conventional_nonblank_docstrings_without_source_text() {
+        let result = analyze(
+            br#"# leading comment
+"""Module documentation."""
+
+class Service:
+    """Service documentation."""
+
+    def documented(self):
+        r"""Method documentation."""
+
+    @property
+    async def async_property(self):
+        """Async decorated method documentation."""
+
+    def concatenated(self):
+        "first " "second"
+
+    def empty(self):
+        """   """
+
+    def bytes_only(self):
+        b"not a docstring"
+
+    def formatted(self, value):
+        f"{value}"
+
+    class Nested:
+        """Nested documentation."""
+
+def top_level():
+    u"Top-level documentation."
+
+def outer():
+    """Outer documentation."""
+    def nested():
+        """Nested function documentation."""
+    return nested
+
+callback = lambda: None
+"#,
+        );
+        assert_eq!(result.status, FileAnalysisStatus::Successful);
+        let documentation = |name: &str| {
+            result
+                .facts
+                .symbols
+                .iter()
+                .find(|symbol| symbol.qualified_name == name)
+                .and_then(|symbol| symbol.documentation.as_ref())
+                .unwrap_or_else(|| panic!("missing documentation fact for {name}"))
+        };
+
+        assert_eq!(
+            result.facts.symbols[0]
+                .documentation
+                .as_ref()
+                .map(|documentation| documentation.status),
+            Some(DocumentationStatus::Documented)
+        );
+        for name in [
+            "Service",
+            "Service.documented",
+            "Service.async_property",
+            "Service.concatenated",
+            "top_level",
+            "outer",
+            "outer.nested",
+        ] {
+            assert_eq!(documentation(name).status, DocumentationStatus::Documented);
+            assert!(documentation(name).span.is_some());
+        }
+        assert_eq!(
+            documentation("Service.empty").status,
+            DocumentationStatus::Missing
+        );
+        assert!(documentation("Service.empty").span.is_some());
+        for name in ["Service.bytes_only", "Service.formatted"] {
+            assert_eq!(documentation(name).status, DocumentationStatus::Missing);
+            assert!(documentation(name).span.is_none());
+        }
+        assert!(
+            result
+                .facts
+                .symbols
+                .iter()
+                .filter(|symbol| symbol.kind == SymbolKind::Lambda)
+                .all(|symbol| symbol.documentation.is_none())
+        );
+    }
+
+    #[test]
+    fn distinguishes_direct_definitions_from_conditional_definitions() {
+        let result = analyze(
+            br#"from typing import TYPE_CHECKING
+
+def direct_function():
+    pass
+
+@decorator
+class DirectClass:
+    def direct_method(self):
+        pass
+
+    if TYPE_CHECKING:
+        def conditional_method(self):
+            pass
+
+if TYPE_CHECKING:
+    def type_only():
+        pass
+
+if sys.platform == "win32":
+    def windows_only():
+        pass
+
+try:
+    import optional
+except ImportError:
+    def fallback():
+        pass
+"#,
+        );
+        let direct = |name: &str| {
+            result
+                .facts
+                .symbols
+                .iter()
+                .find(|symbol| symbol.qualified_name == name)
+                .unwrap_or_else(|| panic!("missing symbol {name}"))
+                .direct_declaration
+        };
+
+        for name in [
+            "direct_function",
+            "DirectClass",
+            "DirectClass.direct_method",
+        ] {
+            assert!(direct(name), "{name} should be direct");
+        }
+        for name in [
+            "DirectClass.conditional_method",
+            "type_only",
+            "windows_only",
+            "fallback",
+        ] {
+            assert!(!direct(name), "{name} should be conditional");
+        }
+    }
+
+    #[test]
+    fn documentation_can_be_disabled_for_graph_only_analysis() {
+        let mut analyzer =
+            PythonAnalyzer::without_documentation().expect("Python grammar should initialize");
+        let result = analyzer.analyze(AnalysisInput {
+            path: Path::new("src/example.py"),
+            source: b"\"\"\"module\"\"\"\ndef run():\n    \"\"\"run\"\"\"\n",
+        });
+
+        assert!(
+            !analyzer
+                .descriptor()
+                .capabilities
+                .contains(&AnalyzerCapability::Documentation)
+        );
+        assert!(
+            result
+                .facts
+                .symbols
+                .iter()
+                .all(|symbol| symbol.documentation.is_none())
+        );
+    }
+
+    #[test]
     fn classifies_orthogonal_import_contexts() {
         let result = analyze(
             br#"import typing as t
@@ -1589,6 +1940,13 @@ for item in items:
                 .measurements
                 .iter()
                 .all(|measurement| measurement.status == MeasurementStatus::Unavailable)
+        );
+        assert_eq!(
+            function
+                .documentation
+                .as_ref()
+                .map(|documentation| documentation.status),
+            Some(DocumentationStatus::Unavailable)
         );
     }
 
