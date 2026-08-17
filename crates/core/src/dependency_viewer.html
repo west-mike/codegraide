@@ -219,6 +219,30 @@
     .detail-action { margin-top: 12px; width: 100%; }
     .evidence { margin: 6px 0; padding-left: 17px; color: var(--muted); }
     .evidence li { margin: 5px 0; overflow-wrap: anywhere; }
+    .source-card, .caller-card { margin-top: 10px; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--bg); }
+    .source-card-header, .caller-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+    .source-meta, .relation-meta { color: var(--muted); font-size: 11px; }
+    .source-code { margin: 0; padding: 8px 0; overflow: auto; background: var(--bg); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
+    .source-line { display: grid; grid-template-columns: 4.2em minmax(max-content, 1fr); min-height: 1.55em; padding-right: 10px; }
+    .source-line.is-call-site { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 3px 0 var(--accent); }
+    .line-number { padding-right: 10px; color: var(--muted); text-align: right; user-select: none; }
+    .source-text { white-space: pre; }
+    .source-ellipsis { color: var(--muted); font-style: italic; }
+    .source-toggle { min-height: 26px; padding: 3px 8px; font-size: 11px; }
+    .caller-list { display: grid; gap: 11px; }
+    .caller-card { margin-top: 0; }
+    .caller-link { min-height: 0; padding: 0; border: 0; background: transparent; color: var(--accent); text-align: left; overflow-wrap: anywhere; }
+    .caller-link:hover { border-color: transparent; text-decoration: underline; }
+    .call-direction { padding: 7px 10px; color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--border); }
+    .call-site { border-top: 1px solid var(--border); }
+    .call-site:first-of-type { border-top: 0; }
+    .call-site-label { padding: 6px 10px 0; color: var(--muted); font-size: 11px; }
+    .tok-keyword { color: #8757d6; font-weight: 650; }
+    .tok-string { color: #18805d; }
+    .tok-comment { color: var(--muted); font-style: italic; }
+    .tok-number { color: #b05d18; }
+
+    body.call-graph .workspace { grid-template-columns: minmax(0, 1fr) minmax(390px, 34vw); }
 
     .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; marker-end: url(#arrow); pointer-events: stroke; cursor: pointer; }
     .edge.uncertain { stroke-dasharray: 7 5; }
@@ -248,6 +272,7 @@
 
     @media (max-width: 900px) {
       .workspace { grid-template-columns: 1fr; grid-template-rows: minmax(520px, 65vh) auto; }
+      body.call-graph .workspace { grid-template-columns: 1fr; }
       .stage { min-height: 520px; }
       .sidebar { border-left: 0; border-top: 1px solid var(--border); }
     }
@@ -335,6 +360,9 @@
 
       const data = JSON.parse(document.getElementById("graph-data").textContent);
       const isCallGraph = data.graph_kind === "calls";
+      const sourceAutoExpandLines = 15;
+      const callContextRadius = 3;
+      document.body.classList.toggle("call-graph", isCallGraph);
       document.querySelector(".brand h1").textContent = isCallGraph ? "Codegraide Call Explorer" : "Codegraide Dependency Explorer";
       const svg = document.getElementById("graph");
       const viewport = document.getElementById("viewport");
@@ -346,6 +374,7 @@
       const search = document.getElementById("search");
       const emptyGraph = document.getElementById("empty-graph");
       const nodeById = new Map(data.nodes.map(node => [node.id, node]));
+      const hasEmbeddedSource = isCallGraph && data.nodes.some(node => node.source);
       const cycleByNumber = new Map(data.cycles.map(cycle => [cycle.number, cycle]));
       const cycleByMember = new Map(data.cycles.flatMap(cycle => cycle.members.map(id => [id, cycle])));
       const witnessEdges = new Set(data.cycles.flatMap(cycle => cycle.witness_relations.map(relation => `${relation.source}|${relation.target}`)));
@@ -364,6 +393,9 @@
         currentGroup: rootGroups.length === 1 ? rootGroups[0].id : null,
         selected: null,
         selectedEdge: null,
+        hoveredRelation: null,
+        expandedSources: new Set(),
+        expandedCallers: new Set(),
         query: "",
         visibleKinds: new Set(["local-module", "standard-library", "installed-distribution", "ambiguous", "unresolved"]),
         showUncertain: true,
@@ -409,6 +441,113 @@
 
       function truncate(value, length) {
         return value.length <= length ? value : `${value.slice(0, length - 1)}…`;
+      }
+
+      const pythonKeywords = new Set([
+        "and", "as", "assert", "async", "await", "break", "case", "class", "continue",
+        "def", "del", "elif", "else", "except", "False", "finally", "for", "from",
+        "global", "if", "import", "in", "is", "lambda", "match", "None", "nonlocal",
+        "not", "or", "pass", "raise", "return", "True", "try", "while", "with", "yield"
+      ]);
+
+      function highlightPythonLine(line) {
+        let output = "";
+        let index = 0;
+        while (index < line.length) {
+          const character = line[index];
+          if (character === "#") {
+            output += `<span class="tok-comment">${escapeHtml(line.slice(index))}</span>`;
+            break;
+          }
+          if (character === "\"" || character === "'") {
+            const quote = character;
+            let end = index + 1;
+            while (end < line.length) {
+              if (line[end] === "\\") end += 2;
+              else if (line[end++] === quote) break;
+              else end += 0;
+            }
+            output += `<span class="tok-string">${escapeHtml(line.slice(index, end))}</span>`;
+            index = end;
+            continue;
+          }
+          if (/[A-Za-z_]/.test(character)) {
+            let end = index + 1;
+            while (end < line.length && /[A-Za-z0-9_]/.test(line[end])) end += 1;
+            const token = line.slice(index, end);
+            output += pythonKeywords.has(token)
+              ? `<span class="tok-keyword">${escapeHtml(token)}</span>`
+              : escapeHtml(token);
+            index = end;
+            continue;
+          }
+          if (/[0-9]/.test(character)) {
+            let end = index + 1;
+            while (end < line.length && /[0-9A-Fa-f_xXoObB.]/.test(line[end])) end += 1;
+            output += `<span class="tok-number">${escapeHtml(line.slice(index, end))}</span>`;
+            index = end;
+            continue;
+          }
+          output += escapeHtml(character);
+          index += 1;
+        }
+        return output || " ";
+      }
+
+      function sourceLinesMarkup(source, startIndex, endIndex, highlightedLines = new Set()) {
+        return `<pre class="source-code">${source.lines.slice(startIndex, endIndex).map((line, offset) => {
+          const lineNumber = source.start_line + startIndex + offset;
+          return `<span class="source-line${highlightedLines.has(lineNumber) ? " is-call-site" : ""}"><span class="line-number">${lineNumber}</span><code class="source-text">${highlightPythonLine(line)}</code></span>`;
+        }).join("")}</pre>`;
+      }
+
+      function sourceDefinitionMarkup(node) {
+        if (!node.source) return "";
+        const lineCount = node.source.lines.length;
+        const expanded = lineCount <= sourceAutoExpandLines || state.expandedSources.has(node.id);
+        const shownLines = expanded ? lineCount : Math.min(4, lineCount);
+        return `
+          <h3>Definition</h3>
+          <div class="source-card">
+            <div class="source-card-header">
+              <span class="source-meta">Lines ${node.source.start_line}–${node.source.end_line} · ${lineCount} ${lineCount === 1 ? "line" : "lines"}</span>
+              ${lineCount > sourceAutoExpandLines ? `<button type="button" class="source-toggle" data-toggle-source="${node.id}">${expanded ? "Collapse" : `Expand ${lineCount} lines`}</button>` : ""}
+            </div>
+            ${sourceLinesMarkup(node.source, 0, shownLines)}
+            ${expanded ? "" : `<div class="call-direction source-ellipsis">… ${lineCount - shownLines} more lines</div>`}
+          </div>`;
+      }
+
+      function callSiteMarkup(caller, evidence) {
+        if (!caller?.source) {
+          return `<div class="call-site"><div class="call-site-label"><code>${escapeHtml(evidence.source_path)}:${evidence.line}:${evidence.column}</code> calls ${escapeHtml(evidence.import_name)}</div></div>`;
+        }
+        const relativeLine = evidence.line - caller.source.start_line;
+        const start = Math.max(0, relativeLine - callContextRadius);
+        const end = Math.min(caller.source.lines.length, relativeLine + callContextRadius + 1);
+        return `<div class="call-site"><div class="call-site-label"><code>${escapeHtml(evidence.source_path)}:${evidence.line}:${evidence.column}</code> · calls ${escapeHtml(evidence.import_name)}</div>${sourceLinesMarkup(caller.source, start, end, new Set([evidence.line]))}</div>`;
+      }
+
+      function callerRelationshipsMarkup(node, relations) {
+        if (!relations.length) return `<div class="empty-list">None in this graph</div>`;
+        return `<div class="caller-list">${relations.map(relation => {
+          const caller = nodeById.get(relation.source);
+          const key = `${relation.source}|${relation.target}`;
+          const expanded = state.expandedCallers.has(key);
+          const callLines = new Set(relation.evidence.map(evidence => evidence.line));
+          const sourceLineCount = caller?.source?.lines.length || 0;
+          return `<article class="caller-card" data-relation-source="${relation.source}" data-relation-target="${relation.target}">
+            <div class="caller-card-header">
+              <button type="button" class="caller-link" data-select-node="${relation.source}">${escapeHtml(caller?.name || relation.source)}</button>
+              <span class="relation-meta">${relation.evidence.length} ${relation.evidence.length === 1 ? "call site" : "call sites"}</span>
+            </div>
+            <div class="call-direction">${escapeHtml(caller?.short_name || relation.source)} → ${escapeHtml(node.short_name)}</div>
+            ${expanded && caller?.source
+              ? sourceLinesMarkup(caller.source, 0, caller.source.lines.length, callLines)
+              : relation.evidence.map(evidence => callSiteMarkup(caller, evidence)).join("")}
+            ${sourceLineCount > sourceAutoExpandLines ? `<button type="button" class="detail-action" data-toggle-caller="${escapeHtml(key)}">${expanded ? "Collapse caller" : `Expand caller · ${sourceLineCount} lines`}</button>` : ""}
+          </article>`;
+        }).join("")}</div>`;
       }
 
       function visibleNode(node) {
@@ -779,8 +918,10 @@
 
       function showNodeDetails(node) {
         if (!node) return;
-        const imports = (outgoing.get(node.id) || []).map(relation => nodeById.get(relation.target));
-        const dependents = (incoming.get(node.id) || []).map(relation => nodeById.get(relation.source));
+        const outgoingRelations = outgoing.get(node.id) || [];
+        const incomingRelations = incoming.get(node.id) || [];
+        const imports = outgoingRelations.map(relation => nodeById.get(relation.target));
+        const dependents = incomingRelations.map(relation => nodeById.get(relation.source));
         const cycle = cycleByMember.get(node.id);
         details.innerHTML = `
           <h2>${escapeHtml(node.name)}</h2>
@@ -790,11 +931,13 @@
           ${node.unresolved_reason ? `<p>Reason: ${escapeHtml(node.unresolved_reason.replaceAll("-", " "))}</p>` : ""}
           ${cycle ? `<p>Member of <strong>Cycle ${cycle.number}</strong>.</p>` : ""}
           ${node.candidates.length ? candidateMarkup(node.candidates) : ""}
+          ${isCallGraph ? sourceDefinitionMarkup(node) : ""}
           <h3>${isCallGraph ? "Calls" : "Imports"}</h3>${linkList(imports)}
-          <h3>${isCallGraph ? "Called by" : "Imported by"}</h3>${linkList(dependents)}
+          <h3>${isCallGraph ? "Called by" : "Imported by"}</h3>${isCallGraph && hasEmbeddedSource ? callerRelationshipsMarkup(node, incomingRelations) : linkList(dependents)}
           ${cycle ? `<button type="button" class="detail-action" id="show-cycle">Show complete cycle</button>` : ""}
         `;
         bindNodeLinks();
+        bindSourceActions(node);
         document.getElementById("show-cycle")?.addEventListener("click", () => {
           state.mode = "neighborhood";
           render();
@@ -856,6 +999,33 @@
         });
       }
 
+      function bindSourceActions(node) {
+        details.querySelector("[data-toggle-source]")?.addEventListener("click", () => {
+          if (state.expandedSources.has(node.id)) state.expandedSources.delete(node.id);
+          else state.expandedSources.add(node.id);
+          showNodeDetails(node);
+        });
+        details.querySelectorAll("[data-toggle-caller]").forEach(button => {
+          button.addEventListener("click", () => {
+            const key = button.dataset.toggleCaller;
+            if (state.expandedCallers.has(key)) state.expandedCallers.delete(key);
+            else state.expandedCallers.add(key);
+            showNodeDetails(node);
+          });
+        });
+        details.querySelectorAll("[data-relation-source]").forEach(card => {
+          const key = `${card.dataset.relationSource}|${card.dataset.relationTarget}`;
+          card.addEventListener("mouseenter", () => {
+            state.hoveredRelation = key;
+            updateSelectionStyles();
+          });
+          card.addEventListener("mouseleave", () => {
+            state.hoveredRelation = null;
+            updateSelectionStyles();
+          });
+        });
+      }
+
       function showPlaceholder() {
         if (data.query) {
           const ordered = data.query.ordered_nodes.map(id => nodeById.get(id)).filter(Boolean);
@@ -895,7 +1065,9 @@
           const index = Number(element.dataset.edgeIndex);
           const relation = state.relations[index];
           const incident = selectedItem && (relation.source === selectedItem.id || relation.target === selectedItem.id);
-          element.classList.toggle("is-selected", index === state.selectedEdge || Boolean(incident));
+          const hovered = state.hoveredRelation && (relation.originals || [relation])
+            .some(original => `${original.source}|${original.target}` === state.hoveredRelation);
+          element.classList.toggle("is-selected", index === state.selectedEdge || Boolean(incident) || Boolean(hovered));
           element.classList.toggle("is-dimmed", Boolean(selectedItem) && !incident);
         });
       }

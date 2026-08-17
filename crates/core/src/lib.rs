@@ -56,7 +56,8 @@ pub use dependency_hierarchy::{
     DependencyHierarchyGroup, DependencyHierarchyMember, build_dependency_hierarchy,
 };
 pub use dependency_html::{
-    render_call_html, render_dependency_html, render_dependency_html_with_query,
+    CallHtmlSourceError, render_call_html, render_call_html_with_source, render_dependency_html,
+    render_dependency_html_with_query,
 };
 pub use dependency_output::{
     DEPENDENCY_REPORT_SCHEMA_VERSION, DependencyDirection, DependencyEnvironmentReport,

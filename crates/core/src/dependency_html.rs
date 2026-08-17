@@ -1,10 +1,14 @@
 //! Self-contained interactive dependency graph rendering.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::calls::{CallGraphView, CallNode, CallRelation};
+use crate::calls::{CallGraphView, CallNode, CallRelation, ProjectSymbol};
 use crate::dependencies::DependencyTarget;
 use crate::dependency_cycles::explain_dependency_cycle;
 use crate::dependency_hierarchy::{DependencyHierarchyMember, build_dependency_hierarchy};
@@ -37,6 +41,15 @@ struct HtmlNode {
     unresolved_reason: Option<&'static str>,
     candidates: Vec<HtmlCandidate>,
     cyclic_component: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<HtmlSource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct HtmlSource {
+    start_line: usize,
+    end_line: usize,
+    lines: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +104,38 @@ struct HtmlQuery {
     found: bool,
     label: String,
     ordered_nodes: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum CallHtmlSourceError {
+    Read { path: PathBuf, source: io::Error },
+    Serialize(serde_json::Error),
+}
+
+impl fmt::Display for CallHtmlSourceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read { path, source } => {
+                write!(
+                    formatter,
+                    "could not read source file {}: {source}",
+                    path.display()
+                )
+            }
+            Self::Serialize(source) => {
+                write!(formatter, "could not serialize call graph: {source}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CallHtmlSourceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Read { source, .. } => Some(source),
+            Self::Serialize(source) => Some(source),
+        }
+    }
 }
 
 /// Render a complete, standalone dependency explorer.
@@ -169,6 +214,25 @@ pub fn render_dependency_html_with_query(
 
 /// Render a call graph through the same offline explorer infrastructure.
 pub fn render_call_html(view: &CallGraphView) -> Result<String, serde_json::Error> {
+    render_call_html_graph(view, &BTreeMap::new())
+}
+
+/// Render a call graph with repository source embedded for sidebar inspection.
+///
+/// Source remains an HTML presentation concern: the stable graph and JSON report
+/// continue to carry spans and paths without copying repository contents.
+pub fn render_call_html_with_source(
+    view: &CallGraphView,
+    project_root: &Path,
+) -> Result<String, CallHtmlSourceError> {
+    let sources = load_call_sources(view, project_root)?;
+    render_call_html_graph(view, &sources).map_err(CallHtmlSourceError::Serialize)
+}
+
+fn render_call_html_graph(
+    view: &CallGraphView,
+    sources: &BTreeMap<ProjectSymbol, HtmlSource>,
+) -> Result<String, serde_json::Error> {
     let ids = view
         .nodes
         .iter()
@@ -209,7 +273,13 @@ pub fn render_call_html(view: &CallGraphView) -> Result<String, serde_json::Erro
         nodes: view
             .nodes
             .iter()
-            .map(|node| html_call_node(&node.id, &node.node, node.cyclic_component))
+            .map(|node| {
+                let source = match &node.node {
+                    CallNode::LocalSymbol(symbol) => sources.get(symbol).cloned(),
+                    _ => None,
+                };
+                html_call_node(&node.id, &node.node, node.cyclic_component, source)
+            })
             .collect(),
         relations: view
             .relations
@@ -249,6 +319,59 @@ pub fn render_call_html(view: &CallGraphView) -> Result<String, serde_json::Erro
     render_html_graph(&graph)
 }
 
+fn load_call_sources(
+    view: &CallGraphView,
+    project_root: &Path,
+) -> Result<BTreeMap<ProjectSymbol, HtmlSource>, CallHtmlSourceError> {
+    let mut files = BTreeMap::<PathBuf, String>::new();
+    let mut sources = BTreeMap::new();
+    for symbol in view.nodes.iter().filter_map(|node| match &node.node {
+        CallNode::LocalSymbol(symbol)
+            if matches!(
+                symbol.id.kind,
+                crate::SymbolKind::Function | crate::SymbolKind::Method | crate::SymbolKind::Lambda
+            ) =>
+        {
+            Some(symbol)
+        }
+        _ => None,
+    }) {
+        if !files.contains_key(&symbol.path) {
+            let absolute_path = project_root.join(&symbol.path);
+            let contents =
+                fs::read_to_string(&absolute_path).map_err(|source| CallHtmlSourceError::Read {
+                    path: absolute_path,
+                    source,
+                })?;
+            files.insert(symbol.path.clone(), contents);
+        }
+        if let Some(source) = files
+            .get(&symbol.path)
+            .and_then(|contents| source_for_span(contents, symbol.span))
+        {
+            sources.insert(symbol.clone(), source);
+        }
+    }
+    Ok(sources)
+}
+
+fn source_for_span(source: &str, span: crate::SourceSpan) -> Option<HtmlSource> {
+    let lines = source.lines().collect::<Vec<_>>();
+    let start = span.start.line.checked_sub(1)?;
+    let end = span.end.line.min(lines.len());
+    if start >= end {
+        return None;
+    }
+    Some(HtmlSource {
+        start_line: span.start.line,
+        end_line: end,
+        lines: lines[start..end]
+            .iter()
+            .map(|line| (*line).to_owned())
+            .collect(),
+    })
+}
+
 fn render_html_graph(graph: &HtmlGraph) -> Result<String, serde_json::Error> {
     let data = serde_json::to_string(graph)?
         .replace('&', "\\u0026")
@@ -257,7 +380,12 @@ fn render_html_graph(graph: &HtmlGraph) -> Result<String, serde_json::Error> {
     Ok(VIEWER_TEMPLATE.replace(GRAPH_DATA_MARKER, &data))
 }
 
-fn html_call_node(id: &str, node: &CallNode, cyclic_component: Option<usize>) -> HtmlNode {
+fn html_call_node(
+    id: &str,
+    node: &CallNode,
+    cyclic_component: Option<usize>,
+    source: Option<HtmlSource>,
+) -> HtmlNode {
     let (name, kind, subtitle, path, candidates) = match node {
         CallNode::LocalSymbol(symbol) => {
             let path = crate::report::json_path(&symbol.path);
@@ -317,6 +445,7 @@ fn html_call_node(id: &str, node: &CallNode, cyclic_component: Option<usize>) ->
         unresolved_reason: matches!(node, CallNode::Unresolved { .. }).then_some("unresolved-call"),
         candidates,
         cyclic_component,
+        source,
     }
 }
 
@@ -478,6 +607,7 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
         unresolved_reason,
         candidates,
         cyclic_component: node.cyclic_component,
+        source: None,
     }
 }
 
@@ -590,5 +720,24 @@ mod tests {
         assert_eq!(html.matches("</script>").count(), 2);
         assert!(!html.contains("bad</script>name"));
         assert!(html.contains("bad\\u003c/script\\u003ename"));
+    }
+
+    #[test]
+    fn source_excerpt_uses_one_based_inclusive_line_spans() {
+        let source = "first\nsecond\nthird\nfourth\n";
+        let excerpt = source_for_span(
+            source,
+            crate::SourceSpan {
+                start_byte: 6,
+                end_byte: 18,
+                start: crate::SourcePosition { line: 2, column: 1 },
+                end: crate::SourcePosition { line: 3, column: 6 },
+            },
+        )
+        .expect("source excerpt");
+
+        assert_eq!(excerpt.start_line, 2);
+        assert_eq!(excerpt.end_line, 3);
+        assert_eq!(excerpt.lines, ["second", "third"]);
     }
 }

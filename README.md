@@ -362,6 +362,8 @@ Build an evidence-backed symbol call graph with a separate command and report:
 cargo run -p codegraide -- calls .
 cargo run -p codegraide -- calls . --local-only --format html \
   --output calls.html --open
+cargo run -p codegraide -- calls . --local-only --format html \
+  --include-source --output calls-with-source.html --open
 cargo run -p codegraide -- calls . \
   --focus shop.service::Client.send --direction both --depth 1 \
   --format mermaid
@@ -381,6 +383,15 @@ inheritance lookup, decorators, monkey patching, higher-order values, and
 runtime metaprogramming are deliberately not guessed. The HTML output reuses
 the offline explorer, including hierarchy drill-down, search, neighborhood
 views, evidence inspection, recursion groups, pan, and zoom.
+
+Add `--include-source` to HTML output to embed source for local symbols.
+Selecting a symbol then shows its definition and every direct caller grouped
+with the supporting call sites. Definitions up to 15 lines expand
+automatically; longer definitions and caller bodies can be expanded in the
+sidebar. Hovering a caller card highlights the corresponding graph
+relationship. Source embedding is opt-in because it increases report size and
+can expose private repository code when an HTML report is shared. It changes
+only the HTML presentation payload, not the stable call-report JSON schema.
 
 ## Deterministic review gate
 

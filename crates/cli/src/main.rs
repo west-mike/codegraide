@@ -21,9 +21,9 @@ use codegraide_core::{
     ReviewJsonReport, ReviewOptions, ReviewStatus, analyze_call_graph, analyze_dependency_graph,
     analyze_repository, call_node_name, dependency_query_view, explain_dependency_cycles,
     filter_call_graph, filter_dependency_graph, inventory_repository_with_options,
-    query_dependency_graph, render_call_dot, render_call_html, render_call_mermaid,
-    render_dependency_dot, render_dependency_html, render_dependency_html_with_query,
-    render_dependency_mermaid, review_status_code,
+    query_dependency_graph, render_call_dot, render_call_html, render_call_html_with_source,
+    render_call_mermaid, render_dependency_dot, render_dependency_html,
+    render_dependency_html_with_query, render_dependency_mermaid, review_status_code,
 };
 
 #[derive(Debug, Parser)]
@@ -335,6 +335,10 @@ enum Command {
         /// Open HTML output in the default browser
         #[arg(long)]
         open: bool,
+
+        /// Embed function bodies and call-site context in HTML output
+        #[arg(long)]
+        include_source: bool,
     },
 }
 
@@ -595,6 +599,7 @@ fn main() -> ExitCode {
             format,
             output,
             open,
+            include_source,
         } => run_calls(&CallRequest {
             path,
             python: python.as_deref(),
@@ -608,6 +613,7 @@ fn main() -> ExitCode {
             format: *format,
             output: output.as_deref(),
             open: *open,
+            include_source: *include_source,
         }),
     }
 }
@@ -1251,6 +1257,7 @@ struct CallRequest<'a> {
     format: CallOutputFormat,
     output: Option<&'a Path>,
     open: bool,
+    include_source: bool,
 }
 
 fn run_calls(request: &CallRequest<'_>) -> ExitCode {
@@ -1260,6 +1267,10 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
     }
     if request.open && request.format != CallOutputFormat::Html {
         eprintln!("error: --open requires --format html");
+        return ExitCode::FAILURE;
+    }
+    if request.include_source && request.format != CallOutputFormat::Html {
+        eprintln!("error: --include-source requires --format html");
         return ExitCode::FAILURE;
     }
     if !request.path.is_dir() {
@@ -1372,7 +1383,13 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             print!("{}", render_call_dot(&view));
             ExitCode::SUCCESS
         }
-        CallOutputFormat::Html => emit_call_html(&view, request.output, request.open),
+        CallOutputFormat::Html => emit_call_html(
+            &view,
+            request.path,
+            request.include_source,
+            request.output,
+            request.open,
+        ),
     }
 }
 
@@ -1440,8 +1457,18 @@ fn print_call_ranking(heading: &str, view: &CallGraphView, fan_in: bool) {
     }
 }
 
-fn emit_call_html(view: &CallGraphView, output: Option<&Path>, open: bool) -> ExitCode {
-    let html = match render_call_html(view) {
+fn emit_call_html(
+    view: &CallGraphView,
+    project_root: &Path,
+    include_source: bool,
+    output: Option<&Path>,
+    open: bool,
+) -> ExitCode {
+    let html = match include_source {
+        true => render_call_html_with_source(view, project_root).map_err(|error| error.to_string()),
+        false => render_call_html(view).map_err(|error| error.to_string()),
+    };
+    let html = match html {
         Ok(html) => html,
         Err(error) => {
             eprintln!("error: could not render interactive call graph: {error}");
