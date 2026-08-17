@@ -7,13 +7,14 @@ use crate::lines::RepositoryLineCounts;
 use crate::review::{ReviewEvaluation, review_status_code};
 
 pub const INVENTORY_REPORT_SCHEMA_VERSION: &str = "0.2.0";
-pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.4.0";
+pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.5.0";
 pub const INVENTORY_REPORT_DEFINITION_VERSION: &str = "inventory-report-v1";
 pub const PHYSICAL_LINE_DEFINITION_VERSION: &str = "physical-lines-v1";
-pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v2";
-pub const REVIEW_REPORT_SCHEMA_VERSION: &str = "0.1.0";
-pub const GATE_REPORT_SCHEMA_VERSION: &str = "0.1.0";
-pub const REVIEW_ANALYSIS_DEFINITION_VERSION: &str = "review-analysis-v1";
+pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v3";
+pub const REVIEW_REPORT_SCHEMA_VERSION: &str = "0.2.0";
+pub const GATE_REPORT_SCHEMA_VERSION: &str = "0.2.0";
+pub const REVIEW_ANALYSIS_DEFINITION_VERSION: &str = "review-analysis-v2";
+pub const DOCUMENTATION_REPORT_SCHEMA_VERSION: &str = "0.1.0";
 
 #[cfg(unix)]
 const JSON_PATH_ENCODING: &str = "utf8-with-percent-encoded-bytes";
@@ -173,6 +174,7 @@ pub struct AnalysisJsonReport {
     pub analysis: JsonSyntaxAnalysis,
     pub inventory: JsonAnalysisInventory,
     pub analyzers: Vec<JsonAnalyzerRun>,
+    pub documentation_coverage: JsonDocumentationCoverage,
     pub review: JsonReview,
     pub diagnostics: Vec<JsonAnalysisDiagnostic>,
 }
@@ -184,7 +186,31 @@ pub struct ReviewJsonReport {
     pub analysis: JsonReviewAnalysis,
     pub ranking_count: usize,
     pub finding_count: usize,
+    pub documentation_coverage: JsonDocumentationCoverage,
     pub review: JsonReview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DocumentationJsonReport {
+    pub report_schema_version: &'static str,
+    pub tool: JsonTool,
+    pub analysis: JsonDocumentationAnalysis,
+    pub documentation_coverage: JsonDocumentationCoverage,
+    pub review: JsonDocumentationReview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonDocumentationAnalysis {
+    pub kind: &'static str,
+    pub definition_version: &'static str,
+    pub selection: JsonAnalysisSelection,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonDocumentationReview {
+    pub status: &'static str,
+    pub human_review_below: Option<u8>,
+    pub findings: Vec<JsonReviewFinding>,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,7 +235,8 @@ pub struct JsonGateFinding {
     pub rule_id: String,
     pub path: Option<String>,
     pub qualified_name: Option<String>,
-    pub score: Option<u64>,
+    pub observed_value: Option<u64>,
+    pub unit: Option<&'static str>,
     pub risk: &'static str,
     pub required_action: &'static str,
     pub message: String,
@@ -286,6 +313,7 @@ pub struct JsonSymbol {
     pub id: String,
     pub parent_id: Option<String>,
     pub kind: &'static str,
+    pub direct_declaration: bool,
     pub name: String,
     pub qualified_name: String,
     pub span: JsonSourceSpan,
@@ -295,9 +323,61 @@ pub struct JsonSymbol {
     pub modifiers: Vec<&'static str>,
     pub parameters: Vec<JsonParameter>,
     pub decorators: Vec<JsonDecorator>,
+    pub documentation: Option<JsonSymbolDocumentation>,
     pub nesting_events: Vec<JsonNestingEvent>,
     pub decision_events: Vec<JsonDecisionEvent>,
     pub measurements: Vec<JsonMeasurement>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonSymbolDocumentation {
+    pub status: &'static str,
+    pub span: Option<JsonSourceSpan>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonDocumentationCoverage {
+    pub definition_version: &'static str,
+    pub status: &'static str,
+    pub applicable_files: usize,
+    pub skipped_test_files: usize,
+    pub unsupported_selected_files: usize,
+    pub counts: JsonDocumentationCounts,
+    pub by_kind: BTreeMap<String, JsonDocumentationCounts>,
+    pub files: Vec<JsonDocumentationFile>,
+    pub missing_symbol_count: usize,
+    pub missing_symbols: Vec<JsonDocumentationSymbol>,
+    pub unavailable_symbol_count: usize,
+    pub unavailable_symbols: Vec<JsonDocumentationSymbol>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonDocumentationCounts {
+    pub eligible: usize,
+    pub documented: usize,
+    pub missing: usize,
+    pub unavailable: usize,
+    pub measured: usize,
+    pub coverage_basis_points: Option<u16>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonDocumentationFile {
+    pub path: String,
+    pub status: &'static str,
+    pub counts: JsonDocumentationCounts,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonDocumentationSymbol {
+    pub path: String,
+    pub symbol_id: String,
+    pub qualified_name: String,
+    pub kind: &'static str,
+    pub span: JsonSourceSpan,
+    pub docstring_span: Option<JsonSourceSpan>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -392,6 +472,7 @@ pub struct JsonReviewPolicy {
     pub risk_bands: JsonRiskBands,
     pub complexity_review_at: u64,
     pub complexity_block_at: Option<u64>,
+    pub documentation_review_below: Option<u8>,
     pub exceptions: Vec<JsonReviewException>,
 }
 
@@ -446,6 +527,7 @@ pub struct JsonReviewFinding {
     pub span: Option<JsonSourceSpan>,
     pub observed_value: Option<u64>,
     pub threshold: Option<u64>,
+    pub unit: Option<&'static str>,
     pub acknowledged: bool,
     pub message: String,
 }
@@ -579,6 +661,10 @@ impl AnalysisJsonReport {
                     .collect(),
             },
             analyzers,
+            documentation_coverage: JsonDocumentationCoverage::from_coverage(
+                &analysis.documentation_coverage,
+                top,
+            ),
             review: match top {
                 Some(limit) => JsonReview::from_review_with_top(&analysis.review, Some(limit)),
                 None => JsonReview::from_review(&analysis.review),
@@ -612,7 +698,72 @@ impl ReviewJsonReport {
             },
             ranking_count: complete_review.rankings.len(),
             finding_count: complete_review.findings.len(),
+            documentation_coverage: JsonDocumentationCoverage::from_coverage(
+                &analysis.documentation_coverage,
+                top,
+            ),
             review,
+        }
+    }
+}
+
+impl DocumentationJsonReport {
+    pub fn from_analysis(
+        analysis: &crate::analysis::RepositoryAnalysis,
+        top: Option<usize>,
+    ) -> Self {
+        let documentation_findings = analysis
+            .review
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding
+                    .rule_id
+                    .starts_with("python-documentation-coverage-")
+            })
+            .take(top.unwrap_or(usize::MAX))
+            .map(JsonReviewFinding::from_finding)
+            .collect::<Vec<_>>();
+        let status = if documentation_findings
+            .iter()
+            .any(|finding| finding.required_action == "human-review")
+        {
+            "human-review-required"
+        } else {
+            "pass"
+        };
+        Self {
+            report_schema_version: DOCUMENTATION_REPORT_SCHEMA_VERSION,
+            tool: JsonTool {
+                name: "codegraide",
+                version: env!("CARGO_PKG_VERSION"),
+            },
+            analysis: JsonDocumentationAnalysis {
+                kind: "documentation-coverage",
+                definition_version: analysis.documentation_coverage.definition_version,
+                selection: JsonAnalysisSelection {
+                    target_kind: match analysis.selection.target_kind {
+                        crate::analysis::AnalysisTargetKind::Directory => "directory",
+                        crate::analysis::AnalysisTargetKind::File => "file",
+                    },
+                    match_patterns: analysis.selection.match_patterns.clone(),
+                    files: analysis
+                        .selection
+                        .selected_files
+                        .iter()
+                        .map(|path| json_path(path))
+                        .collect(),
+                },
+            },
+            documentation_coverage: JsonDocumentationCoverage::from_coverage(
+                &analysis.documentation_coverage,
+                top,
+            ),
+            review: JsonDocumentationReview {
+                status,
+                human_review_below: analysis.review.policy.documentation_review_below,
+                findings: documentation_findings,
+            },
         }
     }
 }
@@ -630,7 +781,8 @@ impl GateJsonReport {
                 rule_id: finding.rule_id.clone(),
                 path: finding.path.as_deref().map(json_path),
                 qualified_name: finding.qualified_name.clone(),
-                score: finding.observed_value,
+                observed_value: finding.observed_value,
+                unit: finding.unit,
                 risk: finding.risk.as_str(),
                 required_action: finding.required_action.as_str(),
                 message: finding.message.clone(),
@@ -678,6 +830,7 @@ impl JsonSymbol {
             id: symbol.id.as_str().to_owned(),
             parent_id: symbol.parent_id.as_ref().map(|id| id.as_str().to_owned()),
             kind: symbol.kind.as_str(),
+            direct_declaration: symbol.direct_declaration,
             name: symbol.name.clone(),
             qualified_name: symbol.qualified_name.clone(),
             span: JsonSourceSpan::from_span(symbol.span),
@@ -699,6 +852,13 @@ impl JsonSymbol {
                 .iter()
                 .map(JsonDecorator::from_decorator)
                 .collect(),
+            documentation: symbol.documentation.as_ref().map(|documentation| {
+                JsonSymbolDocumentation {
+                    status: documentation.status.as_str(),
+                    span: documentation.span.map(JsonSourceSpan::from_span),
+                    reason: documentation.reason.clone(),
+                }
+            }),
             nesting_events: symbol
                 .nesting_events
                 .iter()
@@ -727,6 +887,86 @@ impl JsonDecisionEvent {
     }
 }
 
+impl JsonDocumentationCoverage {
+    fn from_coverage(
+        coverage: &crate::documentation::DocumentationCoverage,
+        top: Option<usize>,
+    ) -> Self {
+        let mut missing_symbols = coverage
+            .missing_symbols
+            .iter()
+            .map(JsonDocumentationSymbol::from_symbol)
+            .collect::<Vec<_>>();
+        let mut unavailable_symbols = coverage
+            .unavailable_symbols
+            .iter()
+            .map(JsonDocumentationSymbol::from_symbol)
+            .collect::<Vec<_>>();
+        if let Some(limit) = top {
+            missing_symbols.truncate(limit);
+            unavailable_symbols.truncate(limit);
+        }
+        Self {
+            definition_version: coverage.definition_version,
+            status: coverage.status.as_str(),
+            applicable_files: coverage.applicable_files,
+            skipped_test_files: coverage.skipped_test_files,
+            unsupported_selected_files: coverage.unsupported_selected_files,
+            counts: JsonDocumentationCounts::from_counts(coverage.counts),
+            by_kind: coverage
+                .by_kind
+                .iter()
+                .map(|(kind, counts)| {
+                    (
+                        kind.as_str().to_owned(),
+                        JsonDocumentationCounts::from_counts(*counts),
+                    )
+                })
+                .collect(),
+            files: coverage
+                .files
+                .iter()
+                .map(|file| JsonDocumentationFile {
+                    path: json_path(&file.path),
+                    status: file.status.as_str(),
+                    counts: JsonDocumentationCounts::from_counts(file.counts),
+                })
+                .collect(),
+            missing_symbol_count: coverage.missing_symbols.len(),
+            missing_symbols,
+            unavailable_symbol_count: coverage.unavailable_symbols.len(),
+            unavailable_symbols,
+        }
+    }
+}
+
+impl JsonDocumentationCounts {
+    fn from_counts(counts: crate::documentation::DocumentationCounts) -> Self {
+        Self {
+            eligible: counts.eligible,
+            documented: counts.documented,
+            missing: counts.missing,
+            unavailable: counts.unavailable,
+            measured: counts.measured(),
+            coverage_basis_points: counts.coverage_basis_points(),
+        }
+    }
+}
+
+impl JsonDocumentationSymbol {
+    fn from_symbol(symbol: &crate::documentation::DocumentationSymbol) -> Self {
+        Self {
+            path: json_path(&symbol.path),
+            symbol_id: symbol.symbol_id.clone(),
+            qualified_name: symbol.qualified_name.clone(),
+            kind: symbol.kind.as_str(),
+            span: JsonSourceSpan::from_span(symbol.span),
+            docstring_span: symbol.docstring_span.map(JsonSourceSpan::from_span),
+            reason: symbol.reason.clone(),
+        }
+    }
+}
+
 impl JsonReview {
     fn from_review(review: &ReviewEvaluation) -> Self {
         Self::from_review_with_top(review, None)
@@ -745,6 +985,7 @@ impl JsonReview {
                 },
                 complexity_review_at: review.policy.complexity_review_at,
                 complexity_block_at: review.policy.complexity_block_at,
+                documentation_review_below: review.policy.documentation_review_below,
                 exceptions: review
                     .policy
                     .exceptions
@@ -785,19 +1026,7 @@ impl JsonReview {
             findings: review
                 .findings
                 .iter()
-                .map(|finding| JsonReviewFinding {
-                    rule_id: finding.rule_id.clone(),
-                    risk: finding.risk.as_str(),
-                    required_action: finding.required_action.as_str(),
-                    path: finding.path.as_deref().map(json_path),
-                    symbol_id: finding.symbol_id.clone(),
-                    qualified_name: finding.qualified_name.clone(),
-                    span: finding.span.map(JsonSourceSpan::from_span),
-                    observed_value: finding.observed_value,
-                    threshold: finding.threshold,
-                    acknowledged: finding.acknowledged,
-                    message: finding.message.clone(),
-                })
+                .map(JsonReviewFinding::from_finding)
                 .collect(),
         };
         if let Some(limit) = top {
@@ -805,6 +1034,25 @@ impl JsonReview {
             output.findings.truncate(limit);
         }
         output
+    }
+}
+
+impl JsonReviewFinding {
+    fn from_finding(finding: &crate::review::ReviewFinding) -> Self {
+        Self {
+            rule_id: finding.rule_id.clone(),
+            risk: finding.risk.as_str(),
+            required_action: finding.required_action.as_str(),
+            path: finding.path.as_deref().map(json_path),
+            symbol_id: finding.symbol_id.clone(),
+            qualified_name: finding.qualified_name.clone(),
+            span: finding.span.map(JsonSourceSpan::from_span),
+            observed_value: finding.observed_value,
+            threshold: finding.threshold,
+            unit: finding.unit,
+            acknowledged: finding.acknowledged,
+            message: finding.message.clone(),
+        }
     }
 }
 

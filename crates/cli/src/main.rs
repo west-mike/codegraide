@@ -16,11 +16,12 @@ use codegraide_core::{
     DependencyEnvironmentReport, DependencyGraphAnalysis, DependencyGraphFilter,
     DependencyGraphInputExclusions, DependencyGraphQuery, DependencyGraphQueryResult,
     DependencyGraphView, DependencyJsonReport, DependencyNode, DependencyNodeKind,
-    DependencyQueryDirection, FileCategory, GateJsonReport, InventoryJsonReport, InventoryOptions,
-    RepositoryAnalysis, RepositoryInventory, ReviewJsonReport, ReviewOptions, ReviewStatus,
-    analyze_call_graph, analyze_dependency_graph, analyze_repository, call_node_name,
-    dependency_query_view, explain_dependency_cycles, filter_call_graph, filter_dependency_graph,
-    inventory_repository_with_options, query_dependency_graph, render_call_dot, render_call_html,
+    DependencyQueryDirection, DocumentationJsonReport, FileCategory, GateJsonReport,
+    InventoryJsonReport, InventoryOptions, RepositoryAnalysis, RepositoryInventory,
+    ReviewJsonReport, ReviewOptions, ReviewStatus, analyze_call_graph, analyze_dependency_graph,
+    analyze_repository, call_node_name, dependency_query_view, explain_dependency_cycles,
+    filter_call_graph, filter_dependency_graph, inventory_repository_with_options,
+    query_dependency_graph, render_call_dot, render_call_html, render_call_html_with_source,
     render_call_mermaid, render_dependency_dot, render_dependency_html,
     render_dependency_html_with_query, render_dependency_mermaid, review_status_code,
 };
@@ -118,6 +119,18 @@ enum Command {
         #[arg(long, conflicts_with = "complexity_block_at")]
         no_complexity_block: bool,
 
+        /// Disable Python documentation coverage extraction and reporting
+        #[arg(long, conflicts_with = "documentation_review_below")]
+        no_documentation_coverage: bool,
+
+        /// Include conventional Python test files in documentation coverage
+        #[arg(long, conflicts_with = "no_documentation_coverage")]
+        include_tests: bool,
+
+        /// Require human review when Python documentation coverage is below this percentage
+        #[arg(long, value_name = "PERCENT", value_parser = parse_percentage)]
+        documentation_review_below: Option<u8>,
+
         /// Return gate-specific exit codes for review status
         #[arg(long)]
         gate: bool,
@@ -133,6 +146,44 @@ enum Command {
         /// Output format
         #[arg(long, value_enum, default_value_t = AnalyzeOutputFormat::Terminal)]
         format: AnalyzeOutputFormat,
+    },
+    /// Report Python module, class, function, and method docstring coverage
+    Comments {
+        /// File or directory to analyze
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+
+        /// Select repository-relative paths with a full-match regular expression; may repeat
+        #[arg(long = "match", value_name = "REGEX", action = clap::ArgAction::Append)]
+        match_patterns: Vec<String>,
+
+        /// Include files matching a repository-relative glob even when Git ignores them
+        #[arg(long, value_name = "GLOB", action = clap::ArgAction::Append)]
+        include_ignored: Vec<String>,
+
+        /// Load an explicit review policy file
+        #[arg(long, value_name = "PATH")]
+        policy: Option<PathBuf>,
+
+        /// Require human review when Python documentation coverage is below this percentage
+        #[arg(long, value_name = "PERCENT", value_parser = parse_percentage)]
+        documentation_review_below: Option<u8>,
+
+        /// Include conventional Python test files in documentation coverage
+        #[arg(long)]
+        include_tests: bool,
+
+        /// Limit missing and unavailable symbol details
+        #[arg(long, value_name = "COUNT", value_parser = parse_positive_usize)]
+        top: Option<usize>,
+
+        /// Return 0 when the configured threshold passes and 2 when review is required
+        #[arg(long)]
+        gate: bool,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = CommentsOutputFormat::Terminal)]
+        format: CommentsOutputFormat,
     },
     /// Resolve Python imports and build a dependency graph
     Dependencies {
@@ -284,6 +335,10 @@ enum Command {
         /// Open HTML output in the default browser
         #[arg(long)]
         open: bool,
+
+        /// Embed function bodies and call-site context in HTML output
+        #[arg(long)]
+        include_source: bool,
     },
 }
 
@@ -298,6 +353,12 @@ enum AnalyzeOutputFormat {
     Terminal,
     Json,
     Gate,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum CommentsOutputFormat {
+    Terminal,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
@@ -393,6 +454,16 @@ fn parse_positive_usize(value: &str) -> Result<usize, String> {
     Ok(parsed)
 }
 
+fn parse_percentage(value: &str) -> Result<u8, String> {
+    let parsed = value
+        .parse::<u8>()
+        .map_err(|_| "PERCENT must be an integer between 1 and 100".to_owned())?;
+    if !(1..=100).contains(&parsed) {
+        return Err("PERCENT must be an integer between 1 and 100".to_owned());
+    }
+    Ok(parsed)
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
 
@@ -424,6 +495,9 @@ fn main() -> ExitCode {
             complexity_review_at,
             complexity_block_at,
             no_complexity_block,
+            no_documentation_coverage,
+            include_tests,
+            documentation_review_below,
             gate,
             profile,
             top,
@@ -438,9 +512,33 @@ fn main() -> ExitCode {
             complexity_review_at: *complexity_review_at,
             complexity_block_at: *complexity_block_at,
             no_complexity_block: *no_complexity_block,
+            no_documentation_coverage: *no_documentation_coverage,
+            include_tests: *include_tests,
+            documentation_review_below: *documentation_review_below,
             gate: *gate,
             profile: *profile,
             top: *top,
+            format: *format,
+        }),
+        Command::Comments {
+            path,
+            match_patterns,
+            include_ignored,
+            policy,
+            documentation_review_below,
+            include_tests,
+            top,
+            gate,
+            format,
+        } => run_comments(&CommentsRequest {
+            path,
+            match_patterns,
+            include_ignored,
+            policy: policy.as_deref(),
+            documentation_review_below: *documentation_review_below,
+            include_tests: *include_tests,
+            top: *top,
+            gate: *gate,
             format: *format,
         }),
         Command::Dependencies {
@@ -501,6 +599,7 @@ fn main() -> ExitCode {
             format,
             output,
             open,
+            include_source,
         } => run_calls(&CallRequest {
             path,
             python: python.as_deref(),
@@ -514,6 +613,7 @@ fn main() -> ExitCode {
             format: *format,
             output: output.as_deref(),
             open: *open,
+            include_source: *include_source,
         }),
     }
 }
@@ -648,7 +748,7 @@ fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
     }
 
     let mut registry = AnalyzerRegistry::new();
-    let analyzer = match PythonAnalyzer::new() {
+    let analyzer = match PythonAnalyzer::without_documentation() {
         Ok(analyzer) => analyzer,
         Err(error) => {
             eprintln!("error: could not initialize Python analyzer: {error}");
@@ -1157,6 +1257,7 @@ struct CallRequest<'a> {
     format: CallOutputFormat,
     output: Option<&'a Path>,
     open: bool,
+    include_source: bool,
 }
 
 fn run_calls(request: &CallRequest<'_>) -> ExitCode {
@@ -1168,6 +1269,10 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
         eprintln!("error: --open requires --format html");
         return ExitCode::FAILURE;
     }
+    if request.include_source && request.format != CallOutputFormat::Html {
+        eprintln!("error: --include-source requires --format html");
+        return ExitCode::FAILURE;
+    }
     if !request.path.is_dir() {
         eprintln!(
             "error: call analysis requires a project directory: {}",
@@ -1176,7 +1281,7 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut registry = AnalyzerRegistry::new();
-    let analyzer = match PythonAnalyzer::new() {
+    let analyzer = match PythonAnalyzer::without_documentation() {
         Ok(analyzer) => analyzer,
         Err(error) => {
             eprintln!("error: could not initialize Python analyzer: {error}");
@@ -1278,7 +1383,13 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             print!("{}", render_call_dot(&view));
             ExitCode::SUCCESS
         }
-        CallOutputFormat::Html => emit_call_html(&view, request.output, request.open),
+        CallOutputFormat::Html => emit_call_html(
+            &view,
+            request.path,
+            request.include_source,
+            request.output,
+            request.open,
+        ),
     }
 }
 
@@ -1346,8 +1457,18 @@ fn print_call_ranking(heading: &str, view: &CallGraphView, fan_in: bool) {
     }
 }
 
-fn emit_call_html(view: &CallGraphView, output: Option<&Path>, open: bool) -> ExitCode {
-    let html = match render_call_html(view) {
+fn emit_call_html(
+    view: &CallGraphView,
+    project_root: &Path,
+    include_source: bool,
+    output: Option<&Path>,
+    open: bool,
+) -> ExitCode {
+    let html = match include_source {
+        true => render_call_html_with_source(view, project_root).map_err(|error| error.to_string()),
+        false => render_call_html(view).map_err(|error| error.to_string()),
+    };
+    let html = match html {
         Ok(html) => html,
         Err(error) => {
             eprintln!("error: could not render interactive call graph: {error}");
@@ -1378,6 +1499,204 @@ fn emit_call_html(view: &CallGraphView, output: Option<&Path>, open: bool) -> Ex
 }
 
 #[derive(Debug, Clone, Copy)]
+struct CommentsRequest<'a> {
+    path: &'a Path,
+    match_patterns: &'a [String],
+    include_ignored: &'a [String],
+    policy: Option<&'a Path>,
+    documentation_review_below: Option<u8>,
+    include_tests: bool,
+    top: Option<usize>,
+    gate: bool,
+    format: CommentsOutputFormat,
+}
+
+fn run_comments(request: &CommentsRequest<'_>) -> ExitCode {
+    let mut registry = AnalyzerRegistry::new();
+    let analyzer = match PythonAnalyzer::new() {
+        Ok(analyzer) => analyzer,
+        Err(error) => {
+            eprintln!("error: could not initialize Python analyzer: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = registry.register(Box::new(analyzer)) {
+        eprintln!("error: could not register Python analyzer: {error}");
+        return ExitCode::FAILURE;
+    }
+    let analysis = match analyze_repository(
+        &AnalysisOptions {
+            target: request.path.to_path_buf(),
+            match_patterns: request.match_patterns.to_vec(),
+            include_ignored: request.include_ignored.to_vec(),
+            documentation_coverage: true,
+            documentation_include_tests: request.include_tests,
+            review: ReviewOptions {
+                policy_path: request.policy.map(Path::to_path_buf),
+                documentation_review_below: request.documentation_review_below,
+                ..ReviewOptions::default()
+            },
+        },
+        &mut registry,
+    ) {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            eprintln!(
+                "error: failed to analyze documentation coverage for {}: {error}",
+                request.path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    if request.gate && analysis.review.policy.documentation_review_below.is_none() {
+        eprintln!(
+            "error: comments --gate requires --documentation-review-below or a policy threshold"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let output_status = match request.format {
+        CommentsOutputFormat::Terminal => {
+            print_documentation_summary(request.path, &analysis, request.top.unwrap_or(20));
+            ExitCode::SUCCESS
+        }
+        CommentsOutputFormat::Json => {
+            match serde_json::to_string_pretty(&DocumentationJsonReport::from_analysis(
+                &analysis,
+                request.top,
+            )) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("error: could not serialize documentation report: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+    };
+    if output_status != ExitCode::SUCCESS {
+        return output_status;
+    }
+    if request.gate {
+        review_exit_code(documentation_review_status(&analysis))
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn documentation_review_status(analysis: &RepositoryAnalysis) -> ReviewStatus {
+    if analysis.review.findings.iter().any(|finding| {
+        finding
+            .rule_id
+            .starts_with("python-documentation-coverage-")
+            && finding.required_action == codegraide_core::RequiredAction::HumanReview
+    }) {
+        ReviewStatus::HumanReviewRequired
+    } else {
+        ReviewStatus::Pass
+    }
+}
+
+fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: usize) {
+    let coverage = &analysis.documentation_coverage;
+    println!("Documentation target: {}", path.display());
+    println!("Status: {}", coverage.status.as_str());
+    println!(
+        "Files: applicable={} skipped_tests={} unsupported={}",
+        coverage.applicable_files, coverage.skipped_test_files, coverage.unsupported_selected_files
+    );
+    println!(
+        "Coverage: documented={}/{} missing={} unavailable={} ({})",
+        coverage.counts.documented,
+        coverage.counts.measured(),
+        coverage.counts.missing,
+        coverage.counts.unavailable,
+        format_documentation_percentage(coverage.counts.coverage_basis_points())
+    );
+    println!("\nBy symbol kind:");
+    if coverage.by_kind.is_empty() {
+        println!("  (none)");
+    } else {
+        for (kind, counts) in &coverage.by_kind {
+            println!(
+                "  {}: documented={}/{} missing={} unavailable={} ({})",
+                kind.as_str(),
+                counts.documented,
+                counts.measured(),
+                counts.missing,
+                counts.unavailable,
+                format_documentation_percentage(counts.coverage_basis_points())
+            );
+        }
+    }
+    println!("\nFiles:");
+    if coverage.files.is_empty() {
+        println!("  (none)");
+    } else {
+        for file in &coverage.files {
+            println!(
+                "  {}: documented={}/{} missing={} unavailable={} ({})",
+                file.path.display(),
+                file.counts.documented,
+                file.counts.measured(),
+                file.counts.missing,
+                file.counts.unavailable,
+                format_documentation_percentage(file.counts.coverage_basis_points())
+            );
+        }
+    }
+    println!("\nMissing documentation:");
+    if coverage.missing_symbols.is_empty() {
+        println!("  (none)");
+    } else {
+        for symbol in coverage.missing_symbols.iter().take(top) {
+            println!(
+                "  {}:{} {} {}",
+                symbol.path.display(),
+                symbol.span.start.line,
+                symbol.kind.as_str(),
+                symbol.qualified_name
+            );
+        }
+        if coverage.missing_symbols.len() > top {
+            println!(
+                "  ... {} more (use --top to change the limit)",
+                coverage.missing_symbols.len() - top
+            );
+        }
+    }
+    if !coverage.unavailable_symbols.is_empty() {
+        println!("\nUnavailable documentation evidence:");
+        for symbol in coverage.unavailable_symbols.iter().take(top) {
+            println!(
+                "  {}:{} {} {}: {}",
+                symbol.path.display(),
+                symbol.span.start.line,
+                symbol.kind.as_str(),
+                symbol.qualified_name,
+                symbol.reason.as_deref().unwrap_or("unavailable")
+            );
+        }
+    }
+    for finding in analysis.review.findings.iter().filter(|finding| {
+        finding
+            .rule_id
+            .starts_with("python-documentation-coverage-")
+    }) {
+        println!("\nReview: {}", finding.message);
+    }
+}
+
+fn format_documentation_percentage(basis_points: Option<u16>) -> String {
+    basis_points.map_or_else(
+        || "not available".to_owned(),
+        |value| format!("{}.{:02}%", value / 100, value % 100),
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
 struct AnalyzeRequest<'a> {
     path: &'a Path,
     match_patterns: &'a [String],
@@ -1388,6 +1707,9 @@ struct AnalyzeRequest<'a> {
     complexity_review_at: Option<u64>,
     complexity_block_at: Option<u64>,
     no_complexity_block: bool,
+    no_documentation_coverage: bool,
+    include_tests: bool,
+    documentation_review_below: Option<u8>,
     gate: bool,
     profile: ReportProfile,
     top: Option<usize>,
@@ -1405,6 +1727,9 @@ fn run_analyze(request: &AnalyzeRequest<'_>) -> ExitCode {
         complexity_review_at,
         complexity_block_at,
         no_complexity_block,
+        no_documentation_coverage,
+        include_tests,
+        documentation_review_below,
         gate,
         profile,
         top,
@@ -1442,7 +1767,11 @@ fn run_analyze(request: &AnalyzeRequest<'_>) -> ExitCode {
     }
 
     let mut registry = AnalyzerRegistry::new();
-    let analyzer = match PythonAnalyzer::new() {
+    let analyzer = match if no_documentation_coverage {
+        PythonAnalyzer::without_documentation()
+    } else {
+        PythonAnalyzer::new()
+    } {
         Ok(analyzer) => analyzer,
         Err(error) => {
             eprintln!("error: could not initialize Python analyzer: {error}");
@@ -1459,11 +1788,14 @@ fn run_analyze(request: &AnalyzeRequest<'_>) -> ExitCode {
             target: path.to_path_buf(),
             match_patterns: match_patterns.to_vec(),
             include_ignored: include_ignored.to_vec(),
+            documentation_coverage: !no_documentation_coverage,
+            documentation_include_tests: include_tests,
             review: ReviewOptions {
                 policy_path: policy.map(Path::to_path_buf),
                 complexity_review_at,
                 complexity_block_at,
                 no_complexity_block,
+                documentation_review_below,
             },
         },
         &mut registry,
@@ -1602,6 +1934,18 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         analysis.review.coverage.eligible_callables,
         analysis.review.coverage.unavailable_callables,
         analysis.review.coverage.unsupported_selected_files
+    );
+    let documentation = &analysis.documentation_coverage;
+    println!(
+        "Documentation coverage: status={} files={} skipped-tests={} documented={}/{} missing={} unavailable={} ({})",
+        documentation.status.as_str(),
+        documentation.applicable_files,
+        documentation.skipped_test_files,
+        documentation.counts.documented,
+        documentation.counts.measured(),
+        documentation.counts.missing,
+        documentation.counts.unavailable,
+        format_documentation_percentage(documentation.counts.coverage_basis_points())
     );
     println!("\nInventory languages:");
     if analysis.inventory_languages.is_empty() {
@@ -1836,6 +2180,16 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
                             .value
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "unavailable".to_owned())
+                    );
+                }
+                if let Some(documentation) = &symbol.documentation {
+                    println!(
+                        "      documentation: {}{}",
+                        documentation.status.as_str(),
+                        documentation
+                            .span
+                            .map(|span| format!(" at {}:{}", span.start.line, span.start.column))
+                            .unwrap_or_default()
                     );
                 }
                 for event in &symbol.decision_events {

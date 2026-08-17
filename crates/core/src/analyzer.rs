@@ -25,6 +25,7 @@ impl AnalysisLevel {
 pub enum AnalyzerCapability {
     Parse,
     Symbols,
+    Documentation,
     DependencyReferences,
     CallReferences,
     DecisionEvents,
@@ -37,6 +38,7 @@ impl AnalyzerCapability {
         match self {
             Self::Parse => "parse",
             Self::Symbols => "symbols",
+            Self::Documentation => "documentation",
             Self::DependencyReferences => "dependency-references",
             Self::CallReferences => "call-references",
             Self::DecisionEvents => "decision-events",
@@ -300,6 +302,30 @@ pub struct Measurement {
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum DocumentationStatus {
+    Documented,
+    Missing,
+    Unavailable,
+}
+
+impl DocumentationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Documented => "documented",
+            Self::Missing => "missing",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SymbolDocumentation {
+    pub status: DocumentationStatus,
+    pub span: Option<SourceSpan>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum DependencyKind {
     Import,
 }
@@ -432,6 +458,7 @@ pub struct Symbol {
     pub id: SymbolId,
     pub parent_id: Option<SymbolId>,
     pub kind: SymbolKind,
+    pub direct_declaration: bool,
     pub name: String,
     pub qualified_name: String,
     pub span: SourceSpan,
@@ -441,6 +468,7 @@ pub struct Symbol {
     pub modifiers: BTreeSet<SymbolModifier>,
     pub parameters: Vec<Parameter>,
     pub decorators: Vec<Decorator>,
+    pub documentation: Option<SymbolDocumentation>,
     pub nesting_events: Vec<NestingEvent>,
     pub decision_events: Vec<DecisionEvent>,
     pub measurements: Vec<Measurement>,

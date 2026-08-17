@@ -153,7 +153,24 @@ fn call_renderers_and_focus_use_the_shared_explorer() {
     assert!(html_stdout.contains("\"graph_kind\":\"calls\""));
     assert!(html_stdout.contains("shop.helpers::Client.send"));
     assert!(html_stdout.contains("\"qualified_name\":\"shop.helpers.Client\""));
+    assert!(!html_stdout.contains("\"source\":{"));
     assert!(!html_stdout.contains("https://"));
+
+    let source_html = run(&[
+        "calls",
+        repository.path().to_str().unwrap(),
+        "--local-only",
+        "--format",
+        "html",
+        "--include-source",
+    ]);
+    let source_html_stdout = String::from_utf8(source_html.stdout).expect("UTF-8 source HTML");
+    assert!(source_html.status.success());
+    assert!(source_html_stdout.contains("\"source\":{"));
+    assert!(source_html_stdout.contains("\"lines\":[\"def helper():\",\"    return 1\"]"));
+    assert!(source_html_stdout.contains("sourceAutoExpandLines = 15"));
+    assert!(source_html_stdout.contains("callerRelationshipsMarkup"));
+    assert!(source_html_stdout.contains("data-relation-source"));
 
     let dot = run(&[
         "calls",
@@ -165,6 +182,22 @@ fn call_renderers_and_focus_use_the_shared_explorer() {
     let dot_stdout = String::from_utf8(dot.stdout).expect("UTF-8 DOT");
     assert!(dot.status.success());
     assert!(dot_stdout.starts_with("digraph call_graph"));
+}
+
+#[test]
+fn including_source_is_limited_to_html_output() {
+    let repository = call_project();
+    let output = run(&[
+        "calls",
+        repository.path().to_str().unwrap(),
+        "--format",
+        "json",
+        "--include-source",
+    ]);
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+
+    assert!(!output.status.success());
+    assert!(stderr.contains("--include-source requires --format html"));
 }
 
 #[test]

@@ -7,10 +7,11 @@ use serde::Deserialize;
 
 use crate::analysis::AnalyzerRun;
 use crate::analyzer::{FileAnalysisStatus, SourceSpan, SymbolKind};
+use crate::documentation::DocumentationCoverage;
 use crate::inventory::detect_language;
 
-pub const REVIEW_POLICY_VERSION: &str = "0.1.0";
-pub const REVIEW_POLICY_DEFINITION_VERSION: &str = "review-policy-v1";
+pub const REVIEW_POLICY_VERSION: &str = "0.2.0";
+pub const REVIEW_POLICY_DEFINITION_VERSION: &str = "review-policy-v2";
 pub const PYTHON_CYCLOMATIC_COMPLEXITY: &str = "python-cyclomatic-complexity";
 pub const PYTHON_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION: &str = "python-cyclomatic-complexity-v1";
 
@@ -20,6 +21,7 @@ pub struct ReviewOptions {
     pub complexity_review_at: Option<u64>,
     pub complexity_block_at: Option<u64>,
     pub no_complexity_block: bool,
+    pub documentation_review_below: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -137,6 +139,7 @@ pub struct ReviewPolicy {
     pub risk_bands: RiskBands,
     pub complexity_review_at: u64,
     pub complexity_block_at: Option<u64>,
+    pub documentation_review_below: Option<u8>,
     pub exceptions: Vec<ReviewException>,
 }
 
@@ -148,6 +151,7 @@ impl ReviewPolicy {
             risk_bands: RiskBands::default(),
             complexity_review_at: 11,
             complexity_block_at: None,
+            documentation_review_below: None,
             exceptions: Vec::new(),
         };
 
@@ -162,13 +166,21 @@ impl ReviewPolicy {
                     message: source.to_string(),
                 }
             })?;
-            if raw.policy_version != REVIEW_POLICY_VERSION {
+            if !matches!(raw.policy_version.as_str(), "0.1.0" | REVIEW_POLICY_VERSION) {
                 return Err(ReviewPolicyError::Invalid {
                     path: Some(path.clone()),
                     message: format!(
-                        "unsupported policy_version {}; expected {}",
+                        "unsupported policy_version {}; expected 0.1.0 or {}",
                         raw.policy_version, REVIEW_POLICY_VERSION
                     ),
+                });
+            }
+            if raw.policy_version == "0.1.0"
+                && raw.documentation_coverage.human_review_below.is_some()
+            {
+                return Err(ReviewPolicyError::Invalid {
+                    path: Some(path.clone()),
+                    message: "documentation_coverage requires policy_version 0.2.0".to_owned(),
                 });
             }
             if let Some(value) = raw.cyclomatic_complexity.human_review_at {
@@ -190,6 +202,7 @@ impl ReviewPolicy {
                 .into_iter()
                 .map(ReviewException::try_from)
                 .collect::<Result<Vec<_>, _>>()?;
+            policy.documentation_review_below = raw.documentation_coverage.human_review_below;
             policy.sources.push("policy-file".to_owned());
         }
 
@@ -212,6 +225,12 @@ impl ReviewPolicy {
                 });
             }
             policy.complexity_block_at = None;
+            if !policy.sources.iter().any(|source| source == "cli") {
+                policy.sources.push("cli".to_owned());
+            }
+        }
+        if options.documentation_review_below.is_some() {
+            policy.documentation_review_below = options.documentation_review_below;
             if !policy.sources.iter().any(|source| source == "cli") {
                 policy.sources.push("cli".to_owned());
             }
@@ -251,6 +270,15 @@ impl ReviewPolicy {
                 path: None,
                 message: "risk bands must be strictly increasing and start at 2 or above"
                     .to_owned(),
+            });
+        }
+        if self
+            .documentation_review_below
+            .is_some_and(|threshold| !(1..=100).contains(&threshold))
+        {
+            return Err(ReviewPolicyError::Invalid {
+                path: None,
+                message: "documentation review threshold must be between 1 and 100".to_owned(),
             });
         }
         Ok(())
@@ -301,6 +329,14 @@ struct RawPolicy {
     policy_version: String,
     #[serde(default)]
     cyclomatic_complexity: RawComplexityPolicy,
+    #[serde(default)]
+    documentation_coverage: RawDocumentationPolicy,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawDocumentationPolicy {
+    human_review_below: Option<u8>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -400,6 +436,7 @@ pub struct ReviewFinding {
     pub span: Option<SourceSpan>,
     pub observed_value: Option<u64>,
     pub threshold: Option<u64>,
+    pub unit: Option<&'static str>,
     pub acknowledged: bool,
     pub message: String,
 }
@@ -416,6 +453,7 @@ pub struct ReviewEvaluation {
 pub fn evaluate_review(
     selected_files: &[PathBuf],
     analyzers: &[AnalyzerRun],
+    documentation: &DocumentationCoverage,
     policy: ReviewPolicy,
 ) -> ReviewEvaluation {
     let analyzer_languages = analyzers
@@ -466,6 +504,7 @@ pub fn evaluate_review(
                     span: None,
                     observed_value: None,
                     threshold: None,
+                    unit: None,
                     acknowledged: false,
                     message: format!(
                         "analysis is {} for {}; complexity evidence is incomplete",
@@ -498,6 +537,7 @@ pub fn evaluate_review(
                         span: Some(symbol.span),
                         observed_value: None,
                         threshold: None,
+                        unit: Some("score"),
                         acknowledged: false,
                         message: "cyclomatic complexity is unavailable for this callable"
                             .to_owned(),
@@ -516,6 +556,7 @@ pub fn evaluate_review(
                         span: Some(symbol.span),
                         observed_value: None,
                         threshold: None,
+                        unit: Some("score"),
                         acknowledged: false,
                         message: "cyclomatic complexity is unavailable for this callable"
                             .to_owned(),
@@ -577,6 +618,7 @@ pub fn evaluate_review(
                             .unwrap_or(policy.complexity_review_at),
                         _ => policy.complexity_review_at,
                     }),
+                    unit: Some("score"),
                     acknowledged,
                     message,
                 });
@@ -595,6 +637,7 @@ pub fn evaluate_review(
             span: None,
             observed_value: None,
             threshold: None,
+            unit: None,
             acknowledged: false,
             message: "no recognized source files were selected for review".to_owned(),
         });
@@ -609,12 +652,66 @@ pub fn evaluate_review(
             span: None,
             observed_value: None,
             threshold: None,
+            unit: None,
             acknowledged: false,
             message: format!(
                 "{} selected source file(s) have no registered analyzer",
                 unsupported_selected_files
             ),
         });
+    }
+
+    if let Some(threshold) = policy.documentation_review_below {
+        match documentation.threshold_is_met(threshold) {
+            Some(true) => {}
+            Some(false) => {
+                let basis_points = documentation
+                    .counts
+                    .coverage_basis_points()
+                    .expect("measured documentation coverage has a percentage");
+                findings.push(ReviewFinding {
+                    rule_id: "python-documentation-coverage-below-threshold".to_owned(),
+                    risk: RiskLevel::Unknown,
+                    required_action: RequiredAction::HumanReview,
+                    path: None,
+                    symbol_id: None,
+                    qualified_name: None,
+                    span: None,
+                    observed_value: Some(u64::from(basis_points)),
+                    threshold: Some(u64::from(threshold) * 100),
+                    unit: Some("basis-points"),
+                    acknowledged: false,
+                    message: format!(
+                        "Python documentation coverage is {}.{:02}% ({}/{}) and is below the {}% review threshold",
+                        basis_points / 100,
+                        basis_points % 100,
+                        documentation.counts.documented,
+                        documentation.counts.measured(),
+                        threshold
+                    ),
+                });
+            }
+            None => findings.push(ReviewFinding {
+                rule_id: "python-documentation-coverage-unavailable".to_owned(),
+                risk: RiskLevel::Unknown,
+                required_action: RequiredAction::HumanReview,
+                path: None,
+                symbol_id: None,
+                qualified_name: None,
+                span: None,
+                observed_value: documentation
+                    .counts
+                    .coverage_basis_points()
+                    .map(u64::from),
+                threshold: Some(u64::from(threshold) * 100),
+                unit: Some("basis-points"),
+                acknowledged: false,
+                message: format!(
+                    "Python documentation coverage cannot be evaluated against the {threshold}% review threshold because analysis is {}",
+                    documentation.status.as_str()
+                ),
+            }),
+        }
     }
 
     rankings.sort_by(|left, right| {

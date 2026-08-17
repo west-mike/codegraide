@@ -154,10 +154,48 @@ cargo run -p codegraide -- analyze . --details src/service.py
 cargo run -p codegraide -- analyze . --format json
 ```
 
-The syntax report uses the independent `syntax-analysis-v2` definition and
-schema version `0.4.0`; inventory remains on schema `0.2.0`. Syntax output
+The syntax report uses the independent `syntax-analysis-v3` definition and
+schema version `0.5.0`; inventory remains on schema `0.2.0`. Syntax output
 preserves import evidence without labeling it as project-resolved; the separate
 dependency command performs that enrichment.
+
+### Python documentation coverage
+
+`analyze` reports `python-documentation-coverage-v1` by default. It recognizes
+nonblank conventional Python docstrings on modules, top-level classes and
+functions, and methods declared directly on top-level classes. Nested
+definitions, definitions nested under conditional/control-flow statements, and
+lambdas are excluded from the denominator. Repeated `@overload` declarations
+and their implementation count as one logical function. Private, dunder,
+async, static, class, and property methods remain eligible.
+
+Conventional Python test paths are skipped by default for this metric: a
+`test/` or `tests/` path component, `test_*.py`, `*_test.py`, or `conftest.py`.
+This does not stop `analyze` from parsing or reporting those files. Add
+`--include-tests` to either `analyze` or `comments` when test documentation is
+part of the intended contract. Use `--no-documentation-coverage` when this
+evidence is not needed at all.
+
+The focused command reports the same evidence without the rest of the syntax
+detail:
+
+```sh
+cargo run -p codegraide -- comments .
+cargo run -p codegraide -- comments . --include-tests
+cargo run -p codegraide -- comments . --format json
+cargo run -p codegraide -- comments . --documentation-review-below 80 --gate
+```
+
+Coverage is `documented / (documented + missing)`. Unavailable symbols are
+reported separately and prevent a configured threshold from passing. JSON
+retains exact counts and integer basis points; threshold comparison uses the
+exact fraction rather than the displayed percentage. The standalone report
+schema starts at `0.1.0`. Codegraide does not emit docstring text.
+
+Detection follows Python's first-statement docstring convention. Leading
+comments are ignored; bytes and formatted strings do not count. Empty or
+whitespace-only lexical content is missing. Escape sequences are not decoded,
+which is an explicit limitation of this static v1 analysis.
 
 ## Python dependency graphs
 
@@ -324,13 +362,15 @@ Build an evidence-backed symbol call graph with a separate command and report:
 cargo run -p codegraide -- calls .
 cargo run -p codegraide -- calls . --local-only --format html \
   --output calls.html --open
+cargo run -p codegraide -- calls . --local-only --format html \
+  --include-source --output calls-with-source.html --open
 cargo run -p codegraide -- calls . \
   --focus shop.service::Client.send --direction both --depth 1 \
   --format mermaid
 cargo run -p codegraide -- calls . --cycles-only --format dot > calls.dot
 ```
 
-Call extraction is `python-call-references-v1`; syntax JSON is `0.4.0`, and the
+Call extraction is `python-call-references-v1`; syntax JSON is `0.5.0`, and the
 independent call-report JSON schema starts at `0.1.0` with `call-graph-v1`.
 Selectors use `module::qualified.symbol`, such as
 `shop.service::Client.send`; duplicate definitions require `#N`.
@@ -344,12 +384,23 @@ runtime metaprogramming are deliberately not guessed. The HTML output reuses
 the offline explorer, including hierarchy drill-down, search, neighborhood
 views, evidence inspection, recursion groups, pan, and zoom.
 
+Add `--include-source` to HTML output to embed source for local symbols.
+Selecting a symbol then shows its definition and every direct caller grouped
+with the supporting call sites. Definitions up to 15 lines expand
+automatically; longer definitions and caller bodies can be expanded in the
+sidebar. Hovering a caller card highlights the corresponding graph
+relationship. Source embedding is opt-in because it increases report size and
+can expose private repository code when an HTML report is shared. It changes
+only the HTML presentation payload, not the stable call-report JSON schema.
+
 ## Deterministic review gate
 
 Syntax analysis also produces a review evaluation for the selected snapshot, meant as a source of
 evidence for an agent or reviewer, not a code-quality "score".
 The default policy reports human review when a Python callable's cyclomatic
-complexity is 11 or higher. Default risk bands are defined as: low (1-5), moderate (6-10), high
+complexity is 11 or higher. Documentation coverage is informational unless an
+explicit `documentation_coverage.human_review_below` policy or
+`--documentation-review-below` CLI threshold is supplied. Default risk bands are defined as: low (1-5), moderate (6-10), high
 (11-20), and critical (21+). A finding uses `risk` for the measured band and
 `required_action` for the policy result: `none`, `human-review`, or `block`.
 The overall status is `pass`, `human-review-required`, or `blocked`.
@@ -394,7 +445,7 @@ while still calculating the ranking and evidence. Every exception requires a rea
 
 ```json
 {
-  "policy_version": "0.1.0",
+  "policy_version": "0.2.0",
   "cyclomatic_complexity": {
     "human_review_at": 11,
     "block_at": 21,
@@ -406,9 +457,14 @@ while still calculating the ranking and evidence. Every exception requires a rea
         "approved_max": 24
       }
     ]
+  },
+  "documentation_coverage": {
+    "human_review_below": 80
   }
 }
 ```
+
+Policy format `0.1.0` remains accepted for existing complexity-only files.
 
 ### How Python complexity is calculated
 
