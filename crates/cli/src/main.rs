@@ -2010,6 +2010,31 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             symbol_counts[3],
             symbol_counts[4]
         );
+        let explicit_export_counts =
+            run.files
+                .iter()
+                .fold(([0usize; 4], 0usize), |(mut statuses, mut names), file| {
+                    if let Some(exports) = &file.facts.explicit_exports {
+                        match exports.status {
+                            codegraide_core::ExplicitExportStatus::NotDeclared => statuses[0] += 1,
+                            codegraide_core::ExplicitExportStatus::Complete => statuses[1] += 1,
+                            codegraide_core::ExplicitExportStatus::Partial => statuses[2] += 1,
+                            codegraide_core::ExplicitExportStatus::Unavailable => statuses[3] += 1,
+                        }
+                        names += exports.names.len();
+                    }
+                    (statuses, names)
+                });
+        if explicit_export_counts.0.iter().sum::<usize>() > 0 {
+            println!(
+                "    explicit exports: complete={} partial={} unavailable={} not-declared={} names={}",
+                explicit_export_counts.0[1],
+                explicit_export_counts.0[2],
+                explicit_export_counts.0[3],
+                explicit_export_counts.0[0],
+                explicit_export_counts.1
+            );
+        }
         print_top_measurements(
             run,
             "function-declaration-physical-lines",
@@ -2213,6 +2238,28 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
                         .map(|name| format!("::{name}"))
                         .unwrap_or_default()
                 );
+            }
+            if let Some(exports) = &file.facts.explicit_exports {
+                println!("    explicit exports [{}]", exports.status.as_str());
+                if let Some(span) = exports.declaration_span {
+                    println!(
+                        "      declaration: {}:{}-{}:{}",
+                        span.start.line, span.start.column, span.end.line, span.end.column
+                    );
+                }
+                for name in &exports.names {
+                    println!(
+                        "      {:?}: {}:{}-{}:{}",
+                        name.name,
+                        name.span.start.line,
+                        name.span.start.column,
+                        name.span.end.line,
+                        name.span.end.column
+                    );
+                }
+                if let Some(reason) = &exports.reason {
+                    println!("      reason: {reason}");
+                }
             }
         }
     }

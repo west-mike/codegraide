@@ -25,6 +25,11 @@ fn default_terminal_analysis_reports_summary_without_diagnostic_details() {
     assert!(stdout.contains("Analyzers:"));
     assert!(stdout.contains("analyzed=2 successful=1 partial=1 failed=0"));
     assert!(stdout.contains("diagnostics: bad.py (1)"));
+    assert!(
+        stdout.contains(
+            "explicit exports: complete=0 partial=0 unavailable=1 not-declared=1 names=0"
+        )
+    );
     assert!(!stdout.contains("parser could not interpret"));
     assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
 }
@@ -54,7 +59,7 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
     let repository = tempdir().expect("temporary repository should be created");
     fs::write(
         repository.path().join("main.py"),
-        "import os\ndef main(value):\n    print(value)\n    return value\n",
+        "__all__ = ['main']\nimport os\ndef main(value):\n    print(value)\n    return value\n",
     )
     .expect("Python fixture");
     fs::write(repository.path().join("main.rs"), "fn main() {}\n").expect("Rust fixture");
@@ -69,11 +74,11 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert_eq!(report["report_schema_version"], "0.5.0");
+    assert_eq!(report["report_schema_version"], "0.6.0");
     assert_eq!(report["analysis"]["kind"], "syntax-analysis");
     assert_eq!(
         report["analysis"]["definition_version"],
-        "syntax-analysis-v3"
+        "syntax-analysis-v4"
     );
     assert_eq!(report["inventory"]["inventory_only_languages"]["rust"], 1);
     assert_eq!(
@@ -85,6 +90,18 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
         "python-symbols-v1"
     );
     assert_eq!(report["analyzers"][0]["files"][0]["status"], "successful");
+    assert_eq!(
+        report["analyzers"][0]["files"][0]["explicit_exports"]["status"],
+        "complete"
+    );
+    assert_eq!(
+        report["analyzers"][0]["files"][0]["explicit_exports"]["names"][0]["name"],
+        "main"
+    );
+    assert_eq!(
+        report["analyzers"][0]["files"][0]["explicit_exports"]["names"][0]["span"]["start"]["line"],
+        1
+    );
     assert_eq!(report["documentation_coverage"]["status"], "complete");
     let symbols = report["analyzers"][0]["files"][0]["symbols"]
         .as_array()
@@ -377,7 +394,7 @@ fn details_flag_prints_facts_for_only_the_requested_file() {
     let repository = tempdir().expect("temporary repository should be created");
     fs::write(
         repository.path().join("one.py"),
-        "def one(value):\n    return value\n",
+        "__all__ = ['one']\ndef one(value):\n    return value\n",
     )
     .expect("Python fixture");
     fs::write(repository.path().join("two.py"), "import os\n").expect("Python fixture");
@@ -393,5 +410,7 @@ fn details_flag_prints_facts_for_only_the_requested_file() {
     assert!(stdout.contains("Details:"));
     assert!(stdout.contains("one.py:"));
     assert!(stdout.contains("function one"));
+    assert!(stdout.contains("explicit exports [complete]"));
+    assert!(stdout.contains("\"one\": 1:12-1:17"));
     assert!(!stdout.contains("two.py:"));
 }

@@ -7,10 +7,10 @@ use crate::lines::RepositoryLineCounts;
 use crate::review::{ReviewEvaluation, review_status_code};
 
 pub const INVENTORY_REPORT_SCHEMA_VERSION: &str = "0.2.0";
-pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.5.0";
+pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.6.0";
 pub const INVENTORY_REPORT_DEFINITION_VERSION: &str = "inventory-report-v1";
 pub const PHYSICAL_LINE_DEFINITION_VERSION: &str = "physical-lines-v1";
-pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v3";
+pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v4";
 pub const REVIEW_REPORT_SCHEMA_VERSION: &str = "0.2.0";
 pub const GATE_REPORT_SCHEMA_VERSION: &str = "0.2.0";
 pub const REVIEW_ANALYSIS_DEFINITION_VERSION: &str = "review-analysis-v2";
@@ -306,6 +306,21 @@ pub struct JsonFileAnalysis {
     pub symbols: Vec<JsonSymbol>,
     pub dependencies: Vec<JsonDependencyReference>,
     pub calls: Vec<JsonCallReference>,
+    pub explicit_exports: Option<JsonExplicitExports>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonExplicitExports {
+    pub status: &'static str,
+    pub names: Vec<JsonExplicitExportName>,
+    pub declaration_span: Option<JsonSourceSpan>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonExplicitExportName {
+    pub name: String,
+    pub span: JsonSourceSpan,
 }
 
 #[derive(Debug, Serialize)]
@@ -618,6 +633,11 @@ impl AnalysisJsonReport {
                             .iter()
                             .map(JsonCallReference::from_call)
                             .collect(),
+                        explicit_exports: file
+                            .facts
+                            .explicit_exports
+                            .as_ref()
+                            .map(JsonExplicitExports::from_exports),
                     })
                     .collect(),
             })
@@ -883,6 +903,24 @@ impl JsonDecisionEvent {
         Self {
             kind: event.kind.as_str(),
             span: JsonSourceSpan::from_span(event.span),
+        }
+    }
+}
+
+impl JsonExplicitExports {
+    fn from_exports(exports: &crate::analyzer::ExplicitExports) -> Self {
+        Self {
+            status: exports.status.as_str(),
+            names: exports
+                .names
+                .iter()
+                .map(|name| JsonExplicitExportName {
+                    name: name.name.clone(),
+                    span: JsonSourceSpan::from_span(name.span),
+                })
+                .collect(),
+            declaration_span: exports.declaration_span.map(JsonSourceSpan::from_span),
+            reason: exports.reason.clone(),
         }
     }
 }
