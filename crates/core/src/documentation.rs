@@ -498,6 +498,7 @@ mod tests {
                     ],
                     dependencies: Vec::new(),
                     calls: Vec::new(),
+                    explicit_exports: None,
                 },
             }],
         }

@@ -119,12 +119,19 @@ cargo run -p codegraide -- analyze src/service.py
 ```
 
 The initial analyzer parses Python with Tree-sitter and reports modules,
-classes, functions, methods, decorators, parameters, syntactic imports, and
-basic function measurements. A valid syntax tree is `successful`; a tree
-containing parser recovery nodes is `partial`. Parse diagnostics are evidence
-of syntax recovery only.
+classes, functions, methods, decorators, parameters, syntactic imports,
+explicit `__all__` exports, and basic function measurements. A valid syntax
+tree is `successful`; a tree containing parser recovery nodes is `partial`.
+Parse diagnostics are evidence of syntax recovery only.
 Languages that inventory recognizes but cannot analyze are still shown as
 `inventory only`.
+
+Python explicit exports use the `python-explicit-exports-v1` definition. Direct
+module-level list/tuple assignments, `+=`, `append`, and `extend` operations are
+evaluated without executing Python. Complete results contain the ordered names
+and source spans. Dynamic, conditional, aliased, escaped, or parser-recovered
+values are reported as partial or unavailable rather than guessed. A parsed
+file without a recognized `__all__` declaration reports `not-declared`.
 
 Use a full-match repository-relative regex to select files, and repeat it for
 OR selection:
@@ -154,8 +161,8 @@ cargo run -p codegraide -- analyze . --details src/service.py
 cargo run -p codegraide -- analyze . --format json
 ```
 
-The syntax report uses the independent `syntax-analysis-v3` definition and
-schema version `0.5.0`; inventory remains on schema `0.2.0`. Syntax output
+The syntax report uses the independent `syntax-analysis-v4` definition and
+schema version `0.6.0`; inventory remains on schema `0.2.0`. Syntax output
 preserves import evidence without labeling it as project-resolved; the separate
 dependency command performs that enrichment.
 
@@ -370,7 +377,7 @@ cargo run -p codegraide -- calls . \
 cargo run -p codegraide -- calls . --cycles-only --format dot > calls.dot
 ```
 
-Call extraction is `python-call-references-v1`; syntax JSON is `0.5.0`, and the
+Call extraction is `python-call-references-v1`; syntax JSON is `0.6.0`, and the
 independent call-report JSON schema starts at `0.1.0` with `call-graph-v1`.
 Selectors use `module::qualified.symbol`, such as
 `shop.service::Client.send`; duplicate definitions require `#N`.

@@ -31,6 +31,7 @@ pub enum AnalyzerCapability {
     DecisionEvents,
     NestingEvents,
     Measurements,
+    ExplicitExports,
 }
 
 impl AnalyzerCapability {
@@ -44,6 +45,7 @@ impl AnalyzerCapability {
             Self::DecisionEvents => "decision-events",
             Self::NestingEvents => "nesting-events",
             Self::Measurements => "measurements",
+            Self::ExplicitExports => "explicit-exports",
         }
     }
 }
@@ -479,6 +481,7 @@ pub struct AnalysisFacts {
     pub symbols: Vec<Symbol>,
     pub dependencies: Vec<DependencyReference>,
     pub calls: Vec<CallReference>,
+    pub explicit_exports: Option<ExplicitExports>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -596,6 +599,39 @@ impl fmt::Display for AnalyzerRegistryError {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ExplicitExportStatus {
+    NotDeclared,
+    Complete,
+    Partial,
+    Unavailable,
+}
+
+impl ExplicitExportStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotDeclared => "not-declared",
+            Self::Complete => "complete",
+            Self::Partial => "partial",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ExplicitExportName {
+    pub name: String,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ExplicitExports {
+    pub status: ExplicitExportStatus,
+    pub names: Vec<ExplicitExportName>,
+    pub declaration_span: Option<SourceSpan>,
+    pub reason: Option<String>,
+}
+
 impl std::error::Error for AnalyzerRegistryError {}
 
 #[cfg(test)]
@@ -648,5 +684,24 @@ mod tests {
             .expect_err("duplicate registration should fail");
 
         assert_eq!(error.to_string(), "analyzer already registered for python");
+    }
+
+    #[test]
+    fn explicit_export_contract_names_are_stable() {
+        let statuses = [
+            (ExplicitExportStatus::NotDeclared, "not-declared"),
+            (ExplicitExportStatus::Complete, "complete"),
+            (ExplicitExportStatus::Partial, "partial"),
+            (ExplicitExportStatus::Unavailable, "unavailable"),
+        ];
+
+        for (status, expected) in statuses {
+            assert_eq!(status.as_str(), expected);
+        }
+
+        assert_eq!(
+            AnalyzerCapability::ExplicitExports.as_str(),
+            "explicit-exports"
+        );
     }
 }

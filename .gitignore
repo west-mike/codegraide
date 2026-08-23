@@ -28,6 +28,7 @@
 /.dev-scripts/
 /AGENTS.md
 /tools/pi/
+.pi-subagents/
 
 # Private Obsidian documentation and agent memory vault
 /codegraide/

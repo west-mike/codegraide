@@ -25,11 +25,12 @@ pub use analyzer::{
     AnalysisDiagnostic, AnalysisFacts, AnalysisInput, AnalysisLevel, AnalyzerCapability,
     AnalyzerDescriptor, AnalyzerRegistry, AnalyzerRegistryError, CallArgumentShape, CallReference,
     DecisionEvent, DecisionEventKind, Decorator, DependencyKind, DependencyReference,
-    DiagnosticSeverity, DocumentationStatus, FileAnalysis, FileAnalysisStatus, GrammarDescriptor,
-    ImportContext, ImportRequirement, ImportScope, ImportUsage, LanguageAnalyzer, Measurement,
-    MeasurementStatus, NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor,
-    ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolDocumentation,
-    SymbolId, SymbolKind, SymbolModifier,
+    DiagnosticSeverity, DocumentationStatus, ExplicitExportName, ExplicitExportStatus,
+    ExplicitExports, FileAnalysis, FileAnalysisStatus, GrammarDescriptor, ImportContext,
+    ImportRequirement, ImportScope, ImportUsage, LanguageAnalyzer, Measurement, MeasurementStatus,
+    NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor, ResolutionLevel,
+    SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolDocumentation, SymbolId,
+    SymbolKind, SymbolModifier,
 };
 pub use call_output::CallJsonReport;
 pub use calls::{

@@ -15,6 +15,7 @@ use codegraide_core::{
 use tree_sitter::{Language, Node, Parser, Query};
 
 mod call_resolution;
+mod explicit_exports;
 mod resolution;
 
 pub use call_resolution::{PythonCallResolution, resolve_python_calls};
@@ -23,7 +24,7 @@ pub use resolution::{
     PythonResolutionError, PythonResolutionOptions, resolve_python_dependencies,
 };
 
-const ANALYZER_VERSION: &str = "0.2.0";
+const ANALYZER_VERSION: &str = "0.3.0";
 const GRAMMAR_VERSION: &str = "0.25.0";
 
 pub struct PythonAnalyzer {
@@ -83,6 +84,7 @@ impl PythonAnalyzer {
             AnalyzerCapability::DecisionEvents,
             AnalyzerCapability::NestingEvents,
             AnalyzerCapability::Measurements,
+            AnalyzerCapability::ExplicitExports,
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -111,6 +113,10 @@ impl PythonAnalyzer {
                 name: "decisions".to_owned(),
                 version: "python-decisions-v1".to_owned(),
             },
+            QueryDescriptor {
+                name: "explicit-exports".to_owned(),
+                version: "python-explicit-exports-v1".to_owned(),
+            },
         ];
         if documentation_enabled {
             capabilities.insert(AnalyzerCapability::Documentation);
@@ -131,6 +137,8 @@ impl PythonAnalyzer {
             "Non-UTF-8 source text is parsed by byte span but names and snippets use lossy decoding."
                 .to_owned(),
             "Cyclomatic complexity covers callable bodies; module and class initialization bodies are not scored in v1."
+                .to_owned(),
+            "Explicit exports statically evaluate direct module-level __all__ list/tuple assignments, += updates, append, and extend; conditional updates, aliases, arbitrary calls, escaped string values, and other dynamic behavior remain partial or unavailable."
                 .to_owned(),
         ];
         if documentation_enabled {
@@ -196,6 +204,7 @@ impl LanguageAnalyzer for PythonAnalyzer {
         collect_diagnostics(tree.root_node(), false, &mut diagnostics);
         diagnostics.sort_by(|left, right| diagnostic_key(left).cmp(&diagnostic_key(right)));
 
+        let explicit_exports = explicit_exports::extract(tree.root_node(), input.source);
         let mut extraction = Extraction::new(input.path, input.source, self.documentation_enabled);
         extraction.extract_module(tree.root_node());
         extraction.finish_measurements();
@@ -212,6 +221,7 @@ impl LanguageAnalyzer for PythonAnalyzer {
                 symbols: extraction.symbols,
                 dependencies: extraction.dependencies,
                 calls: extraction.calls,
+                explicit_exports: Some(explicit_exports),
             },
         }
     }
@@ -1468,6 +1478,7 @@ fn diagnostic_key(diagnostic: &AnalysisDiagnostic) -> (usize, usize, &str, &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codegraide_core::ExplicitExportStatus;
 
     fn analyze(source: &[u8]) -> FileAnalysis {
         let mut analyzer = PythonAnalyzer::new().expect("Python grammar should initialize");
@@ -1475,6 +1486,136 @@ mod tests {
             path: Path::new("src/example.py"),
             source,
         })
+    }
+
+    #[test]
+    fn extracts_complete_module_explicit_exports_in_runtime_order() {
+        let result = analyze(include_bytes!(
+            "../tests/fixtures/explicit_exports_complete.py"
+        ));
+        let exports = result
+            .facts
+            .explicit_exports
+            .expect("Python should report explicit export applicability");
+
+        assert_eq!(exports.status, ExplicitExportStatus::Complete);
+        assert_eq!(
+            exports
+                .names
+                .iter()
+                .map(|name| name.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Client", "request", "Response", "Session", "get", "post"]
+        );
+        assert_eq!(
+            exports
+                .declaration_span
+                .expect("declaration span")
+                .start
+                .line,
+            1
+        );
+        assert!(exports.names.iter().all(|name| name.span.start.line > 0));
+        assert_eq!(exports.reason, None);
+    }
+
+    #[test]
+    fn reports_known_names_when_explicit_exports_are_partial() {
+        let result = analyze(include_bytes!(
+            "../tests/fixtures/explicit_exports_partial.py"
+        ));
+        let exports = result
+            .facts
+            .explicit_exports
+            .expect("Python should report explicit export applicability");
+
+        assert_eq!(exports.status, ExplicitExportStatus::Partial);
+        assert_eq!(exports.names[0].name, "known");
+        let reason = exports.reason.expect("partial extraction reason");
+        assert!(reason.contains("not a fully static list or tuple"));
+        assert!(reason.contains("conditional or nested"));
+    }
+
+    #[test]
+    fn distinguishes_unavailable_and_not_declared_explicit_exports() {
+        let unavailable = analyze(include_bytes!(
+            "../tests/fixtures/explicit_exports_unavailable.py"
+        ));
+        let unavailable = unavailable
+            .facts
+            .explicit_exports
+            .expect("Python should report explicit export applicability");
+        assert_eq!(unavailable.status, ExplicitExportStatus::Unavailable);
+        assert!(unavailable.names.is_empty());
+        assert!(unavailable.reason.is_some());
+
+        let not_declared = analyze(b"def public():\n    pass\n");
+        let not_declared = not_declared
+            .facts
+            .explicit_exports
+            .expect("Python should report explicit export applicability");
+        assert_eq!(not_declared.status, ExplicitExportStatus::NotDeclared);
+        assert!(not_declared.names.is_empty());
+        assert_eq!(not_declared.declaration_span, None);
+        assert_eq!(not_declared.reason, None);
+    }
+
+    #[test]
+    fn parser_recovery_prevents_complete_explicit_export_claims() {
+        let result = analyze(b"__all__ = ['known']\ndef broken(\n");
+        let exports = result
+            .facts
+            .explicit_exports
+            .expect("Python should report explicit export applicability");
+
+        assert_eq!(exports.status, ExplicitExportStatus::Partial);
+        assert_eq!(exports.names[0].name, "known");
+        assert!(
+            exports
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("parser recovery"))
+        );
+    }
+
+    #[test]
+    fn later_static_assignment_resets_uncertain_exports_but_subscript_mutation_does_not() {
+        let reset = analyze(b"__all__ = build_exports()\n__all__ = ['known']\n");
+        let reset = reset
+            .facts
+            .explicit_exports
+            .expect("Python should report explicit export applicability");
+        assert_eq!(reset.status, ExplicitExportStatus::Complete);
+        assert_eq!(reset.names[0].name, "known");
+
+        let subscript = analyze(b"__all__ = ['known']\n__all__[0] = dynamic_name\n");
+        let subscript = subscript
+            .facts
+            .explicit_exports
+            .expect("Python should report explicit export applicability");
+        assert_eq!(subscript.status, ExplicitExportStatus::Partial);
+        assert_eq!(subscript.names[0].name, "known");
+        assert!(
+            subscript
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("subscripted"))
+        );
+    }
+
+    #[test]
+    fn explicit_export_capability_and_definition_are_declared() {
+        let analyzer = PythonAnalyzer::new().expect("Python grammar should initialize");
+
+        assert!(
+            analyzer
+                .descriptor()
+                .capabilities
+                .contains(&AnalyzerCapability::ExplicitExports)
+        );
+        assert!(analyzer.descriptor().queries.iter().any(|query| {
+            query.name == "explicit-exports" && query.version == "python-explicit-exports-v1"
+        }));
     }
 
     #[test]
