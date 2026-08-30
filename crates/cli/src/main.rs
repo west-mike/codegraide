@@ -7,24 +7,28 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use codegraide_analyzer_python::{
-    PythonAnalyzer, PythonEnvironmentSelection, PythonResolutionOptions, resolve_python_calls,
+    PythonEnvironmentSelection, PythonResolutionOptions, resolve_python_calls,
     resolve_python_dependencies,
 };
 use codegraide_core::{
-    AnalysisJsonReport, AnalysisOptions, AnalyzerRegistry, CallDirection, CallGraphAnalysis,
-    CallGraphFilter, CallGraphView, CallJsonReport, DependencyDirection,
-    DependencyEnvironmentReport, DependencyGraphAnalysis, DependencyGraphFilter,
-    DependencyGraphInputExclusions, DependencyGraphQuery, DependencyGraphQueryResult,
-    DependencyGraphView, DependencyJsonReport, DependencyNode, DependencyNodeKind,
-    DependencyQueryDirection, DocumentationJsonReport, FileCategory, GateJsonReport,
-    InventoryJsonReport, InventoryOptions, RepositoryAnalysis, RepositoryInventory,
-    ReviewJsonReport, ReviewOptions, ReviewStatus, analyze_call_graph, analyze_dependency_graph,
-    analyze_repository, call_node_name, dependency_query_view, explain_dependency_cycles,
-    filter_call_graph, filter_dependency_graph, inventory_repository_with_options,
-    query_dependency_graph, render_call_dot, render_call_html, render_call_html_with_source,
-    render_call_mermaid, render_dependency_dot, render_dependency_html,
-    render_dependency_html_with_query, render_dependency_mermaid, review_status_code,
+    AnalysisJsonReport, AnalysisOptions, CallDirection, CallGraphAnalysis, CallGraphFilter,
+    CallGraphView, CallJsonReport, DependencyDirection, DependencyEnvironmentReport,
+    DependencyGraphAnalysis, DependencyGraphFilter, DependencyGraphInputExclusions,
+    DependencyGraphQuery, DependencyGraphQueryResult, DependencyGraphView, DependencyJsonReport,
+    DependencyNode, DependencyNodeKind, DependencyQueryDirection, DocumentationJsonReport,
+    FileCategory, GateJsonReport, InventoryJsonReport, InventoryOptions, RepositoryAnalysis,
+    RepositoryInventory, ReviewJsonReport, ReviewOptions, ReviewStatus, analyze_call_graph,
+    analyze_dependency_graph, analyze_repository, call_node_name, dependency_query_view,
+    explain_dependency_cycles, filter_call_graph, filter_dependency_graph,
+    inventory_repository_with_options, query_dependency_graph, render_call_dot, render_call_html,
+    render_call_html_with_source, render_call_mermaid, render_dependency_dot,
+    render_dependency_html, render_dependency_html_with_query, render_dependency_mermaid,
+    review_status_code,
 };
+
+use crate::bootstrap::{BuiltinAnalyzerFeatures, build_builtin_analyzer_registry};
+
+mod bootstrap;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -747,18 +751,15 @@ fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let mut registry = AnalyzerRegistry::new();
-    let analyzer = match PythonAnalyzer::without_documentation() {
-        Ok(analyzer) => analyzer,
+    let mut registry = match build_builtin_analyzer_registry(BuiltinAnalyzerFeatures {
+        documentation: false,
+    }) {
+        Ok(registry) => registry,
         Err(error) => {
-            eprintln!("error: could not initialize Python analyzer: {error}");
+            eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    if let Err(error) = registry.register(Box::new(analyzer)) {
-        eprintln!("error: could not register Python analyzer: {error}");
-        return ExitCode::FAILURE;
-    }
     let analysis = match analyze_repository(
         &AnalysisOptions {
             target: request.path.to_path_buf(),
@@ -1280,18 +1281,15 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    let mut registry = AnalyzerRegistry::new();
-    let analyzer = match PythonAnalyzer::without_documentation() {
-        Ok(analyzer) => analyzer,
+    let mut registry = match build_builtin_analyzer_registry(BuiltinAnalyzerFeatures {
+        documentation: false,
+    }) {
+        Ok(registry) => registry,
         Err(error) => {
-            eprintln!("error: could not initialize Python analyzer: {error}");
+            eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    if let Err(error) = registry.register(Box::new(analyzer)) {
-        eprintln!("error: could not register Python analyzer: {error}");
-        return ExitCode::FAILURE;
-    }
     let analysis = match analyze_repository(
         &AnalysisOptions {
             target: request.path.to_path_buf(),
@@ -1512,18 +1510,15 @@ struct CommentsRequest<'a> {
 }
 
 fn run_comments(request: &CommentsRequest<'_>) -> ExitCode {
-    let mut registry = AnalyzerRegistry::new();
-    let analyzer = match PythonAnalyzer::new() {
-        Ok(analyzer) => analyzer,
+    let mut registry = match build_builtin_analyzer_registry(BuiltinAnalyzerFeatures {
+        documentation: true,
+    }) {
+        Ok(registry) => registry,
         Err(error) => {
-            eprintln!("error: could not initialize Python analyzer: {error}");
+            eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    if let Err(error) = registry.register(Box::new(analyzer)) {
-        eprintln!("error: could not register Python analyzer: {error}");
-        return ExitCode::FAILURE;
-    }
     let analysis = match analyze_repository(
         &AnalysisOptions {
             target: request.path.to_path_buf(),
@@ -1766,29 +1761,22 @@ fn run_analyze(request: &AnalyzeRequest<'_>) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let mut registry = AnalyzerRegistry::new();
-    let analyzer = match if no_documentation_coverage {
-        PythonAnalyzer::without_documentation()
-    } else {
-        PythonAnalyzer::new()
-    } {
-        Ok(analyzer) => analyzer,
-        Err(error) => {
-            eprintln!("error: could not initialize Python analyzer: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    if let Err(error) = registry.register(Box::new(analyzer)) {
-        eprintln!("error: could not register Python analyzer: {error}");
-        return ExitCode::FAILURE;
-    }
+    let documentation = !no_documentation_coverage;
+    let mut registry =
+        match build_builtin_analyzer_registry(BuiltinAnalyzerFeatures { documentation }) {
+            Ok(registry) => registry,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
 
     let analysis = match analyze_repository(
         &AnalysisOptions {
             target: path.to_path_buf(),
             match_patterns: match_patterns.to_vec(),
             include_ignored: include_ignored.to_vec(),
-            documentation_coverage: !no_documentation_coverage,
+            documentation_coverage: documentation,
             documentation_include_tests: include_tests,
             review: ReviewOptions {
                 policy_path: policy.map(Path::to_path_buf),
