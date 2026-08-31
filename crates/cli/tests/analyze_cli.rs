@@ -32,11 +32,15 @@ fn default_terminal_analysis_reports_summary_without_diagnostic_details() {
     assert!(!stdout.contains("Inventory languages:"));
     assert!(!stdout.contains("human-review-required"));
     assert!(stdout.contains("analyzed: 2, successful: 1, partial: 1, failed: 0"));
-    assert!(stdout.contains("diagnostics: bad.py (1)"));
+    assert!(stdout.contains("diagnostics: 1 total across 1 file"));
+    assert!(stdout.contains("error[parse-error]: 1 in 1 file"));
+    assert!(stdout.contains("files with the most diagnostics:"));
+    assert!(stdout.contains("bad.py: 1"));
+    assert!(stdout.contains("Full details: use --diagnostics [FILE]."));
     assert!(stdout.contains(
         "explicit exports: complete: 0, partial: 0, unavailable: 1, not declared: 1, names: 0"
     ));
-    assert!(!stdout.contains("parser could not interpret"));
+    assert_eq!(stdout.matches("parser could not interpret").count(), 1);
     assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
 }
 

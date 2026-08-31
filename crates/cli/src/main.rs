@@ -1972,15 +1972,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             run.counts.partial,
             run.counts.failed
         );
-        for file in &run.files {
-            if !file.diagnostics.is_empty() {
-                println!(
-                    "    diagnostics: {} ({})",
-                    file.path.display(),
-                    file.diagnostics.len()
-                );
-            }
-        }
+        print_diagnostic_summary(run);
         let symbol_counts = run
             .files
             .iter()
@@ -2070,6 +2062,70 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             diagnostic.message
         );
     }
+}
+
+fn print_diagnostic_summary(run: &codegraide_core::AnalyzerRun) {
+    let mut total = 0usize;
+    let mut file_counts = BTreeMap::<PathBuf, usize>::new();
+    let mut groups = BTreeMap::<(String, String, String), (usize, BTreeSet<PathBuf>)>::new();
+    for file in &run.files {
+        if file.diagnostics.is_empty() {
+            continue;
+        }
+        total += file.diagnostics.len();
+        file_counts.insert(file.path.clone(), file.diagnostics.len());
+        for diagnostic in &file.diagnostics {
+            let group = groups
+                .entry((
+                    diagnostic.severity.as_str().to_owned(),
+                    diagnostic.code.clone(),
+                    diagnostic.message.clone(),
+                ))
+                .or_default();
+            group.0 += 1;
+            group.1.insert(file.path.clone());
+        }
+    }
+    if total == 0 {
+        return;
+    }
+
+    println!(
+        "    diagnostics: {total} total across {} {}",
+        file_counts.len(),
+        file_word(file_counts.len())
+    );
+    let mut ranked_groups = groups.into_iter().collect::<Vec<_>>();
+    ranked_groups
+        .sort_by(|left, right| right.1.0.cmp(&left.1.0).then_with(|| left.0.cmp(&right.0)));
+    for ((severity, code, message), (count, paths)) in ranked_groups.iter().take(5) {
+        println!(
+            "      {severity}[{code}]: {count} in {} {} — {message}",
+            paths.len(),
+            file_word(paths.len())
+        );
+    }
+    if ranked_groups.len() > 5 {
+        println!(
+            "      ... {} more diagnostic groups",
+            ranked_groups.len() - 5
+        );
+    }
+
+    let mut ranked_files = file_counts.into_iter().collect::<Vec<_>>();
+    ranked_files.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    println!("      files with the most diagnostics:");
+    for (path, count) in ranked_files.iter().take(5) {
+        println!("        {}: {count}", path.display());
+    }
+    if ranked_files.len() > 5 {
+        println!("        ... {} more files", ranked_files.len() - 5);
+    }
+    println!("      Full details: use --diagnostics [FILE].");
+}
+
+fn file_word(count: usize) -> &'static str {
+    if count == 1 { "file" } else { "files" }
 }
 
 fn human_review_status(status: ReviewStatus) -> &'static str {
