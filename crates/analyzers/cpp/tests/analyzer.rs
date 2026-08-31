@@ -31,7 +31,7 @@ fn descriptor_declares_exact_provenance_and_capabilities() {
     let descriptor = analyzer.descriptor();
     assert_eq!(descriptor.id, "cpp-tree-sitter");
     assert_eq!(descriptor.language.as_str(), "cpp");
-    assert_eq!(descriptor.version, "0.1.0");
+    assert_eq!(descriptor.version, "0.2.0");
     assert_eq!(descriptor.grammar.as_ref().unwrap().version, "0.23.4");
     assert!(
         descriptor
@@ -236,5 +236,65 @@ fn repeated_analysis_is_deterministic() {
     assert_eq!(
         analyze("symbols.cpp", &source),
         analyze("symbols.cpp", &source)
+    );
+}
+
+#[test]
+fn explains_recovery_caused_by_macro_dependent_syntax() {
+    let result = analyze("macro_dependent.cpp", &fixture("macro_dependent.cpp"));
+    assert_eq!(result.status, FileAnalysisStatus::Partial);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "macro-definition-recovery"
+            && diagnostic.message.contains("without preprocessing")
+    }));
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "macro-dependent-recovery"
+            && diagnostic.message.contains("depends on macro expansion")
+    }));
+    assert!(
+        result
+            .facts
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "ordinary")
+    );
+    assert!(
+        result
+            .facts
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "decorated")
+    );
+}
+
+#[test]
+fn analyzes_context_dependent_include_fragments_without_panicking() {
+    let source = fixture("context_fragment.inl");
+    let result = analyze("context_fragment.inl", &source);
+    assert_eq!(result.status, FileAnalysisStatus::Partial);
+    assert!(!result.diagnostics.is_empty());
+    assert_eq!(result, analyze("context_fragment.inl", &source));
+}
+
+#[test]
+fn preserves_partial_facts_when_the_pinned_grammar_recovers_valid_syntax() {
+    let result = analyze("grammar_recovery.cpp", &fixture("grammar_recovery.cpp"));
+    assert_eq!(result.status, FileAnalysisStatus::Partial);
+    assert!(result.diagnostics.iter().all(|diagnostic| {
+        matches!(diagnostic.code.as_str(), "parse-error" | "missing-syntax")
+    }));
+    assert!(
+        result
+            .facts
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "store")
+    );
+    assert!(
+        result
+            .facts
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "Parser")
     );
 }

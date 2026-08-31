@@ -191,7 +191,10 @@ templates, or modules, or build a C++ dependency graph. Parser recovery makes
 affected measurements unavailable. Conditional-preprocessor syntax inside a
 callable also makes its complexity and nesting unavailable because no active
 configuration is known. Macro-expanded control flow is therefore a syntactic
-lower bound.
+lower bound. Diagnostics distinguish recognizable macro-definition and macro-
+dependent recovery from other parser recovery. Files designed to be included
+inside another file, including some `.inl.hpp` files, can also be partial when
+analyzed alone because their enclosing source context is absent.
 
 ### Python documentation coverage
 

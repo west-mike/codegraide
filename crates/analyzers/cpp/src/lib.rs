@@ -17,7 +17,7 @@ pub const CPP_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION: &str = "cpp-cyclomatic-c
 pub const CPP_MAX_CONTROL_FLOW_NESTING: &str = "cpp-max-control-flow-nesting";
 pub const CPP_MAX_CONTROL_FLOW_NESTING_DEFINITION_VERSION: &str = "cpp-max-control-flow-nesting-v1";
 
-const ANALYZER_VERSION: &str = "0.1.0";
+const ANALYZER_VERSION: &str = "0.2.0";
 const GRAMMAR_VERSION: &str = "0.23.4";
 
 pub struct CppAnalyzer {
@@ -131,6 +131,10 @@ impl CppAnalyzer {
                         .to_owned(),
                     "Macro-expanded control flow is not visible, so otherwise measured complexity is a syntactic lower bound."
                         .to_owned(),
+                    "Declarations and blocks whose shape depends on macro expansion may produce partial results; diagnostics identify macro-dependent recovery when it can be recognized from the source."
+                        .to_owned(),
+                    "Include fragments such as .inl and .inl.hpp files may require their enclosing source context and can produce partial results when analyzed alone."
+                        .to_owned(),
                     "Templates are parsed without instantiation, and overloads retain syntax-level identities only."
                         .to_owned(),
                     "Out-of-class qualified definitions remain functions unless lexical class or struct ownership is present."
@@ -182,6 +186,7 @@ impl LanguageAnalyzer for CppAnalyzer {
             });
         }
         collect_diagnostics(tree.root_node(), false, &mut diagnostics);
+        classify_recovery_diagnostics(input.source, &mut diagnostics);
         diagnostics.sort_by(diagnostic_order);
 
         let mut extraction = Extraction::new(input.path, input.source);
@@ -367,6 +372,7 @@ impl<'a> Extraction<'a> {
         let Some(name_node) = declarator_name_node(declarator) else {
             return;
         };
+        let name_node = function_name_node(name_node, self.source);
         let name = node_text(name_node, self.source);
         let parent_kind = parent_id
             .as_ref()
@@ -661,6 +667,32 @@ fn declarator_name_node(node: Node<'_>) -> Option<Node<'_>> {
         .find_map(declarator_name_node)
 }
 
+fn function_name_node<'tree>(node: Node<'tree>, source: &[u8]) -> Node<'tree> {
+    let text = node_text(node, source);
+    let Some(prefix) = text.split_ascii_whitespace().next() else {
+        return node;
+    };
+    if !text.contains('\n')
+        || text.contains("::")
+        || !looks_like_macro_identifier(prefix.as_bytes())
+    {
+        return node;
+    }
+
+    last_identifier_descendant(node).unwrap_or(node)
+}
+
+fn last_identifier_descendant(node: Node<'_>) -> Option<Node<'_>> {
+    let mut result = matches!(node.kind(), "identifier" | "field_identifier").then_some(node);
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if let Some(identifier) = last_identifier_descendant(child) {
+            result = Some(identifier);
+        }
+    }
+    result
+}
+
 fn declaration_wrapper(mut node: Node<'_>) -> Node<'_> {
     while let Some(parent) = node.parent() {
         if matches!(parent.kind(), "template_declaration" | "declaration") {
@@ -698,14 +730,21 @@ fn collect_diagnostics(
         diagnostics.push(AnalysisDiagnostic {
             severity: DiagnosticSeverity::Error,
             code: "parse-error".to_owned(),
-            message: "C++ parser recovered from invalid or unsupported syntax".to_owned(),
+            message: format!(
+                "C++ parser recovered while parsing {}",
+                recovery_context(node)
+            ),
             span: Some(source_span(node)),
         });
     } else if node.is_missing() {
         diagnostics.push(AnalysisDiagnostic {
             severity: DiagnosticSeverity::Error,
             code: "missing-syntax".to_owned(),
-            message: format!("C++ parser inserted missing {} syntax", node.kind()),
+            message: format!(
+                "C++ parser inserted missing {} syntax while parsing {}",
+                node.kind(),
+                recovery_context(node)
+            ),
             span: Some(source_span(node)),
         });
     }
@@ -713,6 +752,139 @@ fn collect_diagnostics(
     for child in node.children(&mut cursor) {
         collect_diagnostics(child, ancestor_is_error || is_error, diagnostics);
     }
+}
+
+fn recovery_context(node: Node<'_>) -> &'static str {
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        if matches!(current.kind(), "preproc_def" | "preproc_function_def") {
+            return "a macro definition";
+        }
+        ancestor = current.parent();
+    }
+
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        let context = match current.kind() {
+            "preproc_if" | "preproc_ifdef" | "preproc_elif" | "preproc_else" => {
+                Some("conditional compilation")
+            }
+            "lambda_expression" => Some("a lambda"),
+            "function_definition" => Some("a function definition"),
+            "template_declaration" => Some("a template declaration"),
+            "class_specifier" => Some("a class"),
+            "struct_specifier" => Some("a struct"),
+            "parameter_declaration" | "optional_parameter_declaration" => Some("a parameter"),
+            "argument_list" | "template_argument_list" => Some("function arguments"),
+            "declaration" | "field_declaration" | "alias_declaration" => Some("a declaration"),
+            "if_statement" | "switch_statement" => Some("a condition"),
+            "for_statement" | "for_range_loop" | "while_statement" | "do_statement" => {
+                Some("a loop")
+            }
+            "expression_statement" | "binary_expression" | "call_expression" => {
+                Some("an expression")
+            }
+            _ => None,
+        };
+        if let Some(context) = context {
+            return context;
+        }
+        ancestor = current.parent();
+    }
+    "C++ source"
+}
+
+fn classify_recovery_diagnostics(source: &[u8], diagnostics: &mut [AnalysisDiagnostic]) {
+    let lines = source.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+    let macro_definition_lines = continued_macro_definition_lines(&lines);
+
+    for diagnostic in diagnostics {
+        let Some(span) = diagnostic.span else {
+            continue;
+        };
+        if macro_definition_lines.contains(&span.start.line) {
+            diagnostic.code = "macro-definition-recovery".to_owned();
+            diagnostic.message =
+                "Macro definition body could not be fully parsed without preprocessing".to_owned();
+        } else if span_contains_macro_dependent_syntax(span, &lines) {
+            diagnostic.code = "macro-dependent-recovery".to_owned();
+            diagnostic.message =
+                "C++ syntax at this location depends on macro expansion".to_owned();
+        }
+    }
+}
+
+fn continued_macro_definition_lines(lines: &[&[u8]]) -> BTreeSet<usize> {
+    let mut result = BTreeSet::new();
+    let mut continuing = false;
+
+    for (index, line) in lines.iter().enumerate() {
+        let line_number = index + 1;
+        let trimmed_start = trim_ascii_start(line);
+        let starts_definition = trimmed_start
+            .strip_prefix(b"#")
+            .map(trim_ascii_start)
+            .is_some_and(|directive| {
+                directive
+                    .strip_prefix(b"define")
+                    .is_some_and(|remainder| remainder.first().is_some_and(u8::is_ascii_whitespace))
+            });
+        if continuing || starts_definition {
+            result.insert(line_number);
+        }
+        continuing = (continuing || starts_definition) && trim_ascii_end(line).ends_with(b"\\");
+    }
+
+    result
+}
+
+fn span_contains_macro_dependent_syntax(span: SourceSpan, lines: &[&[u8]]) -> bool {
+    let start = span.start.line.saturating_sub(1);
+    let end = span.end.line.min(span.start.line.saturating_add(3));
+    lines
+        .get(start..end)
+        .is_some_and(|span_lines| span_lines.iter().any(|line| looks_like_macro_line(line)))
+}
+
+fn looks_like_macro_line(line: &[u8]) -> bool {
+    let line = trim_ascii_start(line);
+    let identifier_end = line
+        .iter()
+        .position(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
+        .unwrap_or(line.len());
+    let identifier = &line[..identifier_end];
+    if !looks_like_macro_identifier(identifier) {
+        return false;
+    }
+
+    let remainder = trim_ascii_start(&line[identifier_end..]);
+    remainder.is_empty()
+        || remainder.starts_with(b"(")
+        || remainder.starts_with(b"{")
+        || remainder.starts_with(b";")
+}
+
+fn looks_like_macro_identifier(identifier: &[u8]) -> bool {
+    identifier.len() >= 2
+        && identifier[0].is_ascii_uppercase()
+        && identifier.iter().any(u8::is_ascii_alphabetic)
+        && identifier
+            .iter()
+            .all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_uppercase())
+}
+
+fn trim_ascii_start(mut value: &[u8]) -> &[u8] {
+    while value.first().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[1..];
+    }
+    value
+}
+
+fn trim_ascii_end(mut value: &[u8]) -> &[u8] {
+    while value.last().is_some_and(u8::is_ascii_whitespace) {
+        value = &value[..value.len() - 1];
+    }
+    value
 }
 
 fn is_conditional_preprocessor(kind: &str) -> bool {
