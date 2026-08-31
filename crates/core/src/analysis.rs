@@ -380,7 +380,15 @@ fn run_analyzers(
         .map(|(language, count)| (language.clone(), *count))
         .collect();
 
-    let descriptors = registry.descriptors().cloned().collect::<Vec<_>>();
+    let selected_languages = sources
+        .iter()
+        .map(|(_, language, _)| language.clone())
+        .collect::<BTreeSet<_>>();
+    let descriptors = registry
+        .descriptors()
+        .filter(|descriptor| selected_languages.contains(&descriptor.language))
+        .cloned()
+        .collect::<Vec<_>>();
     let mut grouped = descriptors
         .into_iter()
         .map(|descriptor| {

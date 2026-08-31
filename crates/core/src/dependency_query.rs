@@ -319,9 +319,9 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::{
-        DependencyKind, DependencyReference, DependencyResolutionOutcome, DependencyTarget,
-        LanguageId, LocalModule, ModuleId, ProjectDependencyResolution, ResolutionLevel,
-        SourcePosition, SourceSpan, analyze_dependency_graph,
+        DependencyReference, DependencyResolutionOutcome, DependencyTarget, LanguageId,
+        LocalModule, ModuleId, ProjectDependencyResolution, ResolutionLevel, SourcePosition,
+        SourceSpan, analyze_dependency_graph,
     };
 
     use super::*;
@@ -337,8 +337,7 @@ mod tests {
         ProjectDependencyResolution {
             source_path: source.path.clone(),
             source_module: source.id.clone(),
-            reference: DependencyReference {
-                kind: DependencyKind::Import,
+            reference: DependencyReference::Import(crate::ImportReference {
                 module: Some(target.id.qualified_name().to_owned()),
                 imported_name: None,
                 alias: None,
@@ -353,7 +352,7 @@ mod tests {
                     start_byte: 0,
                     end_byte: 1,
                 },
-            },
+            }),
             outcome: DependencyResolutionOutcome::exact(DependencyTarget::LocalModule(
                 target.clone(),
             )),

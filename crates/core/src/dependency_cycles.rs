@@ -272,9 +272,9 @@ fn is_acyclic_after_cuts(
 #[cfg(test)]
 mod tests {
     use crate::{
-        DependencyKind, DependencyReference, DependencyResolutionOutcome, DependencyTarget,
-        LanguageId, LocalModule, ModuleId, ProjectDependencyResolution, ResolutionLevel,
-        SourcePosition, SourceSpan, analyze_dependency_graph,
+        DependencyReference, DependencyResolutionOutcome, DependencyTarget, LanguageId,
+        LocalModule, ModuleId, ProjectDependencyResolution, ResolutionLevel, SourcePosition,
+        SourceSpan, analyze_dependency_graph,
     };
 
     use super::*;
@@ -294,8 +294,7 @@ mod tests {
         ProjectDependencyResolution::new(
             source.path.clone(),
             source.id.clone(),
-            DependencyReference {
-                kind: DependencyKind::Import,
+            DependencyReference::Import(crate::ImportReference {
                 module: Some(target.id.qualified_name().to_owned()),
                 imported_name: None,
                 alias: None,
@@ -316,7 +315,7 @@ mod tests {
                     start_byte: byte,
                     end_byte: byte + 1,
                 },
-            },
+            }),
             DependencyResolutionOutcome::exact(DependencyTarget::LocalModule(target.clone())),
         )
     }

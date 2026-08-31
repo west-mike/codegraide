@@ -146,7 +146,10 @@ fn import_bindings(
 ) -> BTreeMap<PathBuf, BTreeMap<String, ImportBinding>> {
     let mut result = BTreeMap::<PathBuf, BTreeMap<String, ImportBinding>>::new();
     for resolution in &dependencies.resolutions {
-        let reference = &resolution.reference;
+        let reference = resolution
+            .reference
+            .as_import()
+            .expect("Python dependency resolution contains imports");
         let key = reference
             .alias
             .clone()

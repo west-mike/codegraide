@@ -62,6 +62,37 @@ pub struct QueryDescriptor {
     pub version: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MeasurementConcept {
+    DeclarationPhysicalLines,
+    BodyPhysicalLines,
+    DeclaredParameterCount,
+    CallerParameterCount,
+    MaxControlFlowNesting,
+    CyclomaticComplexity,
+}
+
+impl MeasurementConcept {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DeclarationPhysicalLines => "declaration-physical-lines",
+            Self::BodyPhysicalLines => "body-physical-lines",
+            Self::DeclaredParameterCount => "declared-parameter-count",
+            Self::CallerParameterCount => "caller-parameter-count",
+            Self::MaxControlFlowNesting => "max-control-flow-nesting",
+            Self::CyclomaticComplexity => "cyclomatic-complexity",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct MeasurementDescriptor {
+    pub concept: MeasurementConcept,
+    pub id: String,
+    pub definition_version: String,
+    pub unit: String,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AnalyzerDescriptor {
     pub id: String,
@@ -71,6 +102,7 @@ pub struct AnalyzerDescriptor {
     pub capabilities: BTreeSet<AnalyzerCapability>,
     pub grammar: Option<GrammarDescriptor>,
     pub queries: Vec<QueryDescriptor>,
+    pub measurements: Vec<MeasurementDescriptor>,
     pub limitations: Vec<String>,
 }
 
@@ -125,7 +157,9 @@ impl SymbolId {
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SymbolKind {
     Module,
+    Namespace,
     Class,
+    Struct,
     Function,
     Method,
     Lambda,
@@ -135,7 +169,9 @@ impl SymbolKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Module => "module",
+            Self::Namespace => "namespace",
             Self::Class => "class",
+            Self::Struct => "struct",
             Self::Function => "function",
             Self::Method => "method",
             Self::Lambda => "lambda",
@@ -215,6 +251,7 @@ pub struct Decorator {
 pub enum NestingEventKind {
     Conditional,
     Loop,
+    Switch,
     ExceptionHandling,
     ContextManager,
     Match,
@@ -226,6 +263,7 @@ impl NestingEventKind {
         match self {
             Self::Conditional => "conditional",
             Self::Loop => "loop",
+            Self::Switch => "switch",
             Self::ExceptionHandling => "exception-handling",
             Self::ContextManager => "context-manager",
             Self::Match => "match",
@@ -246,6 +284,7 @@ pub enum DecisionEventKind {
     ComprehensionLoop,
     ComprehensionFilter,
     Assertion,
+    SwitchCase,
 }
 
 impl DecisionEventKind {
@@ -261,6 +300,7 @@ impl DecisionEventKind {
             Self::ComprehensionLoop => "comprehension-loop",
             Self::ComprehensionFilter => "comprehension-filter",
             Self::Assertion => "assertion",
+            Self::SwitchCase => "switch-case",
         }
     }
 }
@@ -330,12 +370,14 @@ pub struct SymbolDocumentation {
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum DependencyKind {
     Import,
+    Include,
 }
 
 impl DependencyKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Import => "import",
+            Self::Include => "include",
         }
     }
 }
@@ -424,8 +466,7 @@ impl ResolutionLevel {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct DependencyReference {
-    pub kind: DependencyKind,
+pub struct ImportReference {
     pub module: Option<String>,
     pub imported_name: Option<String>,
     pub alias: Option<String>,
@@ -435,6 +476,83 @@ pub struct DependencyReference {
     pub enclosing_symbol: Option<SymbolId>,
     pub context: ImportContext,
     pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum IncludeDelimiter {
+    Angle,
+    Quote,
+    Macro,
+}
+
+impl IncludeDelimiter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Angle => "angle",
+            Self::Quote => "quote",
+            Self::Macro => "macro",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct IncludeReference {
+    pub target: String,
+    pub delimiter: IncludeDelimiter,
+    pub conditional: bool,
+    pub resolution: ResolutionLevel,
+    pub enclosing_symbol: Option<SymbolId>,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum DependencyReference {
+    Import(ImportReference),
+    Include(IncludeReference),
+}
+
+impl DependencyReference {
+    pub fn kind(&self) -> DependencyKind {
+        match self {
+            Self::Import(_) => DependencyKind::Import,
+            Self::Include(_) => DependencyKind::Include,
+        }
+    }
+
+    pub fn as_import(&self) -> Option<&ImportReference> {
+        match self {
+            Self::Import(reference) => Some(reference),
+            Self::Include(_) => None,
+        }
+    }
+
+    pub fn as_include(&self) -> Option<&IncludeReference> {
+        match self {
+            Self::Include(reference) => Some(reference),
+            Self::Import(_) => None,
+        }
+    }
+
+    pub fn resolution(&self) -> ResolutionLevel {
+        match self {
+            Self::Import(reference) => reference.resolution,
+            Self::Include(reference) => reference.resolution,
+        }
+    }
+
+    pub fn enclosing_symbol(&self) -> Option<&SymbolId> {
+        match self {
+            Self::Import(reference) => reference.enclosing_symbol.as_ref(),
+            Self::Include(reference) => reference.enclosing_symbol.as_ref(),
+        }
+    }
+
+    pub fn span(&self) -> SourceSpan {
+        match self {
+            Self::Import(reference) => reference.span,
+            Self::Include(reference) => reference.span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -667,6 +785,7 @@ mod tests {
                 capabilities: [AnalyzerCapability::Parse].into_iter().collect(),
                 grammar: None,
                 queries: Vec::new(),
+                measurements: Vec::new(),
                 limitations: Vec::new(),
             },
         })

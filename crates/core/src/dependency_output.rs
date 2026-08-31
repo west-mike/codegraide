@@ -791,17 +791,23 @@ fn json_relation(
         evidence: relation
             .evidence
             .iter()
-            .map(|evidence| JsonDependencyEvidence {
-                source_path: crate::report::json_path(&evidence.source_path),
-                module: evidence.reference.module.clone(),
-                imported_name: evidence.reference.imported_name.clone(),
-                relative_level: evidence.reference.relative_level,
-                line: evidence.reference.span.start.line,
-                column: evidence.reference.span.start.column,
-                scope: evidence.reference.context.scope.as_str(),
-                usage: evidence.reference.context.usage.as_str(),
-                requirement: evidence.reference.context.requirement.as_str(),
-                conditional: evidence.reference.context.conditional,
+            .map(|evidence| {
+                let reference = evidence
+                    .reference
+                    .as_import()
+                    .expect("Python dependency graphs contain import evidence");
+                JsonDependencyEvidence {
+                    source_path: crate::report::json_path(&evidence.source_path),
+                    module: reference.module.clone(),
+                    imported_name: reference.imported_name.clone(),
+                    relative_level: reference.relative_level,
+                    line: reference.span.start.line,
+                    column: reference.span.start.column,
+                    scope: reference.context.scope.as_str(),
+                    usage: reference.context.usage.as_str(),
+                    requirement: reference.context.requirement.as_str(),
+                    conditional: reference.context.conditional,
+                }
             })
             .collect(),
     }
@@ -972,7 +978,7 @@ fn json_candidate(target: &DependencyTarget) -> JsonDependencyCandidate {
 mod tests {
     use super::*;
     use crate::{
-        DependencyKind, DependencyReference, DependencyResolutionOutcome, LocalModule, ModuleId,
+        DependencyReference, DependencyResolutionOutcome, LocalModule, ModuleId,
         ProjectDependencyResolution, ResolutionLevel, SourcePosition, SourceSpan,
         analyze_dependency_graph,
     };
@@ -988,8 +994,7 @@ mod tests {
         ProjectDependencyResolution::new(
             source.path.clone(),
             source.id.clone(),
-            DependencyReference {
-                kind: DependencyKind::Import,
+            DependencyReference::Import(crate::ImportReference {
                 module: Some(target.id.qualified_name().to_owned()),
                 imported_name: None,
                 alias: None,
@@ -1004,7 +1009,7 @@ mod tests {
                     start: SourcePosition { line: 1, column: 0 },
                     end: SourcePosition { line: 1, column: 1 },
                 },
-            },
+            }),
             DependencyResolutionOutcome::exact(DependencyTarget::LocalModule(target.clone())),
         )
     }
@@ -1060,8 +1065,7 @@ mod tests {
         let unresolved = ProjectDependencyResolution::new(
             a.path.clone(),
             a.id.clone(),
-            DependencyReference {
-                kind: DependencyKind::Import,
+            DependencyReference::Import(crate::ImportReference {
                 module: Some("missing".to_owned()),
                 imported_name: None,
                 alias: None,
@@ -1076,7 +1080,7 @@ mod tests {
                     start: SourcePosition { line: 1, column: 0 },
                     end: SourcePosition { line: 1, column: 1 },
                 },
-            },
+            }),
             DependencyResolutionOutcome::unresolved(
                 "missing",
                 crate::UnresolvedDependencyReason::ModuleNotFound,

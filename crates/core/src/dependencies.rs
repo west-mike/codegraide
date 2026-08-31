@@ -26,6 +26,9 @@ pub struct DependencyGraphInputExclusions {
 
 impl DependencyGraphInputExclusions {
     pub fn retains(self, reference: &DependencyReference) -> bool {
+        let Some(reference) = reference.as_import() else {
+            return true;
+        };
         !(self.type_only && reference.context.usage == ImportUsage::TypeCheckingOnly
             || self.optional && reference.context.requirement == ImportRequirement::Optional
             || self.callable_local && reference.context.scope == ImportScope::Callable
@@ -216,7 +219,7 @@ impl ProjectDependencyResolution {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::{DependencyKind, ResolutionLevel, SourcePosition, SourceSpan};
+    use crate::analyzer::{ResolutionLevel, SourcePosition, SourceSpan};
 
     fn module(language: &str, name: &str) -> ModuleId {
         ModuleId::new(LanguageId::new(language), name)
@@ -227,8 +230,7 @@ mod tests {
     }
 
     fn reference(module_name: &str) -> DependencyReference {
-        DependencyReference {
-            kind: DependencyKind::Import,
+        DependencyReference::Import(crate::ImportReference {
             module: Some(module_name.to_owned()),
             imported_name: None,
             alias: None,
@@ -246,7 +248,7 @@ mod tests {
                     column: module_name.len(),
                 },
             },
-        }
+        })
     }
 
     #[test]

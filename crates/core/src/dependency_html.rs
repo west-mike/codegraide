@@ -646,21 +646,26 @@ fn html_relation(
         evidence: relation
             .evidence
             .iter()
-            .map(|evidence| HtmlEvidence {
-                source_path: crate::report::json_path(&evidence.source_path),
-                import_name: evidence
+            .map(|evidence| {
+                let reference = evidence
                     .reference
-                    .module
-                    .as_deref()
-                    .or(evidence.reference.imported_name.as_deref())
-                    .unwrap_or("import")
-                    .to_owned(),
-                line: evidence.reference.span.start.line,
-                column: evidence.reference.span.start.column,
-                scope: evidence.reference.context.scope.as_str(),
-                usage: evidence.reference.context.usage.as_str(),
-                requirement: evidence.reference.context.requirement.as_str(),
-                conditional: evidence.reference.context.conditional,
+                    .as_import()
+                    .expect("Python dependency graphs contain import evidence");
+                HtmlEvidence {
+                    source_path: crate::report::json_path(&evidence.source_path),
+                    import_name: reference
+                        .module
+                        .as_deref()
+                        .or(reference.imported_name.as_deref())
+                        .unwrap_or("import")
+                        .to_owned(),
+                    line: reference.span.start.line,
+                    column: reference.span.start.column,
+                    scope: reference.context.scope.as_str(),
+                    usage: reference.context.usage.as_str(),
+                    requirement: reference.context.requirement.as_str(),
+                    conditional: reference.context.conditional,
+                }
             })
             .collect(),
     }

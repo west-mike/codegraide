@@ -269,7 +269,7 @@ fn is_eligible(symbol: &Symbol, symbols: &BTreeMap<SymbolId, &Symbol>) -> bool {
                     .and_then(|id| symbols.get(id))
                     .is_some_and(|parent| parent.kind == SymbolKind::Module)
         }
-        SymbolKind::Lambda => false,
+        SymbolKind::Namespace | SymbolKind::Struct | SymbolKind::Lambda => false,
     }
 }
 
@@ -438,6 +438,7 @@ mod tests {
                 capabilities: [AnalyzerCapability::Documentation].into_iter().collect(),
                 grammar: None,
                 queries: Vec::new(),
+                measurements: Vec::new(),
                 limitations: Vec::new(),
             },
             counts: LanguageAnalysisCounts {

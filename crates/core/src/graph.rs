@@ -528,10 +528,10 @@ fn calculate_sccs(
 fn evidence_key(evidence: &GraphEvidence) -> (&PathBuf, usize, usize, usize, usize) {
     (
         &evidence.source_path,
-        evidence.reference.span.start_byte,
-        evidence.reference.span.end_byte,
-        evidence.reference.span.start.line,
-        evidence.reference.span.start.column,
+        evidence.reference.span().start_byte,
+        evidence.reference.span().end_byte,
+        evidence.reference.span().start.line,
+        evidence.reference.span().start.column,
     )
 }
 
@@ -542,7 +542,7 @@ fn module_name(module: &ModuleId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::{DependencyKind, ResolutionLevel, SourcePosition, SourceSpan};
+    use crate::analyzer::{ResolutionLevel, SourcePosition, SourceSpan};
 
     fn module(name: &str) -> ModuleId {
         ModuleId::new(LanguageId::new("python"), name)
@@ -553,8 +553,7 @@ mod tests {
     }
 
     fn reference(name: &str, start_byte: usize) -> DependencyReference {
-        DependencyReference {
-            kind: DependencyKind::Import,
+        DependencyReference::Import(crate::ImportReference {
             module: Some(name.to_owned()),
             imported_name: None,
             alias: None,
@@ -575,7 +574,7 @@ mod tests {
                     column: name.len(),
                 },
             },
-        }
+        })
     }
 
     fn exact(

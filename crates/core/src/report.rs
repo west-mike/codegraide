@@ -7,13 +7,13 @@ use crate::lines::RepositoryLineCounts;
 use crate::review::{ReviewEvaluation, review_status_code};
 
 pub const INVENTORY_REPORT_SCHEMA_VERSION: &str = "0.2.0";
-pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.6.0";
+pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.7.0";
 pub const INVENTORY_REPORT_DEFINITION_VERSION: &str = "inventory-report-v1";
 pub const PHYSICAL_LINE_DEFINITION_VERSION: &str = "physical-lines-v1";
-pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v4";
-pub const REVIEW_REPORT_SCHEMA_VERSION: &str = "0.2.0";
-pub const GATE_REPORT_SCHEMA_VERSION: &str = "0.2.0";
-pub const REVIEW_ANALYSIS_DEFINITION_VERSION: &str = "review-analysis-v2";
+pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v5";
+pub const REVIEW_REPORT_SCHEMA_VERSION: &str = "0.3.0";
+pub const GATE_REPORT_SCHEMA_VERSION: &str = "0.3.0";
+pub const REVIEW_ANALYSIS_DEFINITION_VERSION: &str = "review-analysis-v3";
 pub const DOCUMENTATION_REPORT_SCHEMA_VERSION: &str = "0.1.0";
 
 #[cfg(unix)]
@@ -235,6 +235,9 @@ pub struct JsonGateFinding {
     pub rule_id: String,
     pub path: Option<String>,
     pub qualified_name: Option<String>,
+    pub language: Option<String>,
+    pub metric_id: Option<String>,
+    pub metric_definition_version: Option<String>,
     pub observed_value: Option<u64>,
     pub unit: Option<&'static str>,
     pub risk: &'static str,
@@ -273,6 +276,7 @@ pub struct JsonAnalyzerRun {
     pub capabilities: Vec<&'static str>,
     pub grammar: Option<JsonGrammar>,
     pub queries: Vec<JsonQuery>,
+    pub measurement_definitions: Vec<JsonMeasurementDefinition>,
     pub limitations: Vec<String>,
     pub counts: JsonAnalysisCounts,
     pub files: Vec<JsonFileAnalysis>,
@@ -288,6 +292,14 @@ pub struct JsonGrammar {
 pub struct JsonQuery {
     pub name: String,
     pub version: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonMeasurementDefinition {
+    pub concept: &'static str,
+    pub id: String,
+    pub definition_version: String,
+    pub unit: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -434,7 +446,14 @@ pub struct JsonMeasurement {
 }
 
 #[derive(Debug, Serialize)]
-pub struct JsonDependencyReference {
+#[serde(untagged)]
+pub enum JsonDependencyReference {
+    Import(JsonImportReference),
+    Include(JsonIncludeReference),
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonImportReference {
     pub kind: &'static str,
     pub module: Option<String>,
     pub imported_name: Option<String>,
@@ -447,6 +466,17 @@ pub struct JsonDependencyReference {
     pub usage: &'static str,
     pub requirement: &'static str,
     pub conditional: bool,
+    pub span: JsonSourceSpan,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonIncludeReference {
+    pub kind: &'static str,
+    pub target: String,
+    pub delimiter: &'static str,
+    pub conditional: bool,
+    pub resolution: &'static str,
+    pub enclosing_symbol: Option<String>,
     pub span: JsonSourceSpan,
 }
 
@@ -526,6 +556,9 @@ pub struct JsonReviewRankingEntry {
     pub symbol_id: String,
     pub qualified_name: String,
     pub kind: &'static str,
+    pub language: String,
+    pub metric_id: String,
+    pub metric_definition_version: String,
     pub span: JsonSourceSpan,
     pub score: u64,
     pub risk: &'static str,
@@ -539,6 +572,9 @@ pub struct JsonReviewFinding {
     pub path: Option<String>,
     pub symbol_id: Option<String>,
     pub qualified_name: Option<String>,
+    pub language: Option<String>,
+    pub metric_id: Option<String>,
+    pub metric_definition_version: Option<String>,
     pub span: Option<JsonSourceSpan>,
     pub observed_value: Option<u64>,
     pub threshold: Option<u64>,
@@ -595,6 +631,17 @@ impl AnalysisJsonReport {
                     .map(|query| JsonQuery {
                         name: query.name.clone(),
                         version: query.version.clone(),
+                    })
+                    .collect(),
+                measurement_definitions: run
+                    .descriptor
+                    .measurements
+                    .iter()
+                    .map(|measurement| JsonMeasurementDefinition {
+                        concept: measurement.concept.as_str(),
+                        id: measurement.id.clone(),
+                        definition_version: measurement.definition_version.clone(),
+                        unit: measurement.unit.clone(),
                     })
                     .collect(),
                 limitations: run.descriptor.limitations.clone(),
@@ -801,6 +848,9 @@ impl GateJsonReport {
                 rule_id: finding.rule_id.clone(),
                 path: finding.path.as_deref().map(json_path),
                 qualified_name: finding.qualified_name.clone(),
+                language: finding.language.clone(),
+                metric_id: finding.metric_id.clone(),
+                metric_definition_version: finding.metric_definition_version.clone(),
                 observed_value: finding.observed_value,
                 unit: finding.unit,
                 risk: finding.risk.as_str(),
@@ -1056,6 +1106,9 @@ impl JsonReview {
                     symbol_id: entry.symbol_id.clone(),
                     qualified_name: entry.qualified_name.clone(),
                     kind: entry.kind.as_str(),
+                    language: entry.language.clone(),
+                    metric_id: entry.metric_id.clone(),
+                    metric_definition_version: entry.metric_definition_version.clone(),
                     span: JsonSourceSpan::from_span(entry.span),
                     score: entry.score,
                     risk: entry.risk.as_str(),
@@ -1084,6 +1137,9 @@ impl JsonReviewFinding {
             path: finding.path.as_deref().map(json_path),
             symbol_id: finding.symbol_id.clone(),
             qualified_name: finding.qualified_name.clone(),
+            language: finding.language.clone(),
+            metric_id: finding.metric_id.clone(),
+            metric_definition_version: finding.metric_definition_version.clone(),
             span: finding.span.map(JsonSourceSpan::from_span),
             observed_value: finding.observed_value,
             threshold: finding.threshold,
@@ -1140,23 +1196,41 @@ impl JsonMeasurement {
 
 impl JsonDependencyReference {
     fn from_dependency(dependency: &crate::analyzer::DependencyReference) -> Self {
-        Self {
-            kind: dependency.kind.as_str(),
-            module: dependency.module.clone(),
-            imported_name: dependency.imported_name.clone(),
-            alias: dependency.alias.clone(),
-            relative_level: dependency.relative_level,
-            wildcard: dependency.wildcard,
-            resolution: dependency.resolution.as_str(),
-            enclosing_symbol: dependency
-                .enclosing_symbol
-                .as_ref()
-                .map(|id| id.as_str().to_owned()),
-            scope: dependency.context.scope.as_str(),
-            usage: dependency.context.usage.as_str(),
-            requirement: dependency.context.requirement.as_str(),
-            conditional: dependency.context.conditional,
-            span: JsonSourceSpan::from_span(dependency.span),
+        match dependency {
+            crate::analyzer::DependencyReference::Import(dependency) => {
+                Self::Import(JsonImportReference {
+                    kind: "import",
+                    module: dependency.module.clone(),
+                    imported_name: dependency.imported_name.clone(),
+                    alias: dependency.alias.clone(),
+                    relative_level: dependency.relative_level,
+                    wildcard: dependency.wildcard,
+                    resolution: dependency.resolution.as_str(),
+                    enclosing_symbol: dependency
+                        .enclosing_symbol
+                        .as_ref()
+                        .map(|id| id.as_str().to_owned()),
+                    scope: dependency.context.scope.as_str(),
+                    usage: dependency.context.usage.as_str(),
+                    requirement: dependency.context.requirement.as_str(),
+                    conditional: dependency.context.conditional,
+                    span: JsonSourceSpan::from_span(dependency.span),
+                })
+            }
+            crate::analyzer::DependencyReference::Include(dependency) => {
+                Self::Include(JsonIncludeReference {
+                    kind: "include",
+                    target: dependency.target.clone(),
+                    delimiter: dependency.delimiter.as_str(),
+                    conditional: dependency.conditional,
+                    resolution: dependency.resolution.as_str(),
+                    enclosing_symbol: dependency
+                        .enclosing_symbol
+                        .as_ref()
+                        .map(|id| id.as_str().to_owned()),
+                    span: JsonSourceSpan::from_span(dependency.span),
+                })
+            }
         }
     }
 }

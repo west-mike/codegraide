@@ -27,10 +27,11 @@ pub use analyzer::{
     DecisionEvent, DecisionEventKind, Decorator, DependencyKind, DependencyReference,
     DiagnosticSeverity, DocumentationStatus, ExplicitExportName, ExplicitExportStatus,
     ExplicitExports, FileAnalysis, FileAnalysisStatus, GrammarDescriptor, ImportContext,
-    ImportRequirement, ImportScope, ImportUsage, LanguageAnalyzer, Measurement, MeasurementStatus,
-    NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor, ResolutionLevel,
-    SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolDocumentation, SymbolId,
-    SymbolKind, SymbolModifier,
+    ImportReference, ImportRequirement, ImportScope, ImportUsage, IncludeDelimiter,
+    IncludeReference, LanguageAnalyzer, Measurement, MeasurementConcept, MeasurementDescriptor,
+    MeasurementStatus, NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor,
+    ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolDocumentation,
+    SymbolId, SymbolKind, SymbolModifier,
 };
 pub use call_output::CallJsonReport;
 pub use calls::{
@@ -91,7 +92,6 @@ pub use report::{
     ReviewJsonReport,
 };
 pub use review::{
-    PYTHON_CYCLOMATIC_COMPLEXITY, PYTHON_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION,
     REVIEW_POLICY_DEFINITION_VERSION, REVIEW_POLICY_VERSION, RequiredAction, ReviewCoverage,
     ReviewEvaluation, ReviewException, ReviewFinding, ReviewOptions, ReviewPolicy,
     ReviewPolicyError, ReviewRankingEntry, ReviewStatus, RiskBands, RiskLevel, evaluate_review,

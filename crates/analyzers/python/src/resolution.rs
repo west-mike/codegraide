@@ -8,8 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use codegraide_core::{
-    DependencyReference, DependencyResolutionOutcome, DependencyTarget, LanguageId, LocalModule,
-    ModuleId, ProjectDependencyResolution, RepositoryAnalysis, UnresolvedDependencyReason,
+    DependencyReference, DependencyResolutionOutcome, DependencyTarget, ImportReference,
+    LanguageId, LocalModule, ModuleId, ProjectDependencyResolution, RepositoryAnalysis,
+    UnresolvedDependencyReason,
 };
 use serde::Deserialize;
 use wait_timeout::ChildExt;
@@ -139,9 +140,13 @@ pub fn resolve_python_dependencies(
                 continue;
             };
             for reference in &file.facts.dependencies {
+                let Some(import) = reference.as_import() else {
+                    continue;
+                };
                 resolutions.push(resolve_reference(
                     source,
                     reference,
+                    import,
                     &by_name,
                     environment.as_ref(),
                 ));
@@ -151,9 +156,9 @@ pub fn resolve_python_dependencies(
     resolutions.sort_by(|left, right| {
         left.source_path.cmp(&right.source_path).then_with(|| {
             left.reference
-                .span
+                .span()
                 .start_byte
-                .cmp(&right.reference.span.start_byte)
+                .cmp(&right.reference.span().start_byte)
         })
     });
     Ok(PythonDependencyResolution {
@@ -351,13 +356,14 @@ fn is_python_identifier(value: &str) -> bool {
 fn resolve_reference(
     source: &LocalModule,
     reference: &DependencyReference,
+    import: &ImportReference,
     local: &BTreeMap<String, Vec<LocalModule>>,
     environment: Option<&PythonEnvironment>,
 ) -> ProjectDependencyResolution {
-    let requested = requested_module(source, reference);
+    let requested = requested_module(source, import);
     let outcome = match requested {
-        Err(reason) => DependencyResolutionOutcome::unresolved(reference_text(reference), reason),
-        Ok(requested) => resolve_requested(&requested, reference, local, environment),
+        Err(reason) => DependencyResolutionOutcome::unresolved(reference_text(import), reason),
+        Ok(requested) => resolve_requested(&requested, import, local, environment),
     };
     ProjectDependencyResolution::new(
         source.path.clone(),
@@ -369,7 +375,7 @@ fn resolve_reference(
 
 fn requested_module(
     source: &LocalModule,
-    reference: &DependencyReference,
+    reference: &ImportReference,
 ) -> Result<String, UnresolvedDependencyReason> {
     if reference.relative_level == 0 {
         return reference
@@ -405,7 +411,7 @@ fn requested_module(
 
 fn resolve_requested(
     requested: &str,
-    reference: &DependencyReference,
+    reference: &ImportReference,
     local: &BTreeMap<String, Vec<LocalModule>>,
     environment: Option<&PythonEnvironment>,
 ) -> DependencyResolutionOutcome {
@@ -462,7 +468,7 @@ fn resolve_requested(
     DependencyResolutionOutcome::unresolved(requested, UnresolvedDependencyReason::ModuleNotFound)
 }
 
-fn reference_text(reference: &DependencyReference) -> String {
+fn reference_text(reference: &ImportReference) -> String {
     let dots = ".".repeat(reference.relative_level);
     let module = reference.module.as_deref().unwrap_or_default();
     let imported = reference
@@ -668,8 +674,7 @@ mod tests {
             ModuleId::new(LanguageId::new("python"), "shop.api"),
             "src/shop/api.py",
         );
-        let reference = DependencyReference {
-            kind: codegraide_core::DependencyKind::Import,
+        let reference = codegraide_core::ImportReference {
             module: Some("outside".to_owned()),
             imported_name: None,
             alias: None,

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,10 +16,10 @@ use codegraide_core::{
     DependencyGraphAnalysis, DependencyGraphFilter, DependencyGraphInputExclusions,
     DependencyGraphQuery, DependencyGraphQueryResult, DependencyGraphView, DependencyJsonReport,
     DependencyNode, DependencyNodeKind, DependencyQueryDirection, DocumentationJsonReport,
-    FileCategory, GateJsonReport, InventoryJsonReport, InventoryOptions, RepositoryAnalysis,
-    RepositoryInventory, ReviewJsonReport, ReviewOptions, ReviewStatus, analyze_call_graph,
-    analyze_dependency_graph, analyze_repository, call_node_name, dependency_query_view,
-    explain_dependency_cycles, filter_call_graph, filter_dependency_graph,
+    FileCategory, GateJsonReport, InventoryJsonReport, InventoryOptions, MeasurementConcept,
+    RepositoryAnalysis, RepositoryInventory, ReviewJsonReport, ReviewOptions, ReviewStatus,
+    analyze_call_graph, analyze_dependency_graph, analyze_repository, call_node_name,
+    dependency_query_view, explain_dependency_cycles, filter_call_graph, filter_dependency_graph,
     inventory_repository_with_options, query_dependency_graph, render_call_dot, render_call_html,
     render_call_html_with_source, render_call_mermaid, render_dependency_dot,
     render_dependency_html, render_dependency_html_with_query, render_dependency_mermaid,
@@ -1068,10 +1068,13 @@ fn print_dependency_summary(
         .relations
         .iter()
         .flat_map(|relation| {
-            relation
-                .evidence
-                .iter()
-                .map(|evidence| evidence.reference.context)
+            relation.evidence.iter().map(|evidence| {
+                evidence
+                    .reference
+                    .as_import()
+                    .expect("Python dependency graphs contain import evidence")
+                    .context
+            })
         })
         .collect::<Vec<_>>();
     println!(
@@ -1168,15 +1171,19 @@ fn print_dependency_summary(
                     }
                 );
                 for evidence in relation.evidence {
+                    let reference = evidence
+                        .reference
+                        .as_import()
+                        .expect("Python dependency graphs contain import evidence");
                     println!(
                         "        {}:{}:{} [{}; {}; {}{}]",
                         evidence.source_path.display(),
-                        evidence.reference.span.start.line,
-                        evidence.reference.span.start.column,
-                        evidence.reference.context.scope.as_str(),
-                        evidence.reference.context.usage.as_str(),
-                        evidence.reference.context.requirement.as_str(),
-                        if evidence.reference.context.conditional {
+                        reference.span.start.line,
+                        reference.span.start.column,
+                        reference.context.scope.as_str(),
+                        reference.context.usage.as_str(),
+                        reference.context.requirement.as_str(),
+                        if reference.context.conditional {
                             "; conditional"
                         } else {
                             ""
@@ -1975,28 +1982,30 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             .files
             .iter()
             .flat_map(|file| file.facts.symbols.iter())
-            .fold([0usize; 5], |mut counts, symbol| {
-                match symbol.kind {
-                    codegraide_core::SymbolKind::Module => counts[0] += 1,
-                    codegraide_core::SymbolKind::Class => counts[1] += 1,
-                    codegraide_core::SymbolKind::Function => counts[2] += 1,
-                    codegraide_core::SymbolKind::Method => counts[3] += 1,
-                    codegraide_core::SymbolKind::Lambda => counts[4] += 1,
-                }
+            .fold(BTreeMap::<&str, usize>::new(), |mut counts, symbol| {
+                *counts.entry(symbol.kind.as_str()).or_default() += 1;
                 counts
             });
-        let import_count = run
+        let dependency_counts = run
             .files
             .iter()
-            .map(|file| file.facts.dependencies.len())
-            .sum::<usize>();
+            .flat_map(|file| file.facts.dependencies.iter())
+            .fold(BTreeMap::<&str, usize>::new(), |mut counts, dependency| {
+                *counts.entry(dependency.kind().as_str()).or_default() += 1;
+                counts
+            });
+        let facts = symbol_counts
+            .into_iter()
+            .chain(dependency_counts)
+            .map(|(kind, count)| format!("{}={count}", fact_count_label(kind)))
+            .collect::<Vec<_>>();
         println!(
-            "    facts: modules={} classes={} functions={} methods={} lambdas={} imports={import_count}",
-            symbol_counts[0],
-            symbol_counts[1],
-            symbol_counts[2],
-            symbol_counts[3],
-            symbol_counts[4]
+            "    facts: {}",
+            if facts.is_empty() {
+                "(none)".to_owned()
+            } else {
+                facts.join(" ")
+            }
         );
         let explicit_export_counts =
             run.files
@@ -2025,13 +2034,17 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         }
         print_top_measurements(
             run,
-            "function-declaration-physical-lines",
+            MeasurementConcept::DeclarationPhysicalLines,
             "longest declarations",
         );
-        print_top_measurements(run, "python-max-control-flow-nesting", "deepest nesting");
         print_top_measurements(
             run,
-            "python-cyclomatic-complexity",
+            MeasurementConcept::MaxControlFlowNesting,
+            "deepest nesting",
+        );
+        print_top_measurements(
+            run,
+            MeasurementConcept::CyclomaticComplexity,
             "highest cyclomatic complexity",
         );
     }
@@ -2062,7 +2075,34 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
     }
 }
 
-fn print_top_measurements(run: &codegraide_core::AnalyzerRun, metric_id: &str, label: &str) {
+fn fact_count_label(kind: &str) -> &str {
+    match kind {
+        "class" => "classes",
+        "function" => "functions",
+        "import" => "imports",
+        "include" => "includes",
+        "lambda" => "lambdas",
+        "method" => "methods",
+        "module" => "modules",
+        "namespace" => "namespaces",
+        "struct" => "structs",
+        _ => kind,
+    }
+}
+
+fn print_top_measurements(
+    run: &codegraide_core::AnalyzerRun,
+    concept: MeasurementConcept,
+    label: &str,
+) {
+    let Some(metric) = run
+        .descriptor
+        .measurements
+        .iter()
+        .find(|metric| metric.concept == concept)
+    else {
+        return;
+    };
     let mut values = run
         .files
         .iter()
@@ -2079,7 +2119,7 @@ fn print_top_measurements(run: &codegraide_core::AnalyzerRun, metric_id: &str, l
                 let value = symbol
                     .measurements
                     .iter()
-                    .find(|measurement| measurement.id == metric_id)
+                    .find(|measurement| measurement.id == metric.id)
                     .and_then(|measurement| measurement.value)?;
                 Some((value, file.path.clone(), symbol.qualified_name.clone()))
             })
@@ -2217,15 +2257,27 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
                 }
             }
             for dependency in &file.facts.dependencies {
-                println!(
-                    "    import {}{}",
-                    dependency.module.as_deref().unwrap_or("."),
-                    dependency
-                        .imported_name
-                        .as_ref()
-                        .map(|name| format!("::{name}"))
-                        .unwrap_or_default()
-                );
+                match dependency {
+                    codegraide_core::DependencyReference::Import(dependency) => println!(
+                        "    import {}{}",
+                        dependency.module.as_deref().unwrap_or("."),
+                        dependency
+                            .imported_name
+                            .as_ref()
+                            .map(|name| format!("::{name}"))
+                            .unwrap_or_default()
+                    ),
+                    codegraide_core::DependencyReference::Include(dependency) => println!(
+                        "    include {} [{}{}]",
+                        dependency.target,
+                        dependency.delimiter.as_str(),
+                        if dependency.conditional {
+                            "; conditional"
+                        } else {
+                            ""
+                        }
+                    ),
+                }
             }
             if let Some(exports) = &file.facts.explicit_exports {
                 println!("    explicit exports [{}]", exports.status.as_str());

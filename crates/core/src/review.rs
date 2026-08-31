@@ -6,14 +6,14 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use crate::analysis::AnalyzerRun;
-use crate::analyzer::{FileAnalysisStatus, SourceSpan, SymbolKind};
-use crate::documentation::DocumentationCoverage;
+use crate::analyzer::{FileAnalysisStatus, MeasurementConcept, SourceSpan, SymbolKind};
+use crate::documentation::{
+    DocumentationCoverage, PYTHON_DOCUMENTATION_COVERAGE_DEFINITION_VERSION,
+};
 use crate::inventory::detect_language;
 
 pub const REVIEW_POLICY_VERSION: &str = "0.2.0";
 pub const REVIEW_POLICY_DEFINITION_VERSION: &str = "review-policy-v2";
-pub const PYTHON_CYCLOMATIC_COMPLEXITY: &str = "python-cyclomatic-complexity";
-pub const PYTHON_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION: &str = "python-cyclomatic-complexity-v1";
 
 #[derive(Debug, Clone, Default)]
 pub struct ReviewOptions {
@@ -420,6 +420,9 @@ pub struct ReviewRankingEntry {
     pub symbol_id: String,
     pub qualified_name: String,
     pub kind: SymbolKind,
+    pub language: String,
+    pub metric_id: String,
+    pub metric_definition_version: String,
     pub span: SourceSpan,
     pub score: u64,
     pub risk: RiskLevel,
@@ -433,6 +436,9 @@ pub struct ReviewFinding {
     pub path: Option<PathBuf>,
     pub symbol_id: Option<String>,
     pub qualified_name: Option<String>,
+    pub language: Option<String>,
+    pub metric_id: Option<String>,
+    pub metric_definition_version: Option<String>,
     pub span: Option<SourceSpan>,
     pub observed_value: Option<u64>,
     pub threshold: Option<u64>,
@@ -486,6 +492,10 @@ pub fn evaluate_review(
     let mut findings = Vec::new();
 
     for run in analyzers {
+        let complexity_definition =
+            run.descriptor.measurements.iter().find(|measurement| {
+                measurement.concept == MeasurementConcept::CyclomaticComplexity
+            });
         for file in &run.files {
             coverage.analyzed_files += 1;
             match file.status {
@@ -501,6 +511,10 @@ pub fn evaluate_review(
                     path: Some(file.path.clone()),
                     symbol_id: None,
                     qualified_name: None,
+                    language: Some(run.descriptor.language.as_str().to_owned()),
+                    metric_id: complexity_definition.map(|metric| metric.id.clone()),
+                    metric_definition_version: complexity_definition
+                        .map(|metric| metric.definition_version.clone()),
                     span: None,
                     observed_value: None,
                     threshold: None,
@@ -513,6 +527,9 @@ pub fn evaluate_review(
                     ),
                 });
             }
+            let Some(complexity_definition) = complexity_definition else {
+                continue;
+            };
             for symbol in &file.facts.symbols {
                 if !matches!(
                     symbol.kind,
@@ -521,10 +538,11 @@ pub fn evaluate_review(
                     continue;
                 }
                 coverage.eligible_callables += 1;
-                let measurement = symbol
-                    .measurements
-                    .iter()
-                    .find(|measurement| measurement.id == PYTHON_CYCLOMATIC_COMPLEXITY);
+                let measurement = symbol.measurements.iter().find(|measurement| {
+                    measurement.id == complexity_definition.id
+                        && measurement.definition_version
+                            == complexity_definition.definition_version
+                });
                 let Some(measurement) = measurement else {
                     coverage.unavailable_callables += 1;
                     findings.push(ReviewFinding {
@@ -534,6 +552,11 @@ pub fn evaluate_review(
                         path: Some(file.path.clone()),
                         symbol_id: Some(symbol.id.as_str().to_owned()),
                         qualified_name: Some(symbol.qualified_name.clone()),
+                        language: Some(run.descriptor.language.as_str().to_owned()),
+                        metric_id: Some(complexity_definition.id.clone()),
+                        metric_definition_version: Some(
+                            complexity_definition.definition_version.clone(),
+                        ),
                         span: Some(symbol.span),
                         observed_value: None,
                         threshold: None,
@@ -553,6 +576,11 @@ pub fn evaluate_review(
                         path: Some(file.path.clone()),
                         symbol_id: Some(symbol.id.as_str().to_owned()),
                         qualified_name: Some(symbol.qualified_name.clone()),
+                        language: Some(run.descriptor.language.as_str().to_owned()),
+                        metric_id: Some(complexity_definition.id.clone()),
+                        metric_definition_version: Some(
+                            complexity_definition.definition_version.clone(),
+                        ),
                         span: Some(symbol.span),
                         observed_value: None,
                         threshold: None,
@@ -570,6 +598,9 @@ pub fn evaluate_review(
                     symbol_id: symbol.id.as_str().to_owned(),
                     qualified_name: symbol.qualified_name.clone(),
                     kind: symbol.kind,
+                    language: run.descriptor.language.as_str().to_owned(),
+                    metric_id: complexity_definition.id.clone(),
+                    metric_definition_version: complexity_definition.definition_version.clone(),
                     span: symbol.span,
                     score,
                     risk: policy.risk_bands.for_score(score),
@@ -610,6 +641,11 @@ pub fn evaluate_review(
                     path: Some(file.path.clone()),
                     symbol_id: Some(symbol.id.as_str().to_owned()),
                     qualified_name: Some(symbol.qualified_name.clone()),
+                    language: Some(run.descriptor.language.as_str().to_owned()),
+                    metric_id: Some(complexity_definition.id.clone()),
+                    metric_definition_version: Some(
+                        complexity_definition.definition_version.clone(),
+                    ),
                     span: Some(symbol.span),
                     observed_value: Some(score),
                     threshold: Some(match required_action {
@@ -634,6 +670,9 @@ pub fn evaluate_review(
             path: None,
             symbol_id: None,
             qualified_name: None,
+            language: None,
+            metric_id: None,
+            metric_definition_version: None,
             span: None,
             observed_value: None,
             threshold: None,
@@ -649,6 +688,9 @@ pub fn evaluate_review(
             path: None,
             symbol_id: None,
             qualified_name: None,
+            language: None,
+            metric_id: None,
+            metric_definition_version: None,
             span: None,
             observed_value: None,
             threshold: None,
@@ -676,6 +718,11 @@ pub fn evaluate_review(
                     path: None,
                     symbol_id: None,
                     qualified_name: None,
+                    language: Some("python".to_owned()),
+                    metric_id: Some("python-documentation-coverage".to_owned()),
+                    metric_definition_version: Some(
+                        PYTHON_DOCUMENTATION_COVERAGE_DEFINITION_VERSION.to_owned(),
+                    ),
                     span: None,
                     observed_value: Some(u64::from(basis_points)),
                     threshold: Some(u64::from(threshold) * 100),
@@ -698,6 +745,11 @@ pub fn evaluate_review(
                 path: None,
                 symbol_id: None,
                 qualified_name: None,
+                language: Some("python".to_owned()),
+                metric_id: Some("python-documentation-coverage".to_owned()),
+                metric_definition_version: Some(
+                    PYTHON_DOCUMENTATION_COVERAGE_DEFINITION_VERSION.to_owned(),
+                ),
                 span: None,
                 observed_value: documentation
                     .counts
