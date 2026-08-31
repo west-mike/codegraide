@@ -118,11 +118,13 @@ cargo run -p codegraide -- analyze .
 cargo run -p codegraide -- analyze src/service.py
 ```
 
-The initial analyzer parses Python with Tree-sitter and reports modules,
-classes, functions, methods, decorators, parameters, syntactic imports,
-explicit `__all__` exports, and basic function measurements. A valid syntax
-tree is `successful`; a tree containing parser recovery nodes is `partial`.
-Parse diagnostics are evidence of syntax recovery only.
+The built-in analyzers parse Python and C++ with Tree-sitter. Python reports
+modules, classes, functions, methods, decorators, parameters, syntactic
+imports, explicit `__all__` exports, and function measurements. C++ reports
+namespaces, classes, structs, callable definitions, lambdas, syntactic
+includes, and structural measurements. A valid syntax tree is `successful`;
+a tree containing parser recovery nodes is `partial`. Parse diagnostics are
+evidence of syntax recovery only.
 Languages that inventory recognizes but cannot analyze are still shown as
 `inventory only`.
 
@@ -149,7 +151,7 @@ cargo run -p codegraide -- analyze . --include-ignored 'generated/**/*.py'
 Terminal output summarizes files with diagnostics without dumping every parser
 message. Add `--diagnostics` to print all details, or pass one or more exact
 selected file paths to print only those files. Use `--details` for complete
-symbols, imports, and measurements, optionally restricted to exact files. The JSON
+symbols, imports or includes, and measurements, optionally restricted to exact files. The JSON
 will always contain every fact and diagnostic, including: analyzer versions, grammar and query
 provenance, capability claims, source spans, file status, measurements, and
 limitations:
@@ -161,10 +163,35 @@ cargo run -p codegraide -- analyze . --details src/service.py
 cargo run -p codegraide -- analyze . --format json
 ```
 
-The syntax report uses the independent `syntax-analysis-v4` definition and
-schema version `0.6.0`; inventory remains on schema `0.2.0`. Syntax output
-preserves import evidence without labeling it as project-resolved; the separate
-dependency command performs that enrichment.
+The syntax report uses the independent `syntax-analysis-v5` definition and
+schema version `0.7.0`; compact review and gate JSON use `review-analysis-v3`
+and schema `0.3.0`, while inventory remains on schema `0.2.0`. Syntax output
+preserves Python import and C++ include evidence without labeling either as
+project-resolved. The separate dependency and call commands remain
+Python-only.
+
+### C++ syntax analysis
+
+C++ syntax analysis is statically linked through `codegraide-analyzer-cpp` and
+pins `tree-sitter-cpp` 0.23.4. It analyzes `.cc`, `.cpp`, `.cxx`, `.C`, `.hh`,
+`.hpp`, `.hxx`, `.ipp`, `.tpp`, and `.inl`. Ambiguous `.h` files remain
+inventory-only until an explicit language or project-aware classification
+mechanism is available.
+
+The first slice emits namespaces, classes, structs, function and method
+definitions, constructors, destructors, operators, template definitions, and
+lambdas. It preserves lexical `::` qualification; overloads can share a name
+while retaining distinct stable symbol IDs. Angle, quoted, macro, and
+conditionally compiled includes retain their delimiter and conditional
+context.
+
+This is syntax evidence, not compiler semantics. It does not preprocess macros,
+read `compile_commands.json`, resolve include paths, types, overloads, calls,
+templates, or modules, or build a C++ dependency graph. Parser recovery makes
+affected measurements unavailable. Conditional-preprocessor syntax inside a
+callable also makes its complexity and nesting unavailable because no active
+configuration is known. Macro-expanded control flow is therefore a syntactic
+lower bound.
 
 ### Python documentation coverage
 
@@ -377,7 +404,7 @@ cargo run -p codegraide -- calls . \
 cargo run -p codegraide -- calls . --cycles-only --format dot > calls.dot
 ```
 
-Call extraction is `python-call-references-v1`; syntax JSON is `0.6.0`, and the
+Call extraction is `python-call-references-v1`; syntax JSON is `0.7.0`, and the
 independent call-report JSON schema starts at `0.1.0` with `call-graph-v1`.
 Selectors use `module::qualified.symbol`, such as
 `shop.service::Client.send`; duplicate definitions require `#N`.
@@ -404,8 +431,9 @@ only the HTML presentation payload, not the stable call-report JSON schema.
 
 Syntax analysis also produces a review evaluation for the selected snapshot, meant as a source of
 evidence for an agent or reviewer, not a code-quality "score".
-The default policy reports human review when a Python callable's cyclomatic
-complexity is 11 or higher. Documentation coverage is informational unless an
+The default policy reports human review when an analyzed Python or C++
+callable's cyclomatic complexity is 11 or higher. Rankings and findings identify
+the language-specific metric ID and definition version used. Documentation coverage is informational unless an
 explicit `documentation_coverage.human_review_below` policy or
 `--documentation-review-below` CLI threshold is supplied. Default risk bands are defined as: low (1-5), moderate (6-10), high
 (11-20), and critical (21+). A finding uses `risk` for the measured band and
@@ -498,3 +526,17 @@ lets a user inspect the evidence behind the score themselves, instead of
 treating it as a final verdict about code quality. This is particularly useful
 for adjusting custom exception boundaries or disabling exceptions for frequently-flagged
 areas of code deemed "satisfactory" to the user.
+
+### How C++ complexity is calculated
+
+For each C++ function, method, or lambda, Codegraide starts at `1` and adds one
+for each `if` or `else if`, loop (including range-for and do-while), non-default
+`case`, `catch`, `&&`, `||`, or conditional expression. It does not add points
+for `else`, `default`, `switch` itself, `try`, `throw`, `goto`, `break`,
+`continue`, or coroutine operators. The metric is
+`cpp-cyclomatic-complexity-v1`.
+
+`cpp-max-control-flow-nesting-v1` counts nested `if`, loop, `switch`, `try`,
+and catch bodies. An `else if` remains at its chain depth, catch bodies remain
+at their associated try depth, case labels add no depth, and lambdas start a
+new callable scope.
