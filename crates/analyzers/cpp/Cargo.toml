@@ -1,0 +1,10 @@
+[package]
+name = "codegraide-analyzer-cpp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+codegraide-core = { version = "0.1.0", path = "../../core" }
+tree-sitter.workspace = true
+tree-sitter-cpp.workspace = true

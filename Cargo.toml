@@ -3,6 +3,7 @@ members = [
     "crates/core",
     "crates/cli",
     "crates/analyzers/python",
+    "crates/analyzers/cpp",
 ]
 resolver = "3"
 
@@ -19,4 +20,5 @@ serde_json = "=1.0.151"
 toml = "=0.8.23"
 tree-sitter = "=0.26.11"
 tree-sitter-python = "=0.25.0"
+tree-sitter-cpp = "=0.23.4"
 wait-timeout = "=0.2.1"

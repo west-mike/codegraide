@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
+use codegraide_analyzer_cpp::CppAnalyzer;
 use codegraide_analyzer_python::PythonAnalyzer;
 use codegraide_core::{AnalyzerRegistry, AnalyzerRegistryError, LanguageAnalyzer};
 
@@ -53,6 +54,7 @@ pub(crate) fn build_builtin_analyzer_registry(
     features: BuiltinAnalyzerFeatures,
 ) -> Result<AnalyzerRegistry, BuiltinAnalyzerBootstrapError> {
     let mut registry = AnalyzerRegistry::new();
+    register_builtin_analyzer(&mut registry, "C++", CppAnalyzer::new)?;
     register_builtin_analyzer(&mut registry, "Python", || {
         if features.documentation {
             PythonAnalyzer::new()
@@ -117,6 +119,7 @@ mod tests {
                     capabilities: [AnalyzerCapability::Parse].into_iter().collect(),
                     grammar: None,
                     queries: Vec::new(),
+                    measurements: Vec::new(),
                     limitations: Vec::new(),
                 },
             }

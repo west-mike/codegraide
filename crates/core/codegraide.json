@@ -13,8 +13,11 @@
           "hh",
           "hpp",
           "hxx",
+          "inl",
+          "ipp",
           "py",
-          "rs"
+          "rs",
+          "tpp"
         ]
       },
       "documentation": {

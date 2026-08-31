@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 codegraide-core = { path = "../core" }
 codegraide-analyzer-python = { path = "../analyzers/python" }
+codegraide-analyzer-cpp = { path = "../analyzers/cpp" }
 clap.workspace = true
 serde_json.workspace = true
 
