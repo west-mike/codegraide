@@ -99,7 +99,9 @@ fn comments_reports_top_level_coverage_in_terminal_and_json() {
     let terminal = run(&["comments", root, "--top", "1"]);
     let stdout = String::from_utf8(terminal.stdout).expect("terminal UTF-8");
     assert!(terminal.status.success());
-    assert!(stdout.contains("Coverage: documented=4/7 missing=3 unavailable=0 (57.14%)"));
+    assert!(
+        stdout.contains("Coverage: documented: 4/7, missing: 3, unavailable: 0, coverage: 57.14%.")
+    );
     assert!(stdout.contains("... 2 more"));
 
     let json = run(&["comments", root, "--format", "json"]);

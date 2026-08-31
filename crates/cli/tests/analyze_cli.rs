@@ -23,13 +23,19 @@ fn default_terminal_analysis_reports_summary_without_diagnostic_details() {
 
     assert!(output.status.success(), "{stderr}");
     assert!(stdout.contains("Analyzers:"));
-    assert!(stdout.contains("analyzed=2 successful=1 partial=1 failed=0"));
+    assert!(stdout.contains("Review status: Human review required."));
+    assert!(stdout.contains("Review coverage: Measured callables:"));
+    assert!(stdout.contains(", unavailable callables:"));
+    assert!(stdout.contains(", unsupported files: 0."));
+    assert!(stdout.contains("Documentation coverage: Partial."));
+    assert!(stdout.contains("Languages:"));
+    assert!(!stdout.contains("Inventory languages:"));
+    assert!(!stdout.contains("human-review-required"));
+    assert!(stdout.contains("analyzed: 2, successful: 1, partial: 1, failed: 0"));
     assert!(stdout.contains("diagnostics: bad.py (1)"));
-    assert!(
-        stdout.contains(
-            "explicit exports: complete=0 partial=0 unavailable=1 not-declared=1 names=0"
-        )
-    );
+    assert!(stdout.contains(
+        "explicit exports: complete: 0, partial: 0, unavailable: 1, not declared: 1, names: 0"
+    ));
     assert!(!stdout.contains("parser could not interpret"));
     assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
 }
@@ -155,7 +161,7 @@ fn include_ignored_selects_python_files_and_match_is_full_path() {
     ]);
     let with_stdout = String::from_utf8(with.stdout).expect("stdout should be UTF-8");
     assert!(with.status.success());
-    assert!(with_stdout.contains("analyzed=1 successful=1 partial=0 failed=0"));
+    assert!(with_stdout.contains("analyzed: 1, successful: 1, partial: 0, failed: 0"));
 }
 
 #[test]
@@ -501,9 +507,9 @@ auto callback = [](int value) { return value ? value : 0; };
     let details = run(&["analyze", root, "--details", "native.cpp"]);
     let stdout = String::from_utf8(details.stdout).expect("terminal output should be UTF-8");
     assert!(details.status.success());
-    assert!(stdout.contains("namespaces=1"));
-    assert!(stdout.contains("structs=1"));
-    assert!(stdout.contains("includes=1"));
+    assert!(stdout.contains("namespaces: 1"));
+    assert!(stdout.contains("structs: 1"));
+    assert!(stdout.contains("includes: 1"));
     assert!(stdout.contains("include vector [angle]"));
 }
 

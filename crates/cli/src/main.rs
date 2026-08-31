@@ -1604,13 +1604,13 @@ fn documentation_review_status(analysis: &RepositoryAnalysis) -> ReviewStatus {
 fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: usize) {
     let coverage = &analysis.documentation_coverage;
     println!("Documentation target: {}", path.display());
-    println!("Status: {}", coverage.status.as_str());
+    println!("Status: {}.", human_documentation_status(coverage.status));
     println!(
-        "Files: applicable={} skipped_tests={} unsupported={}",
+        "Files: applicable: {}, skipped tests: {}, unsupported: {}.",
         coverage.applicable_files, coverage.skipped_test_files, coverage.unsupported_selected_files
     );
     println!(
-        "Coverage: documented={}/{} missing={} unavailable={} ({})",
+        "Coverage: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}.",
         coverage.counts.documented,
         coverage.counts.measured(),
         coverage.counts.missing,
@@ -1623,7 +1623,7 @@ fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: 
     } else {
         for (kind, counts) in &coverage.by_kind {
             println!(
-                "  {}: documented={}/{} missing={} unavailable={} ({})",
+                "  {}: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}",
                 kind.as_str(),
                 counts.documented,
                 counts.measured(),
@@ -1639,7 +1639,7 @@ fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: 
     } else {
         for file in &coverage.files {
             println!(
-                "  {}: documented={}/{} missing={} unavailable={} ({})",
+                "  {}: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}",
                 file.path.display(),
                 file.counts.documented,
                 file.counts.measured(),
@@ -1922,9 +1922,12 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         "Selected files: {}",
         analysis.selection.selected_files.len()
     );
-    println!("Review status: {}", analysis.review.status.as_str());
     println!(
-        "Review coverage: measured={}/{} unavailable={} unsupported-files={}",
+        "Review status: {}",
+        human_review_status(analysis.review.status)
+    );
+    println!(
+        "Review coverage: Measured callables: {}/{}, unavailable callables: {}, unsupported files: {}.",
         analysis.review.coverage.measured_callables,
         analysis.review.coverage.eligible_callables,
         analysis.review.coverage.unavailable_callables,
@@ -1932,8 +1935,8 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
     );
     let documentation = &analysis.documentation_coverage;
     println!(
-        "Documentation coverage: status={} files={} skipped-tests={} documented={}/{} missing={} unavailable={} ({})",
-        documentation.status.as_str(),
+        "Documentation coverage: {}. Applicable files: {}, skipped test files: {}, documented: {}/{}, missing: {}, unavailable: {}, coverage: {}.",
+        human_documentation_status(documentation.status),
         documentation.applicable_files,
         documentation.skipped_test_files,
         documentation.counts.documented,
@@ -1942,7 +1945,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         documentation.counts.unavailable,
         format_documentation_percentage(documentation.counts.coverage_basis_points())
     );
-    println!("\nInventory languages:");
+    println!("\nLanguages:");
     if analysis.inventory_languages.is_empty() {
         println!("  (none)");
     } else {
@@ -1961,7 +1964,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
     }
     for run in &analysis.analyzers {
         println!(
-            "  {} [{}]: analyzed={} successful={} partial={} failed={}",
+            "  {} [{}]: analyzed: {}, successful: {}, partial: {}, failed: {}",
             run.descriptor.language.as_str(),
             run.descriptor.id,
             run.counts.analyzed,
@@ -1997,14 +2000,14 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         let facts = symbol_counts
             .into_iter()
             .chain(dependency_counts)
-            .map(|(kind, count)| format!("{}={count}", fact_count_label(kind)))
+            .map(|(kind, count)| format!("{}: {count}", fact_count_label(kind)))
             .collect::<Vec<_>>();
         println!(
             "    facts: {}",
             if facts.is_empty() {
                 "(none)".to_owned()
             } else {
-                facts.join(" ")
+                facts.join(", ")
             }
         );
         let explicit_export_counts =
@@ -2024,7 +2027,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
                 });
         if explicit_export_counts.0.iter().sum::<usize>() > 0 {
             println!(
-                "    explicit exports: complete={} partial={} unavailable={} not-declared={} names={}",
+                "    explicit exports: complete: {}, partial: {}, unavailable: {}, not declared: {}, names: {}",
                 explicit_export_counts.0[1],
                 explicit_export_counts.0[2],
                 explicit_export_counts.0[3],
@@ -2056,13 +2059,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "repository".to_owned());
-            println!(
-                "  {} {} {}: {}",
-                finding.risk.as_str(),
-                finding.required_action.as_str(),
-                location,
-                finding.message
-            );
+            println!("  {}", human_review_finding(finding, &location));
         }
     }
     for diagnostic in &analysis.diagnostics {
@@ -2073,6 +2070,41 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             diagnostic.message
         );
     }
+}
+
+fn human_review_status(status: ReviewStatus) -> &'static str {
+    match status {
+        ReviewStatus::Pass => "Passed.",
+        ReviewStatus::HumanReviewRequired => "Human review required.",
+        ReviewStatus::Blocked => "Blocked.",
+    }
+}
+
+fn human_documentation_status(
+    status: codegraide_core::DocumentationCoverageStatus,
+) -> &'static str {
+    match status {
+        codegraide_core::DocumentationCoverageStatus::Disabled => "Disabled",
+        codegraide_core::DocumentationCoverageStatus::NotApplicable => "Not applicable",
+        codegraide_core::DocumentationCoverageStatus::Complete => "Complete",
+        codegraide_core::DocumentationCoverageStatus::Partial => "Partial",
+    }
+}
+
+fn human_review_finding(finding: &codegraide_core::ReviewFinding, location: &str) -> String {
+    let action = match finding.required_action {
+        codegraide_core::RequiredAction::None => "No action required",
+        codegraide_core::RequiredAction::HumanReview => "Human review required",
+        codegraide_core::RequiredAction::Block => "Blocked",
+    };
+    let risk = match finding.risk {
+        codegraide_core::RiskLevel::Low => "low risk",
+        codegraide_core::RiskLevel::Moderate => "moderate risk",
+        codegraide_core::RiskLevel::High => "high risk",
+        codegraide_core::RiskLevel::Critical => "critical risk",
+        codegraide_core::RiskLevel::Unknown => "unknown risk",
+    };
+    format!("{action} for {location} ({risk}): {}", finding.message)
 }
 
 fn fact_count_label(kind: &str) -> &str {
@@ -2383,18 +2415,18 @@ fn print_summary(path: &Path, inventory: &RepositoryInventory) {
     println!("\nCategories:");
     for category in FileCategory::ALL {
         println!(
-            "  {:<16} {}",
+            "  {}: {}",
             category.as_str(),
             inventory.category_count(category)
         );
     }
 
-    println!("\nRecognized languages:");
+    println!("\nLanguages:");
     if inventory.files_by_language.is_empty() {
         println!("  (none)");
     } else {
         for (language, count) in &inventory.files_by_language {
-            println!("  {:<16} {count}", language.as_str());
+            println!("  {}: {count}", language.as_str());
         }
     }
 
@@ -2408,7 +2440,7 @@ fn print_summary(path: &Path, inventory: &RepositoryInventory) {
         println!("  By language:");
         for (language, counts) in &inventory.line_counts.by_language {
             println!(
-                "    {:<12} files={} source={} comment={} blank={}",
+                "    {}: files: {}, source: {}, comment: {}, blank: {}",
                 language.as_str(),
                 counts.files,
                 counts.source,
@@ -2423,7 +2455,7 @@ fn print_summary(path: &Path, inventory: &RepositoryInventory) {
         println!("  (none)");
     } else {
         for (extension, count) in &inventory.uncategorized_files_by_extension {
-            println!("  {:<16} {count}", extension.as_str());
+            println!("  {}: {count}", extension.as_str());
         }
     }
 
