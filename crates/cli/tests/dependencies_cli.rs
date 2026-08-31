@@ -449,3 +449,25 @@ fn explicit_interpreter_enriches_stdlib_and_installed_packages() {
     assert!(kinds.contains(&"standard-library"));
     assert!(kinds.contains(&"installed-distribution"));
 }
+
+#[test]
+fn dependency_graph_remains_python_only_when_cpp_includes_are_present() {
+    let repository = tempfile::tempdir().expect("temporary repository");
+    fs::write(
+        repository.path().join("native.cpp"),
+        "#include <vector>\nint native_entry() { return 1; }\n",
+    )
+    .expect("C++ fixture");
+
+    let output = run(&[
+        "dependencies",
+        repository.path().to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("dependency JSON");
+    assert!(output.status.success());
+    assert_eq!(report["nodes"].as_array().unwrap().len(), 0);
+    assert_eq!(report["relations"].as_array().unwrap().len(), 0);
+    assert_eq!(report["coverage"]["total_references"], 0);
+}

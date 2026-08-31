@@ -231,3 +231,25 @@ fn duplicate_targets_remain_ambiguous_and_selectors_require_ordinals() {
     ]);
     assert!(ordinal_focus.status.success());
 }
+
+#[test]
+fn call_graph_remains_python_only_when_cpp_call_syntax_is_present() {
+    let repository = tempfile::tempdir().expect("temporary repository");
+    fs::write(
+        repository.path().join("native.cpp"),
+        "int helper() { return 1; }\nint native_entry() { return helper(); }\n",
+    )
+    .expect("C++ fixture");
+
+    let output = run(&[
+        "calls",
+        repository.path().to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("call JSON");
+    assert!(output.status.success());
+    assert_eq!(report["nodes"].as_array().unwrap().len(), 0);
+    assert_eq!(report["relations"].as_array().unwrap().len(), 0);
+    assert_eq!(report["coverage"]["total_calls"], 0);
+}

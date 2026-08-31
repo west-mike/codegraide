@@ -74,11 +74,11 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert_eq!(report["report_schema_version"], "0.6.0");
+    assert_eq!(report["report_schema_version"], "0.7.0");
     assert_eq!(report["analysis"]["kind"], "syntax-analysis");
     assert_eq!(
         report["analysis"]["definition_version"],
-        "syntax-analysis-v4"
+        "syntax-analysis-v5"
     );
     assert_eq!(report["inventory"]["inventory_only_languages"]["rust"], 1);
     assert_eq!(
@@ -219,7 +219,7 @@ fn json_review_reports_complexity_risk_and_gate_exit_codes() {
     let review_report: Value =
         serde_json::from_slice(&review.stdout).expect("review report should be JSON");
     assert!(review.status.success());
-    assert_eq!(review_report["report_schema_version"], "0.2.0");
+    assert_eq!(review_report["report_schema_version"], "0.3.0");
     assert_eq!(review_report["review"]["status"], "human-review-required");
     assert!(review_report["analyzers"].is_null());
     assert_eq!(review_report["ranking_count"], 2);
@@ -236,7 +236,7 @@ fn json_review_reports_complexity_risk_and_gate_exit_codes() {
     let gate_report: Value =
         serde_json::from_slice(&gate_report_output.stdout).expect("gate report should be JSON");
     assert_eq!(gate_report_output.status.code(), Some(2));
-    assert_eq!(gate_report["report_schema_version"], "0.2.0");
+    assert_eq!(gate_report["report_schema_version"], "0.3.0");
     assert_eq!(gate_report["status"], "human-review-required");
     assert_eq!(gate_report["exit_code"], 2);
     assert_eq!(gate_report["finding_count"], 1);
@@ -413,4 +413,130 @@ fn details_flag_prints_facts_for_only_the_requested_file() {
     assert!(stdout.contains("explicit exports [complete]"));
     assert!(stdout.contains("\"one\": 1:12-1:17"));
     assert!(!stdout.contains("two.py:"));
+}
+
+#[test]
+fn mixed_python_cpp_json_and_cpp_details_preserve_language_specific_facts() {
+    let repository = tempdir().expect("temporary repository should be created");
+    fs::write(
+        repository.path().join("main.py"),
+        "import os\ndef python_entry(value):\n    return value\n",
+    )
+    .expect("Python fixture");
+    fs::write(
+        repository.path().join("native.cpp"),
+        r#"#include <vector>
+namespace demo {
+struct Worker {
+    int run(int value) {
+        if (value && value > 1) {
+            return value;
+        }
+        return 0;
+    }
+};
+auto callback = [](int value) { return value ? value : 0; };
+}
+"#,
+    )
+    .expect("C++ fixture");
+    let root = repository.path().to_str().unwrap();
+
+    let output = run(&[
+        "analyze",
+        root,
+        "--no-documentation-coverage",
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("report should be JSON");
+    assert!(output.status.success());
+    assert_eq!(report["report_schema_version"], "0.7.0");
+    let analyzers = report["analyzers"].as_array().expect("analyzers array");
+    assert_eq!(analyzers.len(), 2);
+    let cpp = analyzers
+        .iter()
+        .find(|run| run["language"] == "cpp")
+        .expect("C++ analyzer run");
+    assert_eq!(cpp["id"], "cpp-tree-sitter");
+    assert!(
+        cpp["measurement_definitions"]
+            .as_array()
+            .is_some_and(|definitions| definitions.iter().any(|definition| {
+                definition["concept"] == "cyclomatic-complexity"
+                    && definition["id"] == "cpp-cyclomatic-complexity"
+                    && definition["definition_version"] == "cpp-cyclomatic-complexity-v1"
+            }))
+    );
+    let file = cpp["files"]
+        .as_array()
+        .and_then(|files| files.iter().find(|file| file["path"] == "native.cpp"))
+        .expect("native.cpp analysis");
+    let symbols = file["symbols"].as_array().expect("symbols array");
+    for kind in ["namespace", "struct", "method", "lambda"] {
+        assert!(
+            symbols.iter().any(|symbol| symbol["kind"] == kind),
+            "missing {kind} symbol"
+        );
+    }
+    let include = &file["dependencies"][0];
+    assert_eq!(include["kind"], "include");
+    assert_eq!(include["target"], "vector");
+    assert_eq!(include["delimiter"], "angle");
+    assert_eq!(include["conditional"], false);
+    assert_eq!(include["resolution"], "syntactic");
+    assert!(report["inventory"]["inventory_only_languages"]["cpp"].is_null());
+    assert!(
+        report["review"]["rankings"]
+            .as_array()
+            .is_some_and(|rankings| {
+                rankings.iter().any(|ranking| {
+                    ranking["language"] == "cpp"
+                        && ranking["metric_id"] == "cpp-cyclomatic-complexity"
+                        && ranking["metric_definition_version"] == "cpp-cyclomatic-complexity-v1"
+                })
+            })
+    );
+
+    let details = run(&["analyze", root, "--details", "native.cpp"]);
+    let stdout = String::from_utf8(details.stdout).expect("terminal output should be UTF-8");
+    assert!(details.status.success());
+    assert!(stdout.contains("namespaces=1"));
+    assert!(stdout.contains("structs=1"));
+    assert!(stdout.contains("includes=1"));
+    assert!(stdout.contains("include vector [angle]"));
+}
+
+#[test]
+fn cpp_complexity_gate_reports_metric_provenance_and_exit_code() {
+    let repository = tempdir().expect("temporary repository should be created");
+    fs::write(
+        repository.path().join("gate.cpp"),
+        "int gate(int value) { if (value) { return value; } return 0; }\n",
+    )
+    .expect("C++ fixture");
+
+    let output = run(&[
+        "analyze",
+        repository.path().to_str().unwrap(),
+        "--no-documentation-coverage",
+        "--complexity-review-at",
+        "2",
+        "--gate",
+        "--format",
+        "gate",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("gate report should be JSON");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(report["report_schema_version"], "0.3.0");
+    assert_eq!(report["status"], "human-review-required");
+    assert_eq!(report["top_findings"][0]["language"], "cpp");
+    assert_eq!(
+        report["top_findings"][0]["metric_id"],
+        "cpp-cyclomatic-complexity"
+    );
+    assert_eq!(
+        report["top_findings"][0]["metric_definition_version"],
+        "cpp-cyclomatic-complexity-v1"
+    );
 }
