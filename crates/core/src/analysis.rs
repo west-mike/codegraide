@@ -235,6 +235,7 @@ fn analyze_directory(
         sources,
         registry,
     );
+    record_ambiguous_cpp_extension_diagnostic(&mut result);
     if result
         .analyzers
         .iter()
@@ -328,6 +329,7 @@ fn analyze_file(
         vec![(relative_path, language, source)],
         registry,
     );
+    record_ambiguous_cpp_extension_diagnostic(&mut result);
     finalize_analysis(
         &mut result,
         options.documentation_coverage,
@@ -336,6 +338,33 @@ fn analyze_file(
     )
     .map_err(AnalysisError::ReviewPolicy)?;
     Ok(result)
+}
+
+fn record_ambiguous_cpp_extension_diagnostic(analysis: &mut RepositoryAnalysis) {
+    let count = analysis
+        .analyzers
+        .iter()
+        .filter(|run| run.descriptor.language.as_str() == "cpp")
+        .flat_map(|run| &run.files)
+        .filter(|file| {
+            file.path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension == "C" || extension.eq_ignore_ascii_case("h"))
+        })
+        .count();
+    if count == 0 {
+        return;
+    }
+
+    analysis.diagnostics.push(AnalysisDiagnostic {
+        severity: crate::analyzer::DiagnosticSeverity::Warning,
+        code: "ambiguous-c-cpp-extension-grammar".to_owned(),
+        message: format!(
+            "{count} selected .C/.h/.H file(s) were parsed with the C++ grammar; these extensions can also contain C or shared C/C++ code"
+        ),
+        span: None,
+    });
 }
 
 fn finalize_analysis(

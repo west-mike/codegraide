@@ -7,7 +7,7 @@ use crate::graph::{
     DependencyScc,
 };
 
-pub const DEPENDENCY_CYCLE_EXPLANATION_DEFINITION_VERSION: &str = "dependency-cycle-explanation-v1";
+pub const DEPENDENCY_CYCLE_EXPLANATION_DEFINITION_VERSION: &str = "dependency-cycle-explanation-v2";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DependencyCycleExplanation {

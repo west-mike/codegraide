@@ -12,12 +12,19 @@ use codegraide_core::{
 };
 use tree_sitter::{Language, Node, Parser, Query};
 
+mod resolution;
+
+pub use resolution::{
+    CPP_HEADER_RESOLUTION_DEFINITION_VERSION, CppDependencyResolution, CppDependencyResolver,
+    CppResolutionError, CppResolutionOptions, CppResolutionSummary, resolve_cpp_dependencies,
+};
+
 pub const CPP_CYCLOMATIC_COMPLEXITY: &str = "cpp-cyclomatic-complexity";
 pub const CPP_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION: &str = "cpp-cyclomatic-complexity-v1";
 pub const CPP_MAX_CONTROL_FLOW_NESTING: &str = "cpp-max-control-flow-nesting";
 pub const CPP_MAX_CONTROL_FLOW_NESTING_DEFINITION_VERSION: &str = "cpp-max-control-flow-nesting-v1";
 
-const ANALYZER_VERSION: &str = "0.2.0";
+const ANALYZER_VERSION: &str = "0.3.0";
 const GRAMMAR_VERSION: &str = "0.23.4";
 
 pub struct CppAnalyzer {
@@ -141,7 +148,7 @@ impl CppAnalyzer {
                         .to_owned(),
                     "Function prototypes, forward declarations, unions, enums, and C++ modules are not emitted as symbols in v1."
                         .to_owned(),
-                    "Ambiguous .h headers require future explicit or project-aware language selection."
+                    "Files ending in .C, .h, or .H can contain C, C++, or shared C/C++ code; they are parsed with the C++ grammar without claiming that they are C++-only."
                         .to_owned(),
                     "Non-UTF-8 source is parsed by byte span but extracted names use lossy decoding."
                         .to_owned(),

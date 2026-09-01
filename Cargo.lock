@@ -150,6 +150,9 @@ name = "codegraide-analyzer-cpp"
 version = "0.1.0"
 dependencies = [
  "codegraide-core",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-cpp",
 ]

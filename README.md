@@ -173,10 +173,11 @@ Python-only.
 ### C++ syntax analysis
 
 C++ syntax analysis is statically linked through `codegraide-analyzer-cpp` and
-pins `tree-sitter-cpp` 0.23.4. It analyzes `.cc`, `.cpp`, `.cxx`, `.C`, `.hh`,
-`.hpp`, `.hxx`, `.ipp`, `.tpp`, and `.inl`. Ambiguous `.h` files remain
-inventory-only until an explicit language or project-aware classification
-mechanism is available.
+pins `tree-sitter-cpp` 0.23.4. It analyzes `.cc`, `.cpp`, `.cxx`, `.hh`, `.hpp`,
+`.hxx`, `.ipp`, `.tpp`, and `.inl`. It also analyzes uppercase `.C` and files
+ending in `.h` or `.H` with the C++ grammar. Those three extensions can contain
+C, C++, or shared C/C++ code, so this is an analysis attempt rather than a
+claim that every such file is C++-only. Lowercase `.c` remains C.
 
 The first slice emits namespaces, classes, structs, function and method
 definitions, constructors, destructors, operators, template definitions, and
@@ -234,15 +235,23 @@ comments are ignored; bytes and formatted strings do not count. Empty or
 whitespace-only lexical content is missing. Escape sequences are not decoded,
 which is an explicit limitation of this static v1 analysis.
 
-## Python dependency graphs
+## Multi-language dependency graphs
 
-Build a project-level Python dependency graph with local module resolution:
+Build independent dependency graphs for every installed resolver whose language
+is present. Python modules and C++ files never share edges:
 
 ```sh
 cargo run -p codegraide -- dependencies .
 ```
 
-Codegraide discovers import roots from supported `pyproject.toml` Setuptools or
+Use repeatable `--language` selections to avoid running unrelated resolvers:
+
+```sh
+cargo run -p codegraide -- dependencies . --language cpp
+cargo run -p codegraide -- dependencies . --language python --language cpp
+```
+
+For Python, Codegraide discovers import roots from supported `pyproject.toml` Setuptools or
 Poetry layout fields, then falls back to `src/` or a flat project layout. Local
 modules resolve without starting Python. Select an interpreter or virtual
 environment explicitly to classify standard-library imports and packages
@@ -258,17 +267,51 @@ package index, or import the packages being inspected. Starting the selected
 interpreter is a trusted operation; its ordinary site initialization still
 applies. Python 3.8 or newer is required for environment enrichment.
 
+For C++, the local unit is a repository-relative file. Without build metadata,
+quoted headers in the including file's directory are exact. A target that
+uniquely matches the suffix of one repository path, such as
+`<argparse/argparse.hpp>` matching `include/argparse/argparse.hpp`, is shown as
+an inferred local relation. It remains separate from exact metrics and queries;
+duplicate suffix matches are not guessed. Recognized C++ standard-library
+header names become system boundaries. The HTML explorer initially hides C++
+boundary nodes so the project structure is readable, with checkboxes available
+to reveal them. Select a compilation database explicitly to apply GCC/Clang
+`-iquote`, `-I`, `-isystem`, and `-idirafter` search paths and sysroot
+substitution:
+
+```sh
+cargo run -p codegraide -- dependencies . \
+  --language cpp \
+  --compile-commands build/compile_commands.json
+```
+
+Codegraide reads `arguments` (preferred) or `command` records but never runs the
+recorded compiler, performs shell expansion, or auto-discovers a database.
+Duplicate translation-unit records remain separate resolution contexts. When
+contexts select different targets, or mix resolved and unresolved results, the
+include is reported as context-dependent and excluded from exact graph metrics.
+System, external, macro, and unresolved headers remain visible boundary nodes
+but are never traversed as local dependencies.
+
 The default terminal report shows resolution coverage, global node and relation
 counts, fan-in and fan-out rankings, strongly connected cycle groups, and
 unresolved or ambiguous investigation nodes.
 
-For a graph you can explore, generate a self-contained HTML file. It works
+For graphs you can explore, generate an offline HTML directory. It works
 offline and does not require Mermaid, Graphviz, Node, or a web server:
 
 ```sh
 cargo run -p codegraide -- dependencies . \
-  --local-only --format html --output dependencies.html --open
+  --local-only --format html --output codegraide-dependencies --open
 ```
+
+The directory contains `index.html`, a manifest, and one self-contained page
+per selected language (`python.html`, `cpp.html`, and so on). Language tabs are
+ordinary links: selecting one loads that HTML file and performs a full page
+reload. Each page embeds only its language's graph data, so it can also be
+copied and opened independently. Regeneration safely overwrites a directory
+with Codegraide's manifest, removes only stale files named by the old manifest,
+and refuses an unrelated nonempty directory.
 
 The overview starts at package level and automatically enters a project with a
 single root package. Select a package to drill into its immediate modules and
@@ -285,7 +328,7 @@ putting fan-in or fan-out counts into node labels.
 file specifically in Google Chrome on macOS:
 
 ```sh
-open -a "Google Chrome" dependencies.html
+open -a "Google Chrome" codegraide-dependencies/index.html
 ```
 
 Static visual and machine-readable formats are emitted directly to stdout:
@@ -297,10 +340,14 @@ cargo run -p codegraide -- dependencies . --format json > dependencies.json
 dot -Tsvg dependencies.dot > dependencies.svg
 ```
 
-The dependency JSON API has its own `0.4.0` report schema. It includes graph and
-metric definition versions, environment provenance without machine-local
-paths, global resolution coverage, applied view filters, typed nodes, evidence-
-backed relations, SCCs, and an optional query result.
+The dependency JSON API has its own `0.5.0` report schema. Its sorted
+`languages` collection contains an independent graph section and resolver
+provenance for each language, including context coverage, capabilities, and
+limitations. Inventory languages without an installed resolver appear in
+`unavailable_languages`; installation hints remain optional. Import/include
+evidence is tagged, and reports do not contain raw compiler commands or
+absolute include paths. Graph, fan, SCC, cycle, and cycle-explanation
+definitions are v2; C++ header resolution is `cpp-header-resolution-v1`.
 
 Cycle output keeps SCCs as the cycle-group definition and adds a compact,
 evidence-backed explanation: one deterministic shortest witness loop plus an
@@ -314,9 +361,9 @@ Use focused views to keep large diagrams readable. Filters select presentation
 nodes and relations; they never recalculate the global fan metrics or cycles:
 
 ```sh
-# One module and its direct dependencies and dependents
+# One unit and its direct dependencies and dependents
 cargo run -p codegraide -- dependencies . \
-  --focus shop.service --depth 1 --direction both --format mermaid
+  --focus python:shop.service --depth 1 --direction both --format mermaid
 
 # Exact repository-local relationships only
 cargo run -p codegraide -- dependencies . --local-only --exact-only --format dot
@@ -331,8 +378,8 @@ external package boundaries as traversable edges:
 ```sh
 # Deterministic shortest path; a missing path is a successful `found: false`
 cargo run -p codegraide -- dependencies . \
-  --path-from shop.api --path-to shop.models --format html \
-  --output dependency-path.html --open
+  --path-from python:shop.api --path-to python:shop.models --format html \
+  --output dependency-path --open
 
 # All transitive local dependencies (the default closure direction)
 cargo run -p codegraide -- dependencies . --closure shop.api
@@ -341,6 +388,11 @@ cargo run -p codegraide -- dependencies . --closure shop.api
 cargo run -p codegraide -- dependencies . \
   --closure shop.models --direction dependents --format mermaid
 ```
+
+Unqualified selectors remain valid when the run contains exactly one language.
+Multi-language selectors use `language:identity`, such as
+`python:shop.models` or `cpp:src/main.cpp`. Path and closure queries must stay
+within one language; cross-language traversal is rejected.
 
 Path queries use sorted-neighbor breadth-first search, so equally short paths
 have deterministic tie-breaking. Closure output is sorted. Query views retain
@@ -355,7 +407,7 @@ imports affect coupling, paths, or cycles:
 ```sh
 cargo run -p codegraide -- dependencies . --exclude-type-only
 cargo run -p codegraide -- dependencies . --exclude-optional --format html \
-  --output runtime-required-dependencies.html --open
+  --output runtime-required-dependencies --open
 cargo run -p codegraide -- dependencies . \
   --exclude-callable-local --exclude-conditional --format json
 ```

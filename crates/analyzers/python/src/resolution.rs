@@ -8,14 +8,17 @@ use std::thread;
 use std::time::Duration;
 
 use codegraide_core::{
-    DependencyReference, DependencyResolutionOutcome, DependencyTarget, ImportReference,
-    LanguageId, LocalModule, ModuleId, ProjectDependencyResolution, RepositoryAnalysis,
+    DependencyReference, DependencyResolutionContextCoverage, DependencyResolutionOutcome,
+    DependencyResolver, DependencyResolverDescriptor, DependencyResolverError, DependencyTarget,
+    DependencyUnitKind, ImportReference, LanguageId, LocalModule, ModuleId,
+    ProjectDependencyResolution, RepositoryAnalysis, ResolvedProjectDependencies,
     UnresolvedDependencyReason,
 };
 use serde::Deserialize;
 use wait_timeout::ChildExt;
 
 const PROBE_SCHEMA_VERSION: &str = "codegraide-python-environment-v1";
+pub const PYTHON_IMPORT_RESOLUTION_DEFINITION_VERSION: &str = "python-import-resolution-v1";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROBE_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 const PYTHON_PROBE: &str = include_str!("environment_probe.txt");
@@ -48,6 +51,111 @@ pub struct PythonDependencyResolution {
     pub resolutions: Vec<ProjectDependencyResolution>,
     pub environment: Option<PythonEnvironmentSummary>,
     pub diagnostics: Vec<String>,
+}
+
+pub struct PythonDependencyResolver {
+    descriptor: DependencyResolverDescriptor,
+    options: PythonResolutionOptions,
+}
+
+impl PythonDependencyResolver {
+    pub fn new(options: PythonResolutionOptions) -> Self {
+        Self {
+            descriptor: DependencyResolverDescriptor {
+                id: "python-import-resolver".to_owned(),
+                language: LanguageId::new("python"),
+                version: "0.1.0".to_owned(),
+                definition_version: PYTHON_IMPORT_RESOLUTION_DEFINITION_VERSION.to_owned(),
+                local_unit_kind: DependencyUnitKind::Module,
+                hierarchy_behavior: "qualified-module-segments".to_owned(),
+                resolution_capabilities: vec![
+                    "repository-package-roots".to_owned(),
+                    "relative-imports".to_owned(),
+                    "standard-library-probe".to_owned(),
+                    "installed-distribution-probe".to_owned(),
+                ],
+                limitations: vec![
+                    "Dynamic imports, runtime import hooks, and framework re-exports are not resolved."
+                        .to_owned(),
+                ],
+            },
+            options,
+        }
+    }
+}
+
+impl DependencyResolver for PythonDependencyResolver {
+    fn descriptor(&self) -> &DependencyResolverDescriptor {
+        &self.descriptor
+    }
+
+    fn resolve(
+        &self,
+        analysis: &RepositoryAnalysis,
+    ) -> Result<ResolvedProjectDependencies, DependencyResolverError> {
+        let resolution = resolve_python_dependencies(analysis, &self.options)
+            .map_err(|error| DependencyResolverError::new(error.to_string()))?;
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "package-roots".to_owned(),
+            resolution
+                .package_roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        if let Some(environment) = &resolution.environment {
+            metadata.insert(
+                "environment-selection".to_owned(),
+                environment.selection_kind.to_owned(),
+            );
+            metadata.insert(
+                "environment-implementation".to_owned(),
+                environment.implementation.clone(),
+            );
+            metadata.insert(
+                "environment-version".to_owned(),
+                environment.version.clone(),
+            );
+            metadata.insert(
+                "environment-is-virtual".to_owned(),
+                environment.is_virtual_environment.to_string(),
+            );
+            metadata.insert(
+                "environment-distributions".to_owned(),
+                environment.distribution_count.to_string(),
+            );
+        }
+        let summary_lines = vec![
+            format!("Package roots: {}", metadata["package-roots"]),
+            match &resolution.environment {
+                Some(environment) => format!(
+                    "Python environment: {} {} ({}, packages={})",
+                    environment.implementation,
+                    environment.version,
+                    environment.selection_kind,
+                    environment.distribution_count
+                ),
+                None => "Python environment: not selected (external imports remain unresolved)"
+                    .to_owned(),
+            },
+        ];
+        Ok(ResolvedProjectDependencies {
+            local_units: resolution.local_modules,
+            resolutions: resolution.resolutions,
+            context_coverage: vec![DependencyResolutionContextCoverage {
+                kind: "python-environment".to_owned(),
+                selected: resolution.environment.is_some(),
+                total: usize::from(resolution.environment.is_some()),
+                supported: usize::from(resolution.environment.is_some()),
+                unsupported: 0,
+            }],
+            summary_lines,
+            metadata,
+            diagnostics: resolution.diagnostics,
+        })
+    }
 }
 
 #[derive(Debug)]

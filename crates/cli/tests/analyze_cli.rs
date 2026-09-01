@@ -450,6 +450,26 @@ auto callback = [](int value) { return value ? value : 0; };
 "#,
     )
     .expect("C++ fixture");
+    fs::write(
+        repository.path().join("shared.h"),
+        "inline int shared_header(int value) { return value + 1; }\n",
+    )
+    .expect("ambiguous lowercase header fixture");
+    fs::write(
+        repository.path().join("legacy.H"),
+        "inline int uppercase_header(int value) { return value - 1; }\n",
+    )
+    .expect("ambiguous uppercase header fixture");
+    fs::write(
+        repository.path().join("legacy.C"),
+        "int uppercase_source(int value) { return value; }\n",
+    )
+    .expect("ambiguous uppercase source fixture");
+    fs::write(
+        repository.path().join("classic.c"),
+        "int lowercase_c_source(int value) { return value; }\n",
+    )
+    .expect("lowercase C source fixture");
     let root = repository.path().to_str().unwrap();
 
     let output = run(&[
@@ -469,6 +489,23 @@ auto callback = [](int value) { return value ? value : 0; };
         .find(|run| run["language"] == "cpp")
         .expect("C++ analyzer run");
     assert_eq!(cpp["id"], "cpp-tree-sitter");
+    assert_eq!(cpp["version"], "0.3.0");
+    assert_eq!(cpp["counts"]["analyzed"], 4);
+    assert!(report["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "ambiguous-c-cpp-extension-grammar"
+                && diagnostic["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("3 selected .C/.h/.H"))
+        })
+    }));
+    assert!(
+        cpp["limitations"]
+            .as_array()
+            .is_some_and(|limitations| limitations.iter().any(|limitation| limitation
+                .as_str()
+                .is_some_and(|text| text.contains(".C, .h, or .H"))))
+    );
     assert!(
         cpp["measurement_definitions"]
             .as_array()
@@ -482,6 +519,20 @@ auto callback = [](int value) { return value ? value : 0; };
         .as_array()
         .and_then(|files| files.iter().find(|file| file["path"] == "native.cpp"))
         .expect("native.cpp analysis");
+    for path in ["legacy.C", "legacy.H", "shared.h"] {
+        assert!(
+            cpp["files"]
+                .as_array()
+                .is_some_and(|files| files.iter().any(|file| file["path"] == path)),
+            "missing C++ grammar analysis for {path}"
+        );
+    }
+    assert!(
+        cpp["files"]
+            .as_array()
+            .is_some_and(|files| files.iter().all(|file| file["path"] != "classic.c")),
+        "lowercase .c must remain outside the C++ analyzer"
+    );
     let symbols = file["symbols"].as_array().expect("symbols array");
     for kind in ["namespace", "struct", "method", "lambda"] {
         assert!(
@@ -496,6 +547,7 @@ auto callback = [](int value) { return value ? value : 0; };
     assert_eq!(include["conditional"], false);
     assert_eq!(include["resolution"], "syntactic");
     assert!(report["inventory"]["inventory_only_languages"]["cpp"].is_null());
+    assert_eq!(report["inventory"]["inventory_only_languages"]["c"], 1);
     assert!(
         report["review"]["rankings"]
             .as_array()

@@ -57,7 +57,7 @@ impl fmt::Display for DependencyGraphQueryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "query module {:?} is not a local module",
+            "query unit {:?} is not a local dependency unit",
             self.module
         )?;
         if !self.suggestions.is_empty() {

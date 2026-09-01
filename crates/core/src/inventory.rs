@@ -336,7 +336,7 @@ pub fn detect_language(path: &Path) -> Option<LanguageId> {
         "py" => "python",
         "rs" => "rust",
         "c" => "c",
-        "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" | "inl" | "ipp" | "tpp" => "cpp",
+        "cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx" | "inl" | "ipp" | "tpp" => "cpp",
         _ => return None,
     };
 
@@ -366,6 +366,8 @@ mod tests {
             ("library.RS", "rust"),
             ("native.c", "c"),
             ("legacy.C", "cpp"),
+            ("shared.h", "cpp"),
+            ("legacy.H", "cpp"),
             ("header.HPP", "cpp"),
             ("template.tpp", "cpp"),
         ];

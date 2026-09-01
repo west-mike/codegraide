@@ -20,7 +20,8 @@ mod resolution;
 
 pub use call_resolution::{PythonCallResolution, resolve_python_calls};
 pub use resolution::{
-    PythonDependencyResolution, PythonEnvironmentSelection, PythonEnvironmentSummary,
+    PYTHON_IMPORT_RESOLUTION_DEFINITION_VERSION, PythonDependencyResolution,
+    PythonDependencyResolver, PythonEnvironmentSelection, PythonEnvironmentSummary,
     PythonResolutionError, PythonResolutionOptions, resolve_python_dependencies,
 };
 

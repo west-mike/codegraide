@@ -31,7 +31,7 @@ fn descriptor_declares_exact_provenance_and_capabilities() {
     let descriptor = analyzer.descriptor();
     assert_eq!(descriptor.id, "cpp-tree-sitter");
     assert_eq!(descriptor.language.as_str(), "cpp");
-    assert_eq!(descriptor.version, "0.2.0");
+    assert_eq!(descriptor.version, "0.3.0");
     assert_eq!(descriptor.grammar.as_ref().unwrap().version, "0.23.4");
     assert!(
         descriptor
@@ -49,6 +49,12 @@ fn descriptor_declares_exact_provenance_and_capabilities() {
             .contains(&AnalyzerCapability::Documentation)
     );
     assert_eq!(descriptor.queries.len(), 4);
+    assert!(
+        descriptor
+            .limitations
+            .iter()
+            .any(|limitation| limitation.contains(".C, .h, or .H"))
+    );
     assert!(descriptor.measurements.iter().any(|measurement| {
         measurement.concept == MeasurementConcept::CyclomaticComplexity
             && measurement.id == CPP_CYCLOMATIC_COMPLEXITY

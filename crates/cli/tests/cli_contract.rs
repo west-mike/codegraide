@@ -113,11 +113,11 @@ fn dependency_query_options_enforce_complete_and_unambiguous_requests() {
             1,
             "--direction requires --focus or --closure",
         ),
-        (vec!["dependencies", "--depth", "2"], 2, "--focus <MODULE>"),
+        (vec!["dependencies", "--depth", "2"], 2, "--focus <UNIT>"),
         (
             vec!["dependencies", "--path-from", "one"],
             2,
-            "--path-to <MODULE>",
+            "--path-to <UNIT>",
         ),
         (
             vec!["dependencies", "--closure", "one", "--focus", "two"],

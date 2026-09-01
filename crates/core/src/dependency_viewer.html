@@ -258,9 +258,12 @@
     .node.is-dimmed { opacity: 0.24; }
     .node.is-match rect { stroke-width: 4; }
     .node.is-selected rect { stroke: var(--accent); stroke-width: 4; filter: drop-shadow(0 6px 12px color-mix(in srgb, var(--accent) 35%, transparent)); }
-    .node.local-module rect { fill: var(--local-fill); stroke: var(--local); }
+    .node.local-module rect, .node.local-file rect { fill: var(--local-fill); stroke: var(--local); }
     .node.standard-library rect { fill: var(--standard-fill); stroke: var(--standard); }
     .node.installed-distribution rect { fill: var(--installed-fill); stroke: var(--installed); }
+    .node.system-header rect { fill: var(--standard-fill); stroke: var(--standard); }
+    .node.external-header rect { fill: var(--installed-fill); stroke: var(--installed); }
+    .node.context-dependent rect { fill: var(--ambiguous-fill); stroke: var(--cycle); }
     .node.ambiguous rect { fill: var(--ambiguous-fill); stroke: var(--ambiguous); }
     .node.unresolved rect { fill: var(--unresolved-fill); stroke: var(--unresolved); }
     .node.cycle rect { fill: var(--cycle-fill); stroke: var(--cycle); stroke-width: 2.5; }
@@ -292,13 +295,13 @@
       <div class="brand">
         <h1>Codegraide Dependency Explorer</h1>
         <div class="summary" id="summary"></div>
-        <nav class="breadcrumbs" id="breadcrumbs" aria-label="Package hierarchy"></nav>
+        <nav class="breadcrumbs" id="breadcrumbs" aria-label="Dependency hierarchy"></nav>
       </div>
       <div class="controls">
         <label class="search-wrap">
           <span class="search-icon" aria-hidden="true">⌕</span>
-          <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Find a module</span>
-          <input id="search" type="search" list="module-names" placeholder="Find a module…" autocomplete="off">
+          <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Find a dependency unit</span>
+          <input id="search" type="search" list="module-names" placeholder="Find a dependency unit…" autocomplete="off">
           <datalist id="module-names"></datalist>
         </label>
         <div class="button-group" aria-label="Graph view">
@@ -313,7 +316,7 @@
       <section class="stage" aria-label="Interactive dependency graph">
         <svg id="graph" role="img" aria-labelledby="graph-title graph-description">
           <title id="graph-title">Repository dependency graph</title>
-          <desc id="graph-description">Modules are connected by directed import relationships. Select a module to inspect its dependencies and dependents.</desc>
+          <desc id="graph-description">Dependency units are connected by directed import or include relationships. Select a unit to inspect its dependencies and dependents.</desc>
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path>
@@ -334,7 +337,7 @@
           <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--unresolved)"></span>Unresolved</span>
           <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--cycle)"></span>Cycle</span>
           <span class="legend-item"><span class="legend-line"></span>Exact</span>
-          <span class="legend-item"><span class="legend-line dashed"></span>Uncertain</span>
+          <span class="legend-item"><span class="legend-line dashed"></span>Inferred / uncertain</span>
         </div>
       </section>
 
@@ -343,8 +346,12 @@
         <h3>Visible boundaries</h3>
         <div class="filters">
           <label class="check"><input type="checkbox" data-kind="local-module" checked> Local</label>
+          <label class="check"><input type="checkbox" data-kind="local-file" checked> Local file</label>
           <label class="check"><input type="checkbox" data-kind="standard-library" checked> Standard library</label>
           <label class="check"><input type="checkbox" data-kind="installed-distribution" checked> Installed</label>
+          <label class="check"><input type="checkbox" data-kind="system-header" checked> System header</label>
+          <label class="check"><input type="checkbox" data-kind="external-header" checked> External header</label>
+          <label class="check"><input type="checkbox" data-kind="context-dependent" checked> Context-dependent</label>
           <label class="check"><input type="checkbox" data-kind="ambiguous" checked> Ambiguous</label>
           <label class="check"><input type="checkbox" data-kind="unresolved" checked> Unresolved</label>
           <label class="check"><input type="checkbox" id="uncertain" checked> Uncertain edges</label>
@@ -360,6 +367,7 @@
 
       const data = JSON.parse(document.getElementById("graph-data").textContent);
       const isCallGraph = data.graph_kind === "calls";
+      const isCppGraph = !isCallGraph && data.nodes.some(node => node.kind === "local-file");
       const sourceAutoExpandLines = 15;
       const callContextRadius = 3;
       document.body.classList.toggle("call-graph", isCallGraph);
@@ -397,7 +405,7 @@
         expandedSources: new Set(),
         expandedCallers: new Set(),
         query: "",
-        visibleKinds: new Set(["local-module", "standard-library", "installed-distribution", "ambiguous", "unresolved"]),
+        visibleKinds: new Set(isCppGraph ? ["local-file"] : ["local-module", "local-file", "standard-library", "installed-distribution", "system-header", "external-header", "context-dependent", "ambiguous", "unresolved"]),
         showUncertain: true,
         transform: { x: 30, y: 30, scale: 1 },
         items: [],
@@ -407,29 +415,41 @@
 
       const kindLabels = {
         "local-module": isCallGraph ? "Project symbol" : "Local module",
+        "local-file": "Local file",
         "standard-library": "Python standard library",
         "installed-distribution": isCallGraph ? "External call boundary" : "Installed distribution",
-        "ambiguous": "Ambiguous import",
-        "unresolved": "Unresolved import",
+        "system-header": "System header",
+        "external-header": "External header",
+        "context-dependent": "Context-dependent target",
+        "ambiguous": "Ambiguous dependency",
+        "unresolved": "Unresolved dependency",
         "cycle": isCallGraph ? "Recursive call group" : "Dependency cycle",
-        "package": isCallGraph ? "Module or class" : "Package"
+        "package": isCallGraph ? "Module or class" : (isCppGraph ? "Directory" : "Package")
       };
 
       const kindColors = {
         "local-module": "var(--local)",
+        "local-file": "var(--local)",
         "standard-library": "var(--standard)",
         "installed-distribution": "var(--installed)",
+        "system-header": "var(--standard)",
+        "external-header": "var(--installed)",
+        "context-dependent": "var(--cycle)",
         "ambiguous": "var(--ambiguous)",
         "unresolved": "var(--unresolved)",
         "cycle": "var(--cycle)",
         "package": "var(--cycle)"
       };
 
+      document.querySelectorAll("[data-kind]").forEach(input => {
+        input.checked = state.visibleKinds.has(input.dataset.kind);
+      });
+
       summary.textContent = data.query
         ? `${data.query.label} · ${data.query.found ? `${data.nodes.length} nodes` : "no path found"}`
         : `${data.nodes.length} nodes · ${data.relations.length} relationships · ${data.cycles.length} ${data.cycles.length === 1 ? "cycle" : "cycles"}`;
       document.getElementById("module-names").innerHTML = data.nodes
-        .filter(node => node.kind === "local-module")
+        .filter(node => node.kind === "local-module" || node.kind === "local-file")
         .map(node => `<option value="${escapeHtml(node.name)}"></option>`)
         .join("");
 
@@ -576,7 +596,7 @@
             id: `package-${group.id}`,
             name: group.qualified_name,
             short_name: group.name,
-            subtitle: `${members.length} ${members.length === 1 ? "module" : "modules"} · open package`,
+            subtitle: `${members.length} ${members.length === 1 ? "unit" : "units"} · open group`,
             kind: "package",
             packageGroup: group.id,
             members
@@ -585,7 +605,7 @@
         });
 
         visible.forEach(node => {
-          if (node.kind !== "local-module") return;
+          if (node.kind !== "local-module" && node.kind !== "local-file") return;
           const directGroup = directGroupByMember.get(node.id);
           const belongsHere = current ? directGroup?.id === current.id : !directGroup;
           if (belongsHere && !memberToGroup.has(node.id)) {
@@ -597,7 +617,7 @@
           }
         });
 
-        visible.filter(node => node.kind !== "local-module").forEach(node => {
+        visible.filter(node => node.kind !== "local-module" && node.kind !== "local-file").forEach(node => {
           items.push({ ...node, members: [node.id] });
           memberToGroup.set(node.id, node.id);
         });
@@ -611,7 +631,7 @@
             id: `cycle-${cycle.number}`,
             name: `Cycle ${cycle.number}`,
             short_name: `Cycle ${cycle.number}`,
-            subtitle: `${members.length} ${members.length === 1 ? "module" : "modules"} · select to inspect`,
+            subtitle: `${members.length} ${members.length === 1 ? "unit" : "units"} · select to inspect`,
             kind: "cycle",
             cycle: cycle.number,
             members
@@ -639,7 +659,7 @@
           chain.unshift(current);
           current = current.parent ? groupById.get(current.parent) : null;
         }
-        const parts = [{ id: null, name: "All packages" }, ...chain.map(group => ({ id: group.id, name: group.name }))];
+        const parts = [{ id: null, name: isCppGraph ? "All directories" : "All packages" }, ...chain.map(group => ({ id: group.id, name: group.name }))];
         breadcrumbs.replaceChildren();
         parts.forEach((part, index) => {
           if (index) {
@@ -928,12 +948,13 @@
           <div class="kind-label"><span class="kind-swatch" style="--kind-color:${kindColors[node.kind]}"></span>${kindLabels[node.kind]}</div>
           ${node.path ? `<code class="path">${escapeHtml(node.path)}</code>` : ""}
           ${node.version ? `<p>Version ${escapeHtml(node.version)}</p>` : ""}
+          ${node.outgoing_dependencies_analyzed === false ? `<p>Outgoing dependencies were not analyzed for this file type.</p>` : ""}
           ${node.unresolved_reason ? `<p>Reason: ${escapeHtml(node.unresolved_reason.replaceAll("-", " "))}</p>` : ""}
           ${cycle ? `<p>Member of <strong>Cycle ${cycle.number}</strong>.</p>` : ""}
           ${node.candidates.length ? candidateMarkup(node.candidates) : ""}
           ${isCallGraph ? sourceDefinitionMarkup(node) : ""}
-          <h3>${isCallGraph ? "Calls" : "Imports"}</h3>${linkList(imports)}
-          <h3>${isCallGraph ? "Called by" : "Imported by"}</h3>${isCallGraph && hasEmbeddedSource ? callerRelationshipsMarkup(node, incomingRelations) : linkList(dependents)}
+          <h3>${isCallGraph ? "Calls" : "Dependencies"}</h3>${linkList(imports)}
+          <h3>${isCallGraph ? "Called by" : "Depended on by"}</h3>${isCallGraph && hasEmbeddedSource ? callerRelationshipsMarkup(node, incomingRelations) : linkList(dependents)}
           ${cycle ? `<button type="button" class="detail-action" id="show-cycle">Show complete cycle</button>` : ""}
         `;
         bindNodeLinks();
@@ -952,8 +973,8 @@
         details.innerHTML = `
           <h2>Cycle ${cycle.number}</h2>
           <div class="kind-label"><span class="kind-swatch" style="--kind-color:${kindColors.cycle}"></span>${isCallGraph ? "Recursive call group" : "Dependency cycle"}</div>
-          <p class="placeholder">${isCallGraph ? "These symbols call one another recursively." : "These modules depend on one another. They are collapsed in the overview to keep the rest of the architecture readable."}</p>
-          ${isCallGraph ? "" : `<h3>Shortest witness loop</h3><p><code>${escapeHtml(witness.join(" → "))}</code></p><h3>Recommended cuts</h3>${cycle.recommended_cuts.length ? `<ul class="evidence">${cycle.recommended_cuts.map((relation, index) => `<li><button type="button" class="node-link" data-cut="${index}">${escapeHtml(nodeById.get(relation.source)?.name || relation.source)} → ${escapeHtml(nodeById.get(relation.target)?.name || relation.target)}</button><br>${relation.evidence.length} import ${relation.evidence.length === 1 ? "site" : "sites"} to reconsider</li>`).join("")}</ul>` : `<p class="empty-list">No recommendation available.</p>`}<p class="placeholder">Recommendations are deterministic approximations, not guaranteed optimal architectural fixes.</p>`}
+          <p class="placeholder">${isCallGraph ? "These symbols call one another recursively." : "These dependency units depend on one another. They are collapsed in the overview to keep the rest of the architecture readable."}</p>
+          ${isCallGraph ? "" : `<h3>Shortest witness loop</h3><p><code>${escapeHtml(witness.join(" → "))}</code></p><h3>Recommended cuts</h3>${cycle.recommended_cuts.length ? `<ul class="evidence">${cycle.recommended_cuts.map((relation, index) => `<li><button type="button" class="node-link" data-cut="${index}">${escapeHtml(nodeById.get(relation.source)?.name || relation.source)} → ${escapeHtml(nodeById.get(relation.target)?.name || relation.target)}</button><br>${relation.evidence.length} dependency ${relation.evidence.length === 1 ? "site" : "sites"} to reconsider</li>`).join("")}</ul>` : `<p class="empty-list">No recommendation available.</p>`}<p class="placeholder">Recommendations are deterministic approximations, not guaranteed optimal architectural fixes.</p>`}
           <h3>Members</h3>${linkList(members)}
           <button type="button" class="detail-action" id="expand-cycle">Expand this cycle</button>
         `;
@@ -978,8 +999,9 @@
         details.innerHTML = `
           <h2>${escapeHtml(sourceItem.name)} → ${escapeHtml(targetItem.name)}</h2>
           <div class="kind-label">${relation.kind === "exact" ? `Exact ${isCallGraph ? "call" : "dependency"}` : `${escapeHtml(relation.kind)} ${isCallGraph ? "call" : "dependency"}`}</div>
+          ${relation.inference_basis ? `<p>Basis: ${escapeHtml(relation.inference_basis)}.</p>` : ""}
           <h3>Source evidence</h3>
-          ${evidence.length ? `<ul class="evidence">${evidence.map(item => `<li><code>${escapeHtml(item.source_path)}:${item.line}:${item.column}</code><br>${isCallGraph ? "calls" : "imports"} ${escapeHtml(item.import_name)}${isCallGraph ? "" : `<br><span class="context-badge">${escapeHtml(item.scope)}</span><span class="context-badge">${escapeHtml(item.usage)}</span><span class="context-badge">${escapeHtml(item.requirement)}</span>${item.conditional ? `<span class="context-badge">conditional</span>` : ""}`}</li>`).join("")}</ul>` : `<p class="empty-list">Collapsed relationship between graph groups.</p>`}
+          ${evidence.length ? `<ul class="evidence">${evidence.map(item => `<li><code>${escapeHtml(item.source_path)}:${item.line}:${item.column}</code><br>${isCallGraph ? "calls" : (item.usage === "include" ? "includes" : "imports")} ${escapeHtml(item.import_name)}${isCallGraph ? "" : `<br><span class="context-badge">${escapeHtml(item.scope)}</span><span class="context-badge">${escapeHtml(item.usage)}</span><span class="context-badge">${escapeHtml(item.requirement)}</span>${item.conditional ? `<span class="context-badge">conditional</span>` : ""}`}</li>`).join("")}</ul>` : `<p class="empty-list">Collapsed relationship between graph groups.</p>`}
         `;
       }
 
@@ -1039,7 +1061,7 @@
         }
         details.innerHTML = `
           <h2>Explore the graph</h2>
-          <p class="placeholder">Select a node to see its full ${isCallGraph ? "symbol selector, source path, callees, and callers" : "module name, source path, imports, and dependents"}. Use Neighborhood to isolate just the surrounding relationships.</p>
+          <p class="placeholder">Select a node to see its full ${isCallGraph ? "symbol selector, source path, callees, and callers" : "dependency identity, source path, dependencies, and dependents"}. Use Neighborhood to isolate just the surrounding relationships.</p>
         `;
       }
 

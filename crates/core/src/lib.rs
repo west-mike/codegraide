@@ -46,9 +46,12 @@ pub use calls::{
 pub use dependencies::{
     DEPENDENCY_CYCLE_DEFINITION_VERSION, DEPENDENCY_FAN_IN_DEFINITION_VERSION,
     DEPENDENCY_FAN_OUT_DEFINITION_VERSION, DEPENDENCY_GRAPH_DEFINITION_VERSION,
-    DEPENDENCY_SCC_DEFINITION_VERSION, DependencyGraphInputExclusions, DependencyResolutionOutcome,
-    DependencyTarget, DependencyTargetKind, LocalModule, ModuleId, ProjectDependencyResolution,
-    UnresolvedDependencyReason,
+    DEPENDENCY_SCC_DEFINITION_VERSION, DependencyGraphInputExclusions,
+    DependencyResolutionContextCoverage, DependencyResolutionOutcome, DependencyResolver,
+    DependencyResolverDescriptor, DependencyResolverError, DependencyResolverRegistry,
+    DependencyResolverRegistryError, DependencyTarget, DependencyTargetKind, DependencyUnitKind,
+    InferredDependencyBasis, LocalModule, ModuleId, ProjectDependencyResolution,
+    ResolvedProjectDependencies, UnresolvedDependencyReason,
 };
 pub use dependency_cycles::{
     DEPENDENCY_CYCLE_EXPLANATION_DEFINITION_VERSION, DependencyCycleExplanation,
@@ -62,9 +65,11 @@ pub use dependency_html::{
     render_dependency_html_with_query,
 };
 pub use dependency_output::{
-    DEPENDENCY_REPORT_SCHEMA_VERSION, DependencyDirection, DependencyEnvironmentReport,
-    DependencyGraphFilter, DependencyGraphFilterError, DependencyGraphView,
-    DependencyGraphViewNode, DependencyJsonReport, filter_dependency_graph, render_dependency_dot,
+    DEPENDENCY_REPORT_SCHEMA_VERSION, DependencyBundleJsonReport, DependencyDirection,
+    DependencyEnvironmentReport, DependencyGraphFilter, DependencyGraphFilterError,
+    DependencyGraphView, DependencyGraphViewNode, DependencyJsonReport,
+    DependencyLanguageJsonReport, DependencyResolverContextReport, DependencyResolverReport,
+    UnavailableDependencyLanguage, filter_dependency_graph, render_dependency_dot,
     render_dependency_mermaid,
 };
 pub use dependency_query::{

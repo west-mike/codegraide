@@ -38,6 +38,8 @@ struct HtmlNode {
     subtitle: String,
     path: Option<String>,
     version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outgoing_dependencies_analyzed: Option<bool>,
     unresolved_reason: Option<&'static str>,
     candidates: Vec<HtmlCandidate>,
     cyclic_component: Option<usize>,
@@ -64,6 +66,8 @@ struct HtmlRelation {
     source: String,
     target: String,
     kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inference_basis: Option<&'static str>,
     evidence: Vec<HtmlEvidence>,
 }
 
@@ -442,6 +446,7 @@ fn html_call_node(
         subtitle,
         path,
         version: None,
+        outgoing_dependencies_analyzed: None,
         unresolved_reason: matches!(node, CallNode::Unresolved { .. }).then_some("unresolved-call"),
         candidates,
         cyclic_component,
@@ -454,6 +459,7 @@ fn html_call_relation(relation: &CallRelation, ids: &BTreeMap<CallNode, String>)
         source: ids[&relation.source].clone(),
         target: ids[&relation.target].clone(),
         kind: relation.kind.as_str(),
+        inference_basis: None,
         evidence: relation
             .evidence
             .iter()
@@ -502,13 +508,25 @@ fn html_hierarchy(view: &DependencyGraphView) -> Vec<HtmlHierarchyGroup> {
         .iter()
         .filter_map(|node| match &node.node {
             DependencyNode::LocalModule(module) => {
-                let mut segments = module
-                    .id
-                    .qualified_name()
-                    .split('.')
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                if module.path.file_name().and_then(|name| name.to_str()) != Some("__init__.py") {
+                let mut segments = if module.id.language().as_str() == "python" {
+                    module
+                        .id
+                        .qualified_name()
+                        .split('.')
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                } else {
+                    module
+                        .path
+                        .parent()
+                        .into_iter()
+                        .flat_map(|path| path.components())
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                };
+                if module.id.language().as_str() == "python"
+                    && module.path.file_name().and_then(|name| name.to_str()) != Some("__init__.py")
+                {
                     segments.pop();
                 }
                 Some(DependencyHierarchyMember {
@@ -538,7 +556,11 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
             let path = crate::report::json_path(&module.path);
             (
                 module.id.qualified_name().to_owned(),
-                "local-module",
+                if module.id.language().as_str() == "cpp" {
+                    "local-file"
+                } else {
+                    "local-module"
+                },
                 path.clone(),
                 Some(path),
                 None,
@@ -571,6 +593,24 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
             None,
             Vec::new(),
         ),
+        DependencyNode::SystemHeader { name, .. } => (
+            name.clone(),
+            "system-header",
+            "System header".to_owned(),
+            None,
+            None,
+            None,
+            Vec::new(),
+        ),
+        DependencyNode::ExternalHeader { name, .. } => (
+            name.clone(),
+            "external-header",
+            "External header".to_owned(),
+            None,
+            None,
+            None,
+            Vec::new(),
+        ),
         DependencyNode::Ambiguous {
             requested,
             candidates,
@@ -595,15 +635,41 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
             Some(reason.as_str()),
             Vec::new(),
         ),
+        DependencyNode::ContextDependent {
+            requested,
+            candidates,
+            unresolved_reasons,
+            ..
+        } => (
+            requested.clone(),
+            "context-dependent",
+            "Different build contexts select different targets".to_owned(),
+            None,
+            None,
+            unresolved_reasons.first().map(|reason| reason.as_str()),
+            candidates.iter().map(html_candidate).collect(),
+        ),
+    };
+    let short_name = if kind == "local-file" {
+        path.as_deref()
+            .and_then(|path| Path::new(path).file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| short_name(&name))
+    } else {
+        short_name(&name)
     };
     HtmlNode {
         id: node.id.clone(),
-        short_name: short_name(&name),
+        short_name,
         name,
         kind,
         subtitle,
         path,
         version,
+        outgoing_dependencies_analyzed: match &node.node {
+            DependencyNode::LocalModule(module) => Some(module.outgoing_dependencies_analyzed),
+            _ => None,
+        },
         unresolved_reason,
         candidates,
         cyclic_component: node.cyclic_component,
@@ -614,7 +680,11 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
 fn html_candidate(candidate: &DependencyTarget) -> HtmlCandidate {
     match candidate {
         DependencyTarget::LocalModule(module) => HtmlCandidate {
-            kind: candidate.kind().as_str(),
+            kind: if module.id.language().as_str() == "cpp" {
+                "local-file"
+            } else {
+                candidate.kind().as_str()
+            },
             name: module.id.qualified_name().to_owned(),
             detail: Some(crate::report::json_path(&module.path)),
         },
@@ -632,6 +702,16 @@ fn html_candidate(candidate: &DependencyTarget) -> HtmlCandidate {
             name: distribution_display_name.clone(),
             detail: version.clone(),
         },
+        DependencyTarget::SystemHeader { name, .. } => HtmlCandidate {
+            kind: candidate.kind().as_str(),
+            name: name.clone(),
+            detail: Some("System header".to_owned()),
+        },
+        DependencyTarget::ExternalHeader { name, .. } => HtmlCandidate {
+            kind: candidate.kind().as_str(),
+            name: name.clone(),
+            detail: Some("External header".to_owned()),
+        },
     }
 }
 
@@ -643,15 +723,13 @@ fn html_relation(
         source: ids[&relation.source].clone(),
         target: ids[&relation.target].clone(),
         kind: relation.kind.as_str(),
+        inference_basis: (relation.kind == crate::DependencyRelationKind::Inferred)
+            .then_some("unique repository suffix"),
         evidence: relation
             .evidence
             .iter()
-            .map(|evidence| {
-                let reference = evidence
-                    .reference
-                    .as_import()
-                    .expect("Python dependency graphs contain import evidence");
-                HtmlEvidence {
+            .map(|evidence| match &evidence.reference {
+                crate::DependencyReference::Import(reference) => HtmlEvidence {
                     source_path: crate::report::json_path(&evidence.source_path),
                     import_name: reference
                         .module
@@ -665,7 +743,17 @@ fn html_relation(
                     usage: reference.context.usage.as_str(),
                     requirement: reference.context.requirement.as_str(),
                     conditional: reference.context.conditional,
-                }
+                },
+                crate::DependencyReference::Include(reference) => HtmlEvidence {
+                    source_path: crate::report::json_path(&evidence.source_path),
+                    import_name: reference.target.clone(),
+                    line: reference.span.start.line,
+                    column: reference.span.start.column,
+                    scope: "file",
+                    usage: "include",
+                    requirement: "required",
+                    conditional: reference.conditional,
+                },
             })
             .collect(),
     }
