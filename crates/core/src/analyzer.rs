@@ -201,6 +201,77 @@ pub enum SymbolModifier {
     ClassMethod,
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CallableQualifier {
+    Const,
+    Volatile,
+    LvalueReference,
+    RvalueReference,
+    Static,
+    Noexcept,
+}
+
+impl CallableQualifier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Const => "const",
+            Self::Volatile => "volatile",
+            Self::LvalueReference => "lvalue-reference",
+            Self::RvalueReference => "rvalue-reference",
+            Self::Static => "static",
+            Self::Noexcept => "noexcept",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CallableParameter {
+    pub name: Option<String>,
+    pub type_spelling: Option<String>,
+    pub has_default: bool,
+    pub variadic: bool,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CallableSignature {
+    pub display: String,
+    pub normalized_key: String,
+    pub return_type: Option<String>,
+    pub parameters: Vec<CallableParameter>,
+    pub qualifiers: BTreeSet<CallableQualifier>,
+    pub template_parameter_count: usize,
+    pub virtual_dispatch: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SymbolOccurrenceRole {
+    Declaration,
+    Definition,
+}
+
+impl SymbolOccurrenceRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Declaration => "declaration",
+            Self::Definition => "definition",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SymbolDeclaration {
+    pub parent_id: Option<SymbolId>,
+    pub kind: SymbolKind,
+    pub name: String,
+    pub qualified_name: String,
+    pub role: SymbolOccurrenceRole,
+    pub span: SourceSpan,
+    pub name_span: Option<SourceSpan>,
+    pub completeness: SymbolCompleteness,
+    pub callable_signature: Option<CallableSignature>,
+}
+
 impl SymbolModifier {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -563,14 +634,143 @@ pub struct CallArgumentShape {
     pub has_star_kwargs: bool,
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CallForm {
+    Unknown,
+    Free,
+    Qualified,
+    Member,
+    PointerMember,
+    Functor,
+    Constructor,
+}
+
+impl CallForm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Free => "free",
+            Self::Qualified => "qualified",
+            Self::Member => "member",
+            Self::PointerMember => "pointer-member",
+            Self::Functor => "functor",
+            Self::Constructor => "constructor",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CallArgument {
+    pub expression: String,
+    pub type_hint: Option<String>,
+    pub span: SourceSpan,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CallReference {
+    pub expression: String,
     pub callee: String,
     pub components: Vec<String>,
     pub enclosing_symbol: Option<SymbolId>,
     pub arguments: CallArgumentShape,
+    pub argument_details: Vec<CallArgument>,
+    pub form: CallForm,
+    pub receiver: Option<String>,
+    pub receiver_type_hint: Option<String>,
     pub span: SourceSpan,
     pub syntax_complete: bool,
+    pub preprocessing_uncertain: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum LanguageModuleKind {
+    Interface,
+    Implementation,
+    InterfacePartition,
+    ImplementationPartition,
+}
+
+impl LanguageModuleKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interface => "interface",
+            Self::Implementation => "implementation",
+            Self::InterfacePartition => "interface-partition",
+            Self::ImplementationPartition => "implementation-partition",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct LanguageModule {
+    pub name: String,
+    pub partition: Option<String>,
+    pub kind: LanguageModuleKind,
+    pub exported: bool,
+    pub span: SourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ModuleImportKind {
+    Named,
+    Partition,
+    HeaderAngle,
+    HeaderQuote,
+}
+
+impl ModuleImportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Named => "named",
+            Self::Partition => "partition",
+            Self::HeaderAngle => "header-angle",
+            Self::HeaderQuote => "header-quote",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ModuleImport {
+    pub target: String,
+    pub kind: ModuleImportKind,
+    pub exported: bool,
+    pub conditional: bool,
+    pub span: SourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ModuleExport {
+    pub target: String,
+    pub span: SourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum UsingReferenceKind {
+    Declaration,
+    Namespace,
+    Alias,
+}
+
+impl UsingReferenceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Declaration => "declaration",
+            Self::Namespace => "namespace",
+            Self::Alias => "alias",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UsingReference {
+    pub kind: UsingReferenceKind,
+    pub target: String,
+    pub alias: Option<String>,
+    pub span: SourceSpan,
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -588,6 +788,7 @@ pub struct Symbol {
     pub modifiers: BTreeSet<SymbolModifier>,
     pub parameters: Vec<Parameter>,
     pub decorators: Vec<Decorator>,
+    pub callable_signature: Option<CallableSignature>,
     pub documentation: Option<SymbolDocumentation>,
     pub nesting_events: Vec<NestingEvent>,
     pub decision_events: Vec<DecisionEvent>,
@@ -597,8 +798,13 @@ pub struct Symbol {
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct AnalysisFacts {
     pub symbols: Vec<Symbol>,
+    pub declarations: Vec<SymbolDeclaration>,
     pub dependencies: Vec<DependencyReference>,
     pub calls: Vec<CallReference>,
+    pub modules: Vec<LanguageModule>,
+    pub module_imports: Vec<ModuleImport>,
+    pub module_exports: Vec<ModuleExport>,
+    pub using_references: Vec<UsingReference>,
     pub explicit_exports: Option<ExplicitExports>,
 }
 

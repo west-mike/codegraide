@@ -6,28 +6,31 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use codegraide_analyzer_cpp::{CppDependencyResolver, CppResolutionOptions};
+use codegraide_analyzer_cpp::{
+    CppDependencyResolver, CppResolutionOptions, apply_architecture_to_resolution,
+    resolve_cpp_calls, resolve_cpp_dependencies,
+};
 use codegraide_analyzer_python::{
     PythonDependencyResolver, PythonEnvironmentSelection, PythonResolutionOptions,
     resolve_python_calls, resolve_python_dependencies,
 };
 use codegraide_core::{
-    AnalysisJsonReport, AnalysisOptions, CallDirection, CallGraphAnalysis, CallGraphFilter,
-    CallGraphView, CallJsonReport, DependencyBundleJsonReport, DependencyDirection,
-    DependencyEnvironmentReport, DependencyGraphAnalysis, DependencyGraphFilter,
-    DependencyGraphInputExclusions, DependencyGraphQuery, DependencyGraphQueryResult,
-    DependencyGraphView, DependencyJsonReport, DependencyLanguageJsonReport, DependencyNode,
-    DependencyNodeKind, DependencyQueryDirection, DependencyRelationKind, DependencyResolver,
-    DependencyResolverContextReport, DependencyResolverRegistry, DependencyResolverReport,
-    DocumentationJsonReport, FileCategory, GateJsonReport, InventoryJsonReport, InventoryOptions,
-    LanguageId, MeasurementConcept, RepositoryAnalysis, RepositoryInventory, ReviewJsonReport,
-    ReviewOptions, ReviewStatus, UnavailableDependencyLanguage, analyze_call_graph,
-    analyze_dependency_graph, analyze_repository, call_node_name, dependency_query_view,
-    explain_dependency_cycles, filter_call_graph, filter_dependency_graph,
-    inventory_repository_with_options, query_dependency_graph, render_call_dot, render_call_html,
-    render_call_html_with_source, render_call_mermaid, render_dependency_dot,
-    render_dependency_html, render_dependency_html_with_query, render_dependency_mermaid,
-    review_status_code,
+    AnalysisJsonReport, AnalysisOptions, AnalyzerCapability, CallDirection, CallGraphAnalysis,
+    CallGraphFilter, CallGraphView, CallJsonReport, DependencyBundleJsonReport,
+    DependencyDirection, DependencyEnvironmentReport, DependencyGraphAnalysis,
+    DependencyGraphFilter, DependencyGraphInputExclusions, DependencyGraphQuery,
+    DependencyGraphQueryResult, DependencyGraphView, DependencyJsonReport,
+    DependencyLanguageJsonReport, DependencyNode, DependencyNodeKind, DependencyQueryDirection,
+    DependencyRelationKind, DependencyResolver, DependencyResolverContextReport,
+    DependencyResolverRegistry, DependencyResolverReport, DocumentationJsonReport, FileCategory,
+    GateJsonReport, InventoryJsonReport, InventoryOptions, LanguageId, MeasurementConcept,
+    RepositoryAnalysis, RepositoryInventory, ReviewJsonReport, ReviewOptions, ReviewStatus,
+    UnavailableDependencyLanguage, analyze_call_graph_with_modules, analyze_dependency_graph,
+    analyze_repository, call_node_name, dependency_query_view, explain_dependency_cycles,
+    filter_call_graph, filter_dependency_graph, inventory_repository_with_options,
+    query_dependency_graph, render_call_dot, render_call_html, render_call_html_with_source,
+    render_call_mermaid, render_dependency_dot, render_dependency_html,
+    render_dependency_html_with_query, render_dependency_mermaid, review_status_code,
 };
 
 use crate::bootstrap::{BuiltinAnalyzerFeatures, build_builtin_analyzer_registry};
@@ -302,11 +305,23 @@ enum Command {
         #[arg(long)]
         open: bool,
     },
-    /// Resolve conservative Python call targets and build a symbol call graph
+    /// Explore Python or C++ symbols and conservative written-call targets
     Calls {
         /// Project directory to analyze
         #[arg(value_name = "PATH", default_value = ".")]
         path: PathBuf,
+
+        /// Analyze one call language; required when Python and C++ are both present
+        #[arg(long, value_enum)]
+        language: Option<CallLanguageArgument>,
+
+        /// C++ compilation database used only for include visibility metadata
+        #[arg(long, value_name = "FILE")]
+        compile_commands: Option<PathBuf>,
+
+        /// C++ architectural-group definition file
+        #[arg(long, value_name = "FILE")]
+        architecture: Option<PathBuf>,
 
         /// Python interpreter used for import-boundary resolution
         #[arg(long, value_name = "EXECUTABLE", conflicts_with = "venv")]
@@ -355,7 +370,26 @@ enum Command {
         /// Embed function bodies and call-site context in HTML output
         #[arg(long)]
         include_source: bool,
+
+        /// Maximum nested call-expansion depth embedded in HTML
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u8).range(1..=10))]
+        max_expansion_depth: Option<u8>,
     },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum CallLanguageArgument {
+    Python,
+    Cpp,
+}
+
+impl CallLanguageArgument {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Python => "python",
+            Self::Cpp => "cpp",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
@@ -608,6 +642,9 @@ fn main() -> ExitCode {
         }),
         Command::Calls {
             path,
+            language,
+            compile_commands,
+            architecture,
             python,
             venv,
             focus,
@@ -620,8 +657,12 @@ fn main() -> ExitCode {
             output,
             open,
             include_source,
+            max_expansion_depth,
         } => run_calls(&CallRequest {
             path,
+            language: *language,
+            compile_commands: compile_commands.as_deref(),
+            architecture: architecture.as_deref(),
             python: python.as_deref(),
             venv: venv.as_deref(),
             focus,
@@ -634,6 +675,7 @@ fn main() -> ExitCode {
             output: output.as_deref(),
             open: *open,
             include_source: *include_source,
+            max_expansion_depth: *max_expansion_depth,
         }),
     }
 }
@@ -1783,6 +1825,9 @@ fn dependency_node_name(node: &DependencyNode) -> String {
 #[derive(Debug, Clone, Copy)]
 struct CallRequest<'a> {
     path: &'a Path,
+    language: Option<CallLanguageArgument>,
+    compile_commands: Option<&'a Path>,
+    architecture: Option<&'a Path>,
     python: Option<&'a Path>,
     venv: Option<&'a Path>,
     focus: &'a [String],
@@ -1795,6 +1840,7 @@ struct CallRequest<'a> {
     output: Option<&'a Path>,
     open: bool,
     include_source: bool,
+    max_expansion_depth: Option<u8>,
 }
 
 fn run_calls(request: &CallRequest<'_>) -> ExitCode {
@@ -1808,6 +1854,12 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
     }
     if request.include_source && request.format != CallOutputFormat::Html {
         eprintln!("error: --include-source requires --format html");
+        return ExitCode::FAILURE;
+    }
+    if request.max_expansion_depth.is_some()
+        && (!request.include_source || request.format != CallOutputFormat::Html)
+    {
+        eprintln!("error: --max-expansion-depth requires --include-source and --format html");
         return ExitCode::FAILURE;
     }
     if !request.path.is_dir() {
@@ -1839,24 +1891,125 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let environment = request
-        .python
-        .map(|path| PythonEnvironmentSelection::Interpreter(path.to_path_buf()))
-        .or_else(|| {
-            request
-                .venv
-                .map(|path| PythonEnvironmentSelection::VirtualEnvironment(path.to_path_buf()))
-        });
-    let dependencies =
-        match resolve_python_dependencies(&analysis, &PythonResolutionOptions { environment }) {
-            Ok(resolution) => resolution,
-            Err(error) => {
-                eprintln!("error: could not resolve Python imports for call analysis: {error}");
+    let present_languages = analysis
+        .analyzers
+        .iter()
+        .filter(|run| {
+            !run.files.is_empty()
+                && run
+                    .descriptor
+                    .capabilities
+                    .contains(&AnalyzerCapability::CallReferences)
+        })
+        .map(|run| run.descriptor.language.as_str())
+        .collect::<BTreeSet<_>>();
+    let language = match request.language {
+        Some(language) if present_languages.contains(language.as_str()) => language,
+        Some(language) => {
+            eprintln!(
+                "error: no {} files with call analysis support were found",
+                language.as_str()
+            );
+            return ExitCode::FAILURE;
+        }
+        None if present_languages.len() == 1 => {
+            if present_languages.contains("cpp") {
+                CallLanguageArgument::Cpp
+            } else {
+                CallLanguageArgument::Python
+            }
+        }
+        None if present_languages.len() > 1 => {
+            eprintln!(
+                "error: call analysis found Python and C++; select --language python or --language cpp"
+            );
+            return ExitCode::FAILURE;
+        }
+        None => {
+            eprintln!("error: no files with call analysis support were found");
+            return ExitCode::FAILURE;
+        }
+    };
+    if language == CallLanguageArgument::Cpp && (request.python.is_some() || request.venv.is_some())
+    {
+        eprintln!("error: --python and --venv apply only to --language python");
+        return ExitCode::FAILURE;
+    }
+    if language == CallLanguageArgument::Python
+        && (request.compile_commands.is_some() || request.architecture.is_some())
+    {
+        eprintln!("error: --compile-commands and --architecture apply only to --language cpp");
+        return ExitCode::FAILURE;
+    }
+    let (symbols, resolutions, diagnostics, language_modules) = match language {
+        CallLanguageArgument::Python => {
+            let environment = request
+                .python
+                .map(|path| PythonEnvironmentSelection::Interpreter(path.to_path_buf()))
+                .or_else(|| {
+                    request.venv.map(|path| {
+                        PythonEnvironmentSelection::VirtualEnvironment(path.to_path_buf())
+                    })
+                });
+            let dependencies = match resolve_python_dependencies(
+                &analysis,
+                &PythonResolutionOptions { environment },
+            ) {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    eprintln!("error: could not resolve Python imports for call analysis: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let resolution = resolve_python_calls(&analysis, &dependencies);
+            let diagnostics: Vec<String> = dependencies
+                .diagnostics
+                .iter()
+                .chain(resolution.diagnostics.iter())
+                .cloned()
+                .collect();
+            (
+                resolution.symbols,
+                resolution.resolutions,
+                diagnostics,
+                Vec::new(),
+            )
+        }
+        CallLanguageArgument::Cpp => {
+            let dependencies = match resolve_cpp_dependencies(
+                &analysis,
+                &CppResolutionOptions {
+                    compilation_database: request.compile_commands.map(Path::to_path_buf),
+                },
+            ) {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    eprintln!("error: could not resolve C++ includes for call analysis: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut resolution = resolve_cpp_calls(&analysis, &dependencies);
+            if let Some(path) = request.architecture
+                && let Err(error) = apply_architecture_to_resolution(path, &mut resolution)
+            {
+                eprintln!("error: {error}");
                 return ExitCode::FAILURE;
             }
-        };
-    let resolution = resolve_python_calls(&analysis, &dependencies);
-    let graph = analyze_call_graph(&resolution.symbols, &resolution.resolutions);
+            let diagnostics: Vec<String> = dependencies
+                .diagnostics
+                .iter()
+                .chain(resolution.diagnostics.iter())
+                .cloned()
+                .collect();
+            (
+                resolution.symbols,
+                resolution.resolutions,
+                diagnostics,
+                resolution.modules,
+            )
+        }
+    };
+    let graph = analyze_call_graph_with_modules(&symbols, &resolutions, language_modules);
     let filter = CallGraphFilter {
         focus_symbols: request.focus.to_vec(),
         direction: request
@@ -1875,11 +2028,7 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    for diagnostic in dependencies
-        .diagnostics
-        .iter()
-        .chain(resolution.diagnostics.iter())
-    {
+    for diagnostic in &diagnostics {
         eprintln!("warning: {diagnostic}");
     }
     if matches!(
@@ -1898,7 +2047,11 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             ExitCode::SUCCESS
         }
         CallOutputFormat::Json => {
-            match serde_json::to_string_pretty(&CallJsonReport::from_analysis(&graph, &view)) {
+            match serde_json::to_string_pretty(&CallJsonReport::from_analysis_for_language(
+                language.as_str(),
+                &graph,
+                &view,
+            )) {
                 Ok(json) => {
                     println!("{json}");
                     ExitCode::SUCCESS
@@ -1921,6 +2074,7 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             &view,
             request.path,
             request.include_source,
+            request.max_expansion_depth.unwrap_or(3),
             request.output,
             request.open,
         ),
@@ -1930,12 +2084,14 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
 fn print_call_summary(path: &Path, graph: &CallGraphAnalysis, view: &CallGraphView) {
     println!("Call project: {}", path.display());
     println!(
-        "Resolution coverage: total={} exact={} external={} ambiguous={} unresolved={}",
+        "Resolution coverage: total={} exact={} inferred={} external={} ambiguous={} unresolved={} unavailable={}",
         graph.coverage.total_calls,
         graph.coverage.exact_calls,
+        graph.coverage.inferred_calls,
         graph.coverage.external_calls,
         graph.coverage.ambiguous_calls,
-        graph.coverage.unresolved_calls
+        graph.coverage.unresolved_calls,
+        graph.coverage.unavailable_calls
     );
     println!(
         "Graph: nodes={} calls={} recursive-groups={} | view: nodes={} calls={}",
@@ -1995,11 +2151,13 @@ fn emit_call_html(
     view: &CallGraphView,
     project_root: &Path,
     include_source: bool,
+    max_expansion_depth: u8,
     output: Option<&Path>,
     open: bool,
 ) -> ExitCode {
     let html = match include_source {
-        true => render_call_html_with_source(view, project_root).map_err(|error| error.to_string()),
+        true => render_call_html_with_source(view, project_root, max_expansion_depth)
+            .map_err(|error| error.to_string()),
         false => render_call_html(view).map_err(|error| error.to_string()),
     };
     let html = match html {

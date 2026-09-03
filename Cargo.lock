@@ -141,6 +141,7 @@ dependencies = [
  "codegraide-analyzer-cpp",
  "codegraide-analyzer-python",
  "codegraide-core",
+ "serde",
  "serde_json",
  "tempfile",
 ]
@@ -150,6 +151,8 @@ name = "codegraide-analyzer-cpp"
 version = "0.1.0"
 dependencies = [
  "codegraide-core",
+ "globset",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

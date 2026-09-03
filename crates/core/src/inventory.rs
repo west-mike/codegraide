@@ -336,7 +336,8 @@ pub fn detect_language(path: &Path) -> Option<LanguageId> {
         "py" => "python",
         "rs" => "rust",
         "c" => "c",
-        "cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx" | "inl" | "ipp" | "tpp" => "cpp",
+        "cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx" | "inl" | "ipp" | "tpp" | "cppm"
+        | "ixx" | "mpp" | "ccm" | "cxxm" => "cpp",
         _ => return None,
     };
 
@@ -370,6 +371,8 @@ mod tests {
             ("legacy.H", "cpp"),
             ("header.HPP", "cpp"),
             ("template.tpp", "cpp"),
+            ("facade.cppm", "cpp"),
+            ("partition.ixx", "cpp"),
         ];
 
         for (path, expected) in cases {

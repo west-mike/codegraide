@@ -121,8 +121,9 @@ cargo run -p codegraide -- analyze src/service.py
 The built-in analyzers parse Python and C++ with Tree-sitter. Python reports
 modules, classes, functions, methods, decorators, parameters, syntactic
 imports, explicit `__all__` exports, and function measurements. C++ reports
-namespaces, classes, structs, callable definitions, lambdas, syntactic
-includes, and structural measurements. A valid syntax tree is `successful`;
+namespaces, classes, structs, callable declarations and definitions, signatures,
+written calls, C++20 module syntax, syntactic includes, and structural
+measurements. A valid syntax tree is `successful`;
 a tree containing parser recovery nodes is `partial`. Parse diagnostics are
 evidence of syntax recovery only.
 Languages that inventory recognizes but cannot analyze are still shown as
@@ -163,32 +164,40 @@ cargo run -p codegraide -- analyze . --details src/service.py
 cargo run -p codegraide -- analyze . --format json
 ```
 
-The syntax report uses the independent `syntax-analysis-v5` definition and
-schema version `0.7.0`; compact review and gate JSON use `review-analysis-v3`
+The syntax report uses the independent `syntax-analysis-v6` definition and
+schema version `0.8.0`; compact review and gate JSON use `review-analysis-v3`
 and schema `0.3.0`, while inventory remains on schema `0.2.0`. Syntax output
 preserves Python import and C++ include evidence without labeling either as
-project-resolved. The separate dependency and call commands remain
-Python-only.
+project-resolved. The dependency command builds raw Python-import and
+C++-include graphs; the call command builds either a Python or C++ symbol
+explorer.
 
 ### C++ syntax analysis
 
 C++ syntax analysis is statically linked through `codegraide-analyzer-cpp` and
 pins `tree-sitter-cpp` 0.23.4. It analyzes `.cc`, `.cpp`, `.cxx`, `.hh`, `.hpp`,
-`.hxx`, `.ipp`, `.tpp`, and `.inl`. It also analyzes uppercase `.C` and files
+`.hxx`, `.ipp`, `.tpp`, `.inl`, `.cppm`, `.ixx`, `.mpp`, `.ccm`, and `.cxxm`.
+It also analyzes uppercase `.C` and files
 ending in `.h` or `.H` with the C++ grammar. Those three extensions can contain
 C, C++, or shared C/C++ code, so this is an analysis attempt rather than a
 claim that every such file is C++-only. Lowercase `.c` remains C.
 
-The first slice emits namespaces, classes, structs, function and method
-definitions, constructors, destructors, operators, template definitions, and
-lambdas. It preserves lexical `::` qualification; overloads can share a name
-while retaining distinct stable symbol IDs. Angle, quoted, macro, and
-conditionally compiled includes retain their delimiter and conditional
-context.
+The analyzer emits namespaces, classes, structs, declarations, definitions,
+callable signatures, constructors, destructors, operators, template
+definitions, lambdas, and syntactically visible written calls. It preserves
+lexical `::` qualification; overloads can share a name while retaining distinct
+stable symbol IDs. Angle, quoted, macro, and conditionally compiled includes
+retain their delimiter and conditional context. A small comment/string-aware
+scanner recognizes C++20 module declarations, partitions, imports, header
+units, exports, and exported `using` aliases because the pinned grammar does
+not expose module nodes.
 
 This is syntax evidence, not compiler semantics. It does not preprocess macros,
-read `compile_commands.json`, resolve include paths, types, overloads, calls,
-templates, or modules, or build a C++ dependency graph. Parser recovery makes
+execute a compiler, or claim complete template, conversion, overload, or
+virtual-dispatch behavior. The dependency and call resolvers add conservative
+project links on top of these facts. An explicitly selected
+`compile_commands.json` can improve include visibility, but Codegraide only
+reads it and never executes its commands. Parser recovery makes
 affected measurements unavailable. Conditional-preprocessor syntax inside a
 callable also makes its complexity and nesting unavailable because no active
 configuration is known. Macro-expanded control flow is therefore a syntactic
@@ -443,9 +452,11 @@ exact local-module relations only. Dynamic imports, custom import hooks,
 runtime re-exports, and the internals of external packages remain outside the
 static graph contract.
 
-## Python call graphs
+## Python and C++ code exploration
 
-Build an evidence-backed symbol call graph with a separate command and report:
+Build an evidence-backed symbol call graph with a separate command and report.
+Python-only and C++-only repositories select their language automatically;
+mixed repositories require `--language python` or `--language cpp`:
 
 ```sh
 cargo run -p codegraide -- calls .
@@ -459,28 +470,113 @@ cargo run -p codegraide -- calls . \
 cargo run -p codegraide -- calls . --cycles-only --format dot > calls.dot
 ```
 
-Call extraction is `python-call-references-v1`; syntax JSON is `0.7.0`, and the
-independent call-report JSON schema starts at `0.1.0` with `call-graph-v1`.
+Python call extraction remains `python-call-references-v1`. C++ uses
+`cpp-symbol-index-v1`, `cpp-declaration-definition-linking-v1`,
+`cpp-call-references-v1`, `cpp-call-resolution-v1`, and `cpp-modules-v1`.
+The independent call report is schema `0.2.0` with `call-graph-v2`.
 Selectors use `module::qualified.symbol`, such as
 `shop.service::Client.send`; duplicate definitions require `#N`.
+C++ selectors are qualified names such as
+`argparse::ArgumentParser::parse_args_internal`.
 
-Version 1 resolves same-module and nested functions, imported function aliases,
+Python resolution handles same-module and nested functions, imported function aliases,
 local module aliases, `self.method()`/`cls.method()` in the same class, local
 constructors, and direct recursion. It preserves external, ambiguous, and
 unresolved call boundaries. Arbitrary instance dispatch, assignment aliases,
 inheritance lookup, decorators, monkey patching, higher-order values, and
-runtime metaprogramming are deliberately not guessed. The HTML output reuses
-the offline explorer, including hierarchy drill-down, search, neighborhood
-views, evidence inspection, recursion groups, pan, and zoom.
+runtime metaprogramming are deliberately not guessed.
 
-Add `--include-source` to HTML output to embed source for local symbols.
-Selecting a symbol then shows its definition and every direct caller grouped
-with the supporting call sites. Definitions up to 15 lines expand
-automatically; longer definitions and caller bodies can be expanded in the
-sidebar. Hovering a caller card highlights the corresponding graph
-relationship. Source embedding is opt-in because it increases report size and
-can expose private repository code when an HTML report is shared. It changes
-only the HTML presentation payload, not the stable call-report JSON schema.
+C++ resolution generates candidates only from lexical scope and visible local
+includes or module exports, then narrows them using written qualification,
+recoverable receiver type, callable kind, arity, and simple argument type hints.
+Every call is labeled `exact`, `inferred`, `ambiguous`, `external`, `unresolved`,
+or `unavailable`; ambiguous and inferred results retain viable alternatives.
+Exact and inferred calls are browsable by default, while fan metrics, recursion,
+and cycles use exact calls only. `--exact-only` removes every non-exact relation.
+
+The call HTML is a graph-first explorer rather than the dependency viewer or a
+text editor. Its center always shows the focused caller/callee graph: click a
+node to recenter, select depth 1-3, and pan or zoom without drawing the entire
+repository at once. Call depth follows call edges only; selecting a method does
+not expand every sibling method in its class. Each graph column shows at most
+seven useful matches and reports how many are hidden, so labels remain readable.
+The bounded left navigator switches among Files, Symbols, C++ Modules, and flat
+Architecture groups. It hides tests, bundled support code, synthetic parser
+details, and uncertain boundaries by default; each has an explicit reveal
+switch. The code, metrics, locations, and candidate-evidence sidebar starts
+closed and both side panels can be toggled. Columns state the direction in
+reading order (`CALLS selected` → `SELECTED FUNCTION` → `selected CALLS`), and
+exact versus likely matches use distinct solid arrow colors. Clicking the
+product title returns to the project overview. Embedded C++ source has
+lightweight syntax highlighting and never replaces the graph.
+
+Add `--include-source` to HTML to enable explanatory call expansion directly
+beneath a written call. It does not pretend to inline compiled C++. Expansion
+stops at `--max-expansion-depth` (default 3), at recursion, or after 100 cards.
+Source embedding can expose private code when a report is shared, so it remains
+HTML-only and opt-in.
+
+### Try both explorers on argparse
+
+The pinned argparse v3.2 checkout in the test-repository workspace needs no
+compiler, Clang library, compilation database, CMake configure step, or edits:
+
+```sh
+ARGPARSE=../codegraide-test-repos/cpp/small/argparse
+cargo build --release
+```
+
+Raw file/include explorer:
+
+```sh
+./target/release/codegraide dependencies "$ARGPARSE" \
+  --language cpp --local-only \
+  --format html --output target/argparse-includes --open
+```
+
+Full searchable code explorer with source, C++20 modules, and architecture:
+
+```sh
+./target/release/codegraide calls "$ARGPARSE" \
+  --language cpp \
+  --architecture examples/argparse-architecture.json \
+  --include-source --max-expansion-depth 3 \
+  --format html --output target/argparse-code-explorer.html --open
+```
+
+Focused parsing neighborhood and expanded reading:
+
+```sh
+./target/release/codegraide calls "$ARGPARSE" \
+  --language cpp \
+  --focus 'argparse::ArgumentParser::parse_args_internal' \
+  --direction both --depth 2 \
+  --include-source --max-expansion-depth 3 \
+  --format html --output target/argparse-parse-args.html --open
+```
+
+Terminal resolution summary:
+
+```sh
+./target/release/codegraide calls "$ARGPARSE" --language cpp
+```
+
+Machine-readable evidence:
+
+```sh
+./target/release/codegraide calls "$ARGPARSE" \
+  --language cpp --format json > target/argparse-calls.json
+```
+
+Focused Mermaid export:
+
+```sh
+./target/release/codegraide calls "$ARGPARSE" \
+  --language cpp \
+  --focus 'argparse::ArgumentParser::parse_args_internal' \
+  --direction callees --depth 2 \
+  --format mermaid > target/argparse-parse-args.mmd
+```
 
 ## Deterministic review gate
 

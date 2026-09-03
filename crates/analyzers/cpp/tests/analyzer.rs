@@ -4,8 +4,9 @@ use codegraide_analyzer_cpp::{
     CPP_CYCLOMATIC_COMPLEXITY, CPP_MAX_CONTROL_FLOW_NESTING, CppAnalyzer,
 };
 use codegraide_core::{
-    AnalysisInput, AnalyzerCapability, DependencyReference, FileAnalysisStatus, IncludeDelimiter,
-    LanguageAnalyzer, MeasurementConcept, MeasurementStatus, SymbolKind,
+    AnalysisInput, AnalyzerCapability, CallForm, DependencyReference, FileAnalysisStatus,
+    IncludeDelimiter, LanguageAnalyzer, LanguageModuleKind, MeasurementConcept, MeasurementStatus,
+    ModuleImportKind, SymbolKind,
 };
 
 fn analyze(name: &str, source: &[u8]) -> codegraide_core::FileAnalysis {
@@ -14,6 +15,112 @@ fn analyze(name: &str, source: &[u8]) -> codegraide_core::FileAnalysis {
         path: Path::new(name),
         source,
     })
+}
+
+#[test]
+fn extracts_declarations_signatures_and_written_call_forms() {
+    let result = analyze(
+        "calls.cpp",
+        br#"
+namespace demo {
+struct Widget {
+  Widget(int value = 1);
+  void run() const;
+};
+Widget make() {
+  Widget direct(1);
+  Widget braced{2};
+  auto temporary = Widget(3);
+  auto braced_temporary = Widget{4};
+  auto pointer = new Widget(5);
+  direct.run();
+  return braced;
+}
+}
+using demo::Widget;
+using WidgetAlias = demo::Widget;
+using namespace demo;
+"#,
+    );
+    assert!(result.facts.declarations.iter().any(|declaration| {
+        declaration.qualified_name == "demo::Widget::run"
+            && declaration
+                .callable_signature
+                .as_ref()
+                .is_some_and(|signature| {
+                    signature
+                        .qualifiers
+                        .iter()
+                        .any(|item| item.as_str() == "const")
+                })
+    }));
+    let constructors = result
+        .facts
+        .calls
+        .iter()
+        .filter(|call| call.form == CallForm::Constructor)
+        .collect::<Vec<_>>();
+    assert_eq!(constructors.len(), 5);
+    assert!(
+        constructors
+            .iter()
+            .any(|call| call.expression == "direct(1)")
+    );
+    assert!(
+        constructors
+            .iter()
+            .any(|call| call.expression == "braced{2}")
+    );
+    assert!(
+        result
+            .facts
+            .calls
+            .iter()
+            .any(|call| { call.form == CallForm::Member && call.expression == "direct.run()" })
+    );
+    assert_eq!(result.facts.using_references.len(), 3);
+}
+
+#[test]
+fn scans_cpp20_modules_without_a_compiler_or_preprocessor() {
+    let result = analyze(
+        "facade.cppm",
+        br#"
+module;
+export module demo:api;
+import std;
+export import :detail;
+import <vector>;
+export namespace demo {
+  using demo::Widget;
+}
+"#,
+    );
+    assert_eq!(result.facts.modules.len(), 1);
+    assert_eq!(result.facts.modules[0].name, "demo");
+    assert_eq!(result.facts.modules[0].partition.as_deref(), Some("api"));
+    assert_eq!(
+        result.facts.modules[0].kind,
+        LanguageModuleKind::InterfacePartition
+    );
+    assert_eq!(result.facts.module_imports.len(), 3);
+    assert_eq!(result.facts.module_imports[0].kind, ModuleImportKind::Named);
+    assert!(result.facts.module_imports[1].exported);
+    assert_eq!(
+        result.facts.module_imports[2].kind,
+        ModuleImportKind::HeaderAngle
+    );
+    assert_eq!(result.facts.module_exports[0].target, "demo::Widget");
+    assert!(
+        result
+            .facts
+            .symbols
+            .iter()
+            .any(|symbol| symbol.kind == SymbolKind::Namespace && symbol.qualified_name == "demo")
+    );
+    assert!(!result.facts.symbols.iter().any(|symbol| {
+        symbol.kind == SymbolKind::Function && symbol.qualified_name == "namespace"
+    }));
 }
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -31,7 +138,7 @@ fn descriptor_declares_exact_provenance_and_capabilities() {
     let descriptor = analyzer.descriptor();
     assert_eq!(descriptor.id, "cpp-tree-sitter");
     assert_eq!(descriptor.language.as_str(), "cpp");
-    assert_eq!(descriptor.version, "0.3.0");
+    assert_eq!(descriptor.version, "0.4.0");
     assert_eq!(descriptor.grammar.as_ref().unwrap().version, "0.23.4");
     assert!(
         descriptor
@@ -39,7 +146,7 @@ fn descriptor_declares_exact_provenance_and_capabilities() {
             .contains(&AnalyzerCapability::Symbols)
     );
     assert!(
-        !descriptor
+        descriptor
             .capabilities
             .contains(&AnalyzerCapability::CallReferences)
     );
@@ -48,7 +155,7 @@ fn descriptor_declares_exact_provenance_and_capabilities() {
             .capabilities
             .contains(&AnalyzerCapability::Documentation)
     );
-    assert_eq!(descriptor.queries.len(), 4);
+    assert_eq!(descriptor.queries.len(), 6);
     assert!(
         descriptor
             .limitations

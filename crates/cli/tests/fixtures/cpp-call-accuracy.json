@@ -1,0 +1,2238 @@
+{
+  "schema_version": "0.1.0",
+  "reviewed": false,
+  "review_basis": "deterministic stratified baseline; target sets require maintainer review before release gating",
+  "repositories": [
+    {
+      "name": "argparse",
+      "revision": "3eda91b2e1ce7d569f84ba295507c4cd8fd96910",
+      "relative_path": "cpp/small/argparse",
+      "labels": [
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 113,
+          "column": 18,
+          "form": "constructor",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 113,
+          "column": 30,
+          "form": "constructor",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 117,
+          "column": 23,
+          "form": "member",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 119,
+          "column": 14,
+          "form": "functor",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 119,
+          "column": 20,
+          "form": "member",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 120,
+          "column": 7,
+          "form": "qualified",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 121,
+          "column": 11,
+          "form": "qualified",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 122,
+          "column": 11,
+          "form": "qualified",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 124,
+          "column": 15,
+          "form": "qualified",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 126,
+          "column": 49,
+          "form": "free",
+          "expected_owner": "argparse::details::repr::<lambda>@126:11",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::details::repr"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 134,
+          "column": 14,
+          "form": "functor",
+          "expected_owner": "argparse::details::repr",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 185,
+          "column": 10,
+          "form": "qualified",
+          "expected_owner": "argparse::details::apply_plus_one",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::details::apply_plus_one_impl"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 187,
+          "column": 7,
+          "form": "constructor",
+          "expected_owner": "argparse::details::apply_plus_one",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 216,
+          "column": 7,
+          "form": "free",
+          "expected_owner": "argparse::details::consume_binary_prefix",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::details::starts_with"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 233,
+          "column": 7,
+          "form": "free",
+          "expected_owner": "argparse::details::consume_hex_prefix",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::details::starts_with"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 242,
+          "column": 5,
+          "form": "constructor",
+          "expected_owner": "argparse::details::do_from_chars",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 372,
+          "column": 7,
+          "form": "free",
+          "expected_owner": "argparse::details::do_strtod",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 372,
+          "column": 15,
+          "form": "free",
+          "expected_owner": "argparse::details::do_strtod",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 380,
+          "column": 12,
+          "form": "free",
+          "expected_owner": "argparse::details::do_strtod",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 566,
+          "column": 30,
+          "form": "qualified",
+          "expected_owner": "argparse::details::get_most_similar_string",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 636,
+          "column": 24,
+          "form": "constructor",
+          "expected_owner": "argparse::Argument::default_value",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 637,
+          "column": 28,
+          "form": "qualified",
+          "expected_owner": "argparse::Argument::default_value",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::details::repr"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 650,
+          "column": 12,
+          "form": "functor",
+          "expected_owner": "argparse::Argument::default_value",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "argparse::details::parse_number::operator()#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 660,
+          "column": 24,
+          "form": "constructor",
+          "expected_owner": "argparse::Argument::implicit_value",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 688,
+          "column": 20,
+          "form": "qualified",
+          "expected_owner": "argparse::Argument::action::<lambda>@685:11",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::details::apply_plus_one"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 696,
+          "column": 7,
+          "form": "free",
+          "expected_owner": "argparse::Argument::store_into",
+          "expected_status": "exact",
+          "correct_targets": [
+            "argparse::Argument::flag"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 894,
+          "column": 12,
+          "form": "free",
+          "expected_owner": "argparse::Argument::remaining",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "argparse::Argument::nargs#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 925,
+          "column": 5,
+          "form": "functor",
+          "expected_owner": "argparse::Argument::choices",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "argparse::details::parse_number::operator()#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 984,
+          "column": 11,
+          "form": "member",
+          "expected_owner": "argparse::Argument::consume",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1018,
+          "column": 43,
+          "form": "functor",
+          "expected_owner": "argparse::Argument::consume::<lambda>@1018:22",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "argparse::details::parse_number::operator()#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1104,
+          "column": 7,
+          "form": "free",
+          "expected_owner": "argparse::Argument::validate",
+          "expected_status": "exact",
+          "correct_targets": [
+            "argparse::Argument::find_default_value_in_choices_or_throw"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1119,
+          "column": 14,
+          "form": "free",
+          "expected_owner": "argparse::Argument::get_usage_full",
+          "expected_status": "exact",
+          "correct_targets": [
+            "argparse::Argument::get_names_csv"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1371,
+          "column": 9,
+          "form": "member",
+          "expected_owner": "argparse::Argument::throw_nargs_range_validation_error",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::Argument::NArgsRange::is_exact"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1372,
+          "column": 17,
+          "form": "member",
+          "expected_owner": "argparse::Argument::throw_nargs_range_validation_error",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::Argument::NArgsRange::get_min"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1373,
+          "column": 16,
+          "form": "member",
+          "expected_owner": "argparse::Argument::throw_nargs_range_validation_error",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::Argument::NArgsRange::is_right_bounded"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1708,
+          "column": 5,
+          "form": "pointer-member",
+          "expected_owner": "argparse::ArgumentParser::add_argument",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::Argument::set_usage_newline_counter"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1709,
+          "column": 5,
+          "form": "pointer-member",
+          "expected_owner": "argparse::ArgumentParser::add_argument",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::Argument::set_group_idx"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1736,
+          "column": 24,
+          "form": "member",
+          "expected_owner": "argparse::ArgumentParser::MutuallyExclusiveGroup::add_argument",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "argparse::ArgumentParser::MutuallyExclusiveGroup::add_argument#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1825,
+          "column": 16,
+          "form": "pointer-member",
+          "expected_owner": "argparse::ArgumentParser::at",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::Argument::get"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 1963,
+          "column": 12,
+          "form": "free",
+          "expected_owner": "argparse::ArgumentParser::is_subcommand_used",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "argparse::ArgumentParser::is_subcommand_used#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 2183,
+          "column": 10,
+          "form": "pointer-member",
+          "expected_owner": "argparse::ArgumentParser::usage",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "include/argparse/argparse.hpp",
+          "line": 2427,
+          "column": 51,
+          "form": "pointer-member",
+          "expected_owner": "argparse::ArgumentParser::parse_args_internal",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "samples/compound_arguments.cpp",
+          "line": 6,
+          "column": 28,
+          "form": "constructor",
+          "expected_owner": "main",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::ArgumentParser::ArgumentParser"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "samples/compound_arguments.cpp",
+          "line": 12,
+          "column": 3,
+          "form": "member",
+          "expected_owner": "main",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "argparse::Argument::default_value#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "samples/custom_assignment_characters.cpp",
+          "line": 7,
+          "column": 28,
+          "form": "constructor",
+          "expected_owner": "main",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::ArgumentParser::ArgumentParser"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "samples/custom_prefix_characters.cpp",
+          "line": 7,
+          "column": 28,
+          "form": "constructor",
+          "expected_owner": "main",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "argparse::ArgumentParser::ArgumentParser"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "samples/is_used.cpp",
+          "line": 8,
+          "column": 3,
+          "form": "member",
+          "expected_owner": "main",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "argparse::Argument::default_value#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 183,
+          "column": 5,
+          "form": "functor",
+          "expected_owner": "@file::test::doctest.hpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 184,
+          "column": 5,
+          "form": "functor",
+          "expected_owner": "@file::test::doctest.hpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 185,
+          "column": 5,
+          "form": "functor",
+          "expected_owner": "@file::test::doctest.hpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 216,
+          "column": 1,
+          "form": "constructor",
+          "expected_owner": "@file::test::doctest.hpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 540,
+          "column": 21,
+          "form": "free",
+          "expected_owner": "std",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 885,
+          "column": 5,
+          "form": "free",
+          "expected_owner": "doctest::IContextScope",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 966,
+          "column": 86,
+          "form": "free",
+          "expected_owner": "doctest::detail::types::is_enum",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1011,
+          "column": 60,
+          "form": "qualified",
+          "expected_owner": "doctest::detail::insert_hack<T, true>::insert",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1066,
+          "column": 9,
+          "form": "free",
+          "expected_owner": "doctest::detail::toStream",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "doctest::detail::filloss#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1096,
+          "column": 34,
+          "form": "member",
+          "expected_owner": "doctest::toString",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1097,
+          "column": 12,
+          "form": "member",
+          "expected_owner": "doctest::toString",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1097,
+          "column": 37,
+          "form": "member",
+          "expected_owner": "doctest::toString",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1097,
+          "column": 61,
+          "form": "qualified",
+          "expected_owner": "doctest::toString",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1107,
+          "column": 12,
+          "form": "qualified",
+          "expected_owner": "doctest::toString",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "doctest::detail::StringMakerBase::convert#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1153,
+          "column": 9,
+          "form": "qualified",
+          "expected_owner": "doctest::detail::filldata::fill",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1458,
+          "column": 78,
+          "form": "functor",
+          "expected_owner": "detail::Result",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Approx::operator()"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1459,
+          "column": 78,
+          "form": "functor",
+          "expected_owner": "detail::Result",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Approx::operator()"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1460,
+          "column": 78,
+          "form": "functor",
+          "expected_owner": "detail::Result",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Approx::operator()"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1606,
+          "column": 29,
+          "form": "constructor",
+          "expected_owner": "detail::Result",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1637,
+          "column": 28,
+          "form": "constructor",
+          "expected_owner": "detail::Result",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 1910,
+          "column": 16,
+          "form": "constructor",
+          "expected_owner": "detail::Result::MakeContextScope",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "detail::Result::ContextScope::ContextScope#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 4368,
+          "column": 25,
+          "form": "pointer-member",
+          "expected_owner": "<anonymous-namespace>@4362:1::fileOrderComparator",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "doctest::String::compare#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 4478,
+          "column": 16,
+          "form": "pointer-member",
+          "expected_owner": "<anonymous-namespace>@4362:1::translateActiveException",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 4586,
+          "column": 13,
+          "form": "member",
+          "expected_owner": "ContextScopeBase::ContextScopeBase",
+          "expected_status": "exact",
+          "correct_targets": [
+            "detail::Result::ContextScopeBase::destroy"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 4606,
+          "column": 13,
+          "form": "pointer-member",
+          "expected_owner": "@file::test::doctest.hpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/doctest.hpp",
+          "line": 4607,
+          "column": 13,
+          "form": "pointer-member",
+          "expected_owner": "@file::test::doctest.hpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/test_actions.cpp",
+          "line": 12,
+          "column": 28,
+          "form": "constructor",
+          "expected_owner": "@file::test::test_actions.cpp::initialization",
+          "expected_status": "exact",
+          "correct_targets": [
+            "argparse::ArgumentParser::ArgumentParser"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/test_actions.cpp",
+          "line": 23,
+          "column": 11,
+          "form": "member",
+          "expected_owner": "@file::test::test_actions.cpp::initialization",
+          "expected_status": "exact",
+          "correct_targets": [
+            "argparse::ArgumentParser::get"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/test_actions.cpp",
+          "line": 27,
+          "column": 28,
+          "form": "constructor",
+          "expected_owner": "@file::test::test_actions.cpp::initialization",
+          "expected_status": "exact",
+          "correct_targets": [
+            "argparse::ArgumentParser::ArgumentParser"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/test_actions.cpp",
+          "line": 75,
+          "column": 28,
+          "form": "constructor",
+          "expected_owner": "@file::test::test_actions.cpp::initialization",
+          "expected_status": "exact",
+          "correct_targets": [
+            "argparse::ArgumentParser::ArgumentParser"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/test_actions.cpp",
+          "line": 107,
+          "column": 20,
+          "form": "member",
+          "expected_owner": "@file::test::test_actions.cpp::initialization",
+          "expected_status": "exact",
+          "correct_targets": [
+            "argparse::ArgumentParser::get"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/test_default_args.cpp",
+          "line": 33,
+          "column": 36,
+          "form": "member",
+          "expected_owner": "@file::test::test_default_args.cpp::initialization",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "test/test_default_args.cpp",
+          "line": 35,
+          "column": 3,
+          "form": "member",
+          "expected_owner": "@file::test::test_default_args.cpp::initialization",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        }
+      ]
+    },
+    {
+      "name": "catch2",
+      "revision": "317ac1ed4c0bb6e6b91eafc817e05c488feffcb3",
+      "relative_path": "cpp/medium/catch2",
+      "labels": [
+        {
+          "path": ".conan/test_package/test_package.cpp",
+          "line": 4,
+          "column": 30,
+          "form": "functor",
+          "expected_owner": "Factorial",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": ".conan/test_package/test_package.cpp",
+          "line": 7,
+          "column": 1,
+          "form": "free",
+          "expected_owner": "@file::.conan::test_package::test_package.cpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": ".conan/test_package/test_package.cpp",
+          "line": 8,
+          "column": 5,
+          "form": "free",
+          "expected_owner": "@file::.conan::test_package::test_package.cpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": ".conan/test_package/test_package.cpp",
+          "line": 8,
+          "column": 14,
+          "form": "free",
+          "expected_owner": "@file::.conan::test_package::test_package.cpp::initialization",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Factorial"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "benchmarks/runtime_assertion_benches.cpp",
+          "line": 27,
+          "column": 37,
+          "form": "constructor",
+          "expected_owner": "<anonymous-namespace>@12:1::MatchAll",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "benchmarks/runtime_assertion_benches.cpp",
+          "line": 44,
+          "column": 26,
+          "form": "free",
+          "expected_owner": "<anonymous-namespace>@12:1",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "benchmarks/runtime_assertion_benches.cpp",
+          "line": 50,
+          "column": 25,
+          "form": "free",
+          "expected_owner": "<anonymous-namespace>@12:1",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/010-TestCase.cpp",
+          "line": 19,
+          "column": 14,
+          "form": "free",
+          "expected_owner": "@file::examples::010-TestCase.cpp::initialization",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Factorial"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/030-Asn-Require-Check.cpp",
+          "line": 28,
+          "column": 5,
+          "form": "functor",
+          "expected_owner": "@file::examples::030-Asn-Require-Check.cpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/030-Asn-Require-Check.cpp",
+          "line": 32,
+          "column": 5,
+          "form": "functor",
+          "expected_owner": "@file::examples::030-Asn-Require-Check.cpp::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/100-Fix-Section.cpp",
+          "line": 24,
+          "column": 22,
+          "form": "constructor",
+          "expected_owner": "@file::examples::100-Fix-Section.cpp::initialization",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/100-Fix-Section.cpp",
+          "line": 26,
+          "column": 14,
+          "form": "member",
+          "expected_owner": "@file::examples::100-Fix-Section.cpp::initialization",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Catch::StringRef::size"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/100-Fix-Section.cpp",
+          "line": 27,
+          "column": 14,
+          "form": "member",
+          "expected_owner": "@file::examples::100-Fix-Section.cpp::initialization",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/100-Fix-Section.cpp",
+          "line": 32,
+          "column": 18,
+          "form": "member",
+          "expected_owner": "@file::examples::100-Fix-Section.cpp::initialization",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Catch::StringRef::size"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/110-Fix-ClassFixture.cpp",
+          "line": 23,
+          "column": 16,
+          "form": "constructor",
+          "expected_owner": "DBConnection::createConnection",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/110-Fix-ClassFixture.cpp",
+          "line": 28,
+          "column": 19,
+          "form": "qualified",
+          "expected_owner": "DBConnection::executeSQL",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/111-Fix-PersistentFixture.cpp",
+          "line": 33,
+          "column": 9,
+          "form": "qualified",
+          "expected_owner": "ClassWithExpensiveSetup::ClassWithExpensiveSetup",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/111-Fix-PersistentFixture.cpp",
+          "line": 68,
+          "column": 33,
+          "form": "member",
+          "expected_owner": "@file::examples::111-Fix-PersistentFixture.cpp::initialization",
+          "expected_status": "exact",
+          "correct_targets": [
+            "ClassWithExpensiveSetup::getInt"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/120-Bdd-ScenarioGivenWhenThen.cpp",
+          "line": 18,
+          "column": 26,
+          "form": "constructor",
+          "expected_owner": "@file::examples::120-Bdd-ScenarioGivenWhenThen.cpp::initialization",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/210-Evt-EventListeners.cpp",
+          "line": 101,
+          "column": 47,
+          "form": "member",
+          "expected_owner": "<anonymous-namespace>@27:1::print",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::Benchmark::OutlierClassification::total#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/210-Evt-EventListeners.cpp",
+          "line": 326,
+          "column": 9,
+          "form": "free",
+          "expected_owner": "<anonymous-namespace>@27:1::MyListener::testRunStarting",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "<anonymous-namespace>@27:1::print#2"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/210-Evt-EventListeners.cpp",
+          "line": 334,
+          "column": 9,
+          "form": "free",
+          "expected_owner": "<anonymous-namespace>@27:1::MyListener::testRunEnded",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "<anonymous-namespace>@27:1::print#2"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/231-Cfg-OutputStreams.cpp",
+          "line": 48,
+          "column": 33,
+          "form": "constructor",
+          "expected_owner": "Catch::cout",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "out_buff::out_buff"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/231-Cfg-OutputStreams.cpp",
+          "line": 52,
+          "column": 33,
+          "form": "constructor",
+          "expected_owner": "Catch::clog",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "out_buff::out_buff"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/232-Cfg-CustomMain.cpp",
+          "line": 33,
+          "column": 20,
+          "form": "member",
+          "expected_owner": "main",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::Session::applyCommandLine#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "examples/300-Gen-OwnGenerator.cpp",
+          "line": 71,
+          "column": 12,
+          "form": "qualified",
+          "expected_owner": "<anonymous-namespace>@21:1::random",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 52,
+          "column": 24,
+          "form": "qualified",
+          "expected_owner": "Catch::Benchmark::Detail::measure_environment_default",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Catch::Benchmark::Detail::measure_environment"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 65,
+          "column": 31,
+          "form": "qualified",
+          "expected_owner": "Catch::Benchmark::Detail::prepare_default",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Catch::Benchmark::Detail::run_for_at_least"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 113,
+          "column": 44,
+          "form": "pointer-member",
+          "expected_owner": "Catch::Benchmark::Detail::analyse",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Catch::Clara::Detail::TokenStream::count"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 149,
+          "column": 38,
+          "form": "functor",
+          "expected_owner": "Catch::Benchmark::Detail::analyse",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Catch::Benchmark::Detail::repeater::operator()"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 207,
+          "column": 17,
+          "form": "qualified",
+          "expected_owner": "Catch::Benchmark::Detail::throw_optimized_away_error",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::throw_exception#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 253,
+          "column": 56,
+          "form": "functor",
+          "expected_owner": "Catch::Benchmark::Detail::<anonymous-namespace>@234:13::resample",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::Approx::operator()#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 256,
+          "column": 29,
+          "form": "functor",
+          "expected_owner": "Catch::Benchmark::Detail::<anonymous-namespace>@234:13::resample",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::Detail::CaseInsensitiveEqualTo::operator()#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 397,
+          "column": 44,
+          "form": "unknown",
+          "expected_owner": "Catch::Benchmark::Detail::<anonymous-namespace>@234:13::jackknife",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 502,
+          "column": 32,
+          "form": "unknown",
+          "expected_owner": "Catch::Benchmark::Detail::bootstrap",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 527,
+          "column": 22,
+          "form": "qualified",
+          "expected_owner": "Catch::Benchmark::Detail::bootstrap",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::Detail::directCompare#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 563,
+          "column": 28,
+          "form": "qualified",
+          "expected_owner": "Catch::Benchmark::Detail::analyse_samples::<lambda>@560:33",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 573,
+          "column": 38,
+          "form": "member",
+          "expected_owner": "Catch::Benchmark::Detail::analyse_samples",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 574,
+          "column": 40,
+          "form": "member",
+          "expected_owner": "Catch::Benchmark::Detail::analyse_samples",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 782,
+          "column": 20,
+          "form": "qualified",
+          "expected_owner": "Catch::<anonymous-namespace>@777:5::enableBazelEnvSupport",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1044,
+          "column": 16,
+          "form": "pointer-member",
+          "expected_owner": "Catch::getSeed",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::Config::rngSeed#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1269,
+          "column": 24,
+          "form": "pointer-member",
+          "expected_owner": "Catch::<anonymous-namespace>@1259:5::prepareReporters",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::StringRef::size#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1269,
+          "column": 24,
+          "form": "pointer-member",
+          "expected_owner": "Catch::<anonymous-namespace>@1259:5::prepareReporters",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Catch::Config::getProcessedReporterSpecs"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1416,
+          "column": 13,
+          "form": "constructor",
+          "expected_owner": "Catch::<anonymous-namespace>@1259:5::Session::Session",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1417,
+          "column": 13,
+          "form": "constructor",
+          "expected_owner": "Catch::<anonymous-namespace>@1259:5::Session::Session",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1431,
+          "column": 26,
+          "form": "pointer-member",
+          "expected_owner": "Catch",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1432,
+          "column": 13,
+          "form": "pointer-member",
+          "expected_owner": "Catch",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1486,
+          "column": 13,
+          "form": "functor",
+          "expected_owner": "Session::applyCommandLine",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "Catch::Benchmark::Detail::do_nothing::operator()"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 1614,
+          "column": 33,
+          "form": "member",
+          "expected_owner": "Session::runInternal",
+          "expected_status": "exact",
+          "correct_targets": [
+            "Catch::<anonymous-namespace>@1259:5::TestGroup::execute"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 2056,
+          "column": 73,
+          "form": "member",
+          "expected_owner": "Catch::<anonymous-namespace>@2054:5::getCurrentNanosecondsSinceEpoch",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 2202,
+          "column": 13,
+          "form": "qualified",
+          "expected_owner": "Catch::Detail::rawMemoryToString",
+          "expected_status": "exact",
+          "correct_targets": [
+            "Catch::Detail::<anonymous-namespace>@2088:5::Endianness::which"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 2536,
+          "column": 32,
+          "form": "pointer-member",
+          "expected_owner": "Catch::Generators::RandomFloatingGenerator<long double>::next",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 4774,
+          "column": 36,
+          "form": "constructor",
+          "expected_owner": "Catch::<anonymous-namespace>@4761:5",
+          "expected_status": "exact",
+          "correct_targets": [
+            "Catch::<anonymous-namespace>@4761:5::EscapeLUT::EscapeLUT"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 4796,
+          "column": 13,
+          "form": "qualified",
+          "expected_owner": "Catch::<anonymous-namespace>@4761:5::makeEscapeStringRef",
+          "expected_status": "exact",
+          "correct_targets": [
+            "Catch::Detail::ExprLhs::BinaryExpr<LhsT, RhsT>::Catch::Detail::Unreachable"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 6670,
+          "column": 9,
+          "form": "free",
+          "expected_owner": "Catch::RunContext::handleFatalErrorCondition",
+          "expected_status": "exact",
+          "correct_targets": [
+            "Catch::RunContext::handleUnfinishedSections"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 6732,
+          "column": 17,
+          "form": "free",
+          "expected_owner": "Catch::RunContext::runCurrentTest",
+          "expected_status": "exact",
+          "correct_targets": [
+            "Catch::RunContext::invokeActiveTestCase"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 8326,
+          "column": 28,
+          "form": "constructor",
+          "expected_owner": "Catch::TextFlow::Column::const_iterator::operator++",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::TextFlow::AnsiSkippingString::const_iterator::const_iterator#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "extras/catch_amalgamated.cpp",
+          "line": 8345,
+          "column": 20,
+          "form": "constructor",
+          "expected_owner": "Catch::TextFlow::Spacer",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "Catch::TextFlow::Column::Column#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "src/catch2/catch_timer.cpp",
+          "line": 16,
+          "column": 20,
+          "form": "member",
+          "expected_owner": "Catch::<anonymous-namespace>@14:5::getCurrentNanosecondsSinceEpoch",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "src/catch2/internal/catch_jsonwriter.cpp",
+          "line": 31,
+          "column": 36,
+          "form": "constructor",
+          "expected_owner": "Catch::<anonymous-namespace>@18:5",
+          "expected_status": "exact",
+          "correct_targets": [
+            "Catch::<anonymous-namespace>@18:5::EscapeLUT::EscapeLUT"
+          ],
+          "runtime_dispatch": false
+        }
+      ]
+    },
+    {
+      "name": "opencv",
+      "revision": "40738fb16ceddb5fb3fea747585f7ce6abb0605b",
+      "relative_path": "cpp/large/opencv",
+      "labels": [
+        {
+          "path": "3rdparty/clapack/include/f2c.h",
+          "line": 60,
+          "column": 35,
+          "form": "free",
+          "expected_owner": "r_lg10",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/clapack/include/f2c.h",
+          "line": 65,
+          "column": 35,
+          "form": "free",
+          "expected_owner": "d_lg10",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/cpufeatures/cpu-features.h",
+          "line": 40,
+          "column": 1,
+          "form": "constructor",
+          "expected_owner": "@file::3rdparty::cpufeatures::cpu-features.h::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/array.h",
+          "line": 51,
+          "column": 12,
+          "form": "qualified",
+          "expected_owner": "flatbuffers::Array::Get",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/array.h",
+          "line": 106,
+          "column": 54,
+          "form": "member",
+          "expected_owner": "flatbuffers::Array::CopyFromSpan",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/array.h",
+          "line": 112,
+          "column": 22,
+          "form": "qualified",
+          "expected_owner": "flatbuffers::Array::CopyFromSpan",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/array.h",
+          "line": 130,
+          "column": 25,
+          "form": "member",
+          "expected_owner": "flatbuffers::Array::CopyFromSpanImpl",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/base.h",
+          "line": 111,
+          "column": 7,
+          "form": "constructor",
+          "expected_owner": "@file::3rdparty::flatbuffers::include::flatbuffers::base.h::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/base.h",
+          "line": 238,
+          "column": 11,
+          "form": "functor",
+          "expected_owner": "@file::3rdparty::flatbuffers::include::flatbuffers::base.h::initialization",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/base.h",
+          "line": 395,
+          "column": 11,
+          "form": "functor",
+          "expected_owner": "flatbuffers::EndianSwap",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/default_allocator.h",
+          "line": 42,
+          "column": 22,
+          "form": "pointer-member",
+          "expected_owner": "flatbuffers::Allocate",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/flatbuffers/include/flatbuffers/default_allocator.h",
+          "line": 48,
+          "column": 5,
+          "form": "pointer-member",
+          "expected_owner": "flatbuffers::Deallocate",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/ittnotify/include/ittnotify.h",
+          "line": 1901,
+          "column": 23,
+          "form": "constructor",
+          "expected_owner": "@file::3rdparty::ittnotify::include::ittnotify.h::initialization",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/libjpeg-turbo/simd/jsimd.h",
+          "line": 1041,
+          "column": 14,
+          "form": "free",
+          "expected_owner": "@file::3rdparty::libjpeg-turbo::simd::jsimd.h::initialization",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/libjpeg-turbo/simd/mips/jsimd_dspr2_asm.h",
+          "line": 169,
+          "column": 22,
+          "form": "functor",
+          "expected_owner": "@file::3rdparty::libjpeg-turbo::simd::mips::jsimd_dspr2_asm.h::initialization",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/libtiff/tif_stream.cxx",
+          "line": 117,
+          "column": 9,
+          "form": "pointer-member",
+          "expected_owner": "_tiffisReadProc",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/libtiff/tif_stream.cxx",
+          "line": 158,
+          "column": 40,
+          "form": "qualified",
+          "expected_owner": "_tiffosSeekProc",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/libtiff/tif_stream.cxx",
+          "line": 354,
+          "column": 19,
+          "form": "free",
+          "expected_owner": "_tiffStreamOpen",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "TIFFClientOpen"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/libtiff/tif_stream.cxx",
+          "line": 369,
+          "column": 19,
+          "form": "free",
+          "expected_owner": "_tiffStreamOpen",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "TIFFClientOpen"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/inc/mlas.h",
+          "line": 1757,
+          "column": 5,
+          "form": "free",
+          "expected_owner": "MlasGemm",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "MlasGemmBatch#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/inc/mlas.h",
+          "line": 1831,
+          "column": 41,
+          "form": "constructor",
+          "expected_owner": "MlasFp16Activation",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "MLAS_HALF_GEMM_ACTIVATION_PROCESSOR::MLAS_HALF_GEMM_ACTIVATION_PROCESSOR"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/inc/mlas.h",
+          "line": 1832,
+          "column": 5,
+          "form": "member",
+          "expected_owner": "MlasFp16Activation",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "MLAS_HALF_GEMM_ACTIVATION_PROCESSOR::Process"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/inc/mlas.h",
+          "line": 2162,
+          "column": 5,
+          "form": "free",
+          "expected_owner": "MlasTranspose",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "MlasTranspose#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/compute.cpp",
+          "line": 65,
+          "column": 54,
+          "form": "qualified",
+          "expected_owner": "@file::3rdparty::mlas::lib::compute.cpp::initialization",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/compute.cpp",
+          "line": 294,
+          "column": 28,
+          "form": "free",
+          "expected_owner": "MlasComputeExp<MLAS_FP16>",
+          "expected_status": "exact",
+          "correct_targets": [
+            "GetMlasPlatform"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/compute.cpp",
+          "line": 568,
+          "column": 19,
+          "form": "qualified",
+          "expected_owner": "MlasReduceMaximumF32Kernel",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/compute.cpp",
+          "line": 975,
+          "column": 28,
+          "form": "free",
+          "expected_owner": "MlasComputeSoftmaxThreaded<MLAS_FP16>",
+          "expected_status": "exact",
+          "correct_targets": [
+            "GetMlasPlatform"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/compute.cpp",
+          "line": 986,
+          "column": 37,
+          "form": "member",
+          "expected_owner": "MlasComputeSoftmaxThreaded<MLAS_FP16>",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "onnxruntime::MLFloat16::Negate"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/compute.cpp",
+          "line": 988,
+          "column": 31,
+          "form": "qualified",
+          "expected_owner": "MlasComputeSoftmaxThreaded<MLAS_FP16>",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "onnxruntime::MLFloat16::FromBits"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/core/common/common.h",
+          "line": 23,
+          "column": 12,
+          "form": "member",
+          "expected_owner": "onnxruntime::MlasShimMakeMessage",
+          "expected_status": "unresolved",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/kleidiai/mlasi_kleidiai.h",
+          "line": 55,
+          "column": 29,
+          "form": "qualified",
+          "expected_owner": "ArmKleidiAI",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "MLASCPUIDInfo::GetCPUIDInfo"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/qgemm.h",
+          "line": 477,
+          "column": 25,
+          "form": "pointer-member",
+          "expected_owner": "MlasGemmQuantOperation",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "MLAS_HALF_GEMM_2FLOAT_PROCESSOR::Process#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/mlas/lib/qgemm.h",
+          "line": 715,
+          "column": 25,
+          "form": "pointer-member",
+          "expected_owner": "MlasGemmQuantPackedOperation",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "MLAS_HALF_GEMM_2FLOAT_PROCESSOR::Process#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/any.cc",
+          "line": 45,
+          "column": 10,
+          "form": "functor",
+          "expected_owner": "google::protobuf::internal::AnyMetadata::PackFrom",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "internal::ElementCopier::operator()#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/any.cc",
+          "line": 58,
+          "column": 19,
+          "form": "pointer-member",
+          "expected_owner": "google::protobuf::internal::AnyMetadata::UnpackTo",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "google::protobuf::MessageLite::GetDescriptor"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/any.cc",
+          "line": 71,
+          "column": 21,
+          "form": "pointer-member",
+          "expected_owner": "google::protobuf::internal::GetAnyFieldDescriptors",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "google::internal::SymbolBase::FindFieldByNumber"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/any_lite.cc",
+          "line": 45,
+          "column": 23,
+          "form": "member",
+          "expected_owner": "google::protobuf::internal::GetTypeUrl",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "RepeatedField<Element>::size#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/any_lite.cc",
+          "line": 75,
+          "column": 10,
+          "form": "member",
+          "expected_owner": "google::protobuf::internal::AnyMetadata::InternalIs",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "RepeatedField<Element>::size#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arena.cc",
+          "line": 92,
+          "column": 7,
+          "form": "functor",
+          "expected_owner": "google::protobuf::internal::GetDeallocator::operator()",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "google::protobuf::hash<std::pair<First, Second> >::operator()#2"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arena.cc",
+          "line": 119,
+          "column": 10,
+          "form": "constructor",
+          "expected_owner": "google::protobuf::internal::SerialArena::New",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "google::protobuf::internal::SerialArena::SerialArena"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arena.cc",
+          "line": 128,
+          "column": 5,
+          "form": "functor",
+          "expected_owner": "google::protobuf::internal::SerialArena::Free",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "google::protobuf::internal::GetDeallocator::operator()"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arena.cc",
+          "line": 349,
+          "column": 18,
+          "form": "functor",
+          "expected_owner": "google::protobuf::internal::ThreadSafeArena::Free::<lambda>@348:18",
+          "expected_status": "inferred",
+          "correct_targets": [
+            "google::protobuf::internal::GetDeallocator::operator()"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arenastring.cc",
+          "line": 56,
+          "column": 11,
+          "form": "constructor",
+          "expected_owner": "google::protobuf::internal::LazyString::Init",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arenastring.cc",
+          "line": 66,
+          "column": 29,
+          "form": "constructor",
+          "expected_owner": "google::protobuf::internal::ArenaStringPtr::SetAndReturnNewString",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arenastring.cc",
+          "line": 144,
+          "column": 31,
+          "form": "qualified",
+          "expected_owner": "google::protobuf::internal::ArenaStringPtr::MutableNoCopy",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "google::protobuf::internal::InternalMetadata::DoMergeFrom<std::string>#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arenastring.cc",
+          "line": 181,
+          "column": 18,
+          "form": "unknown",
+          "expected_owner": "google::protobuf::internal::ArenaStringPtr::ReleaseNonDefault",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/arenastring.cc",
+          "line": 273,
+          "column": 15,
+          "form": "qualified",
+          "expected_owner": "google::protobuf::internal::EpsCopyInputStream::ReadArenaString",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "google::protobuf::internal::InternalMetadata::DoMergeFrom<std::string>#1"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/descriptor.cc",
+          "line": 1377,
+          "column": 34,
+          "form": "constructor",
+          "expected_owner": "google::protobuf::FileDescriptorTables::GetEmptyInstance",
+          "expected_status": "exact",
+          "correct_targets": [
+            "google::protobuf::FileDescriptorTables::FileDescriptorTables"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/descriptor.cc",
+          "line": 1452,
+          "column": 12,
+          "form": "member",
+          "expected_owner": "google::protobuf::DescriptorPool::Tables::FindByNameHelper",
+          "expected_status": "exact",
+          "correct_targets": [
+            "google::protobuf::Symbol::IsNull"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/descriptor.cc",
+          "line": 1462,
+          "column": 7,
+          "form": "member",
+          "expected_owner": "google::protobuf::DescriptorPool::Tables::FindByNameHelper",
+          "expected_status": "exact",
+          "correct_targets": [
+            "google::protobuf::Symbol::IsNull"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/descriptor.cc",
+          "line": 2903,
+          "column": 30,
+          "form": "constructor",
+          "expected_owner": "google::protobuf::<anonymous-namespace>@2839:1::RetrieveOptions",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "flatbuffers::unique_ptr::unique_ptr#2"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/descriptor.cc",
+          "line": 7029,
+          "column": 30,
+          "form": "constructor",
+          "expected_owner": "google::protobuf::DescriptorBuilder::OptionInterpreter::InterpretOptions",
+          "expected_status": "ambiguous",
+          "correct_targets": [
+            "flatbuffers::unique_ptr::unique_ptr#2"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/descriptor.cc",
+          "line": 7575,
+          "column": 40,
+          "form": "qualified",
+          "expected_owner": "google::protobuf::DescriptorBuilder::OptionInterpreter::SetOptionValue",
+          "expected_status": "exact",
+          "correct_targets": [
+            "google::protobuf::DescriptorPool::generated_pool"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/dynamic_message.cc",
+          "line": 706,
+          "column": 25,
+          "form": "constructor",
+          "expected_owner": "google::protobuf::DynamicMessageFactory::GetPrototypeNoLock",
+          "expected_status": "exact",
+          "correct_targets": [
+            "google::protobuf::DynamicMessageFactory::TypeInfo::TypeInfo"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/generated_message_reflection.cc",
+          "line": 2953,
+          "column": 3,
+          "form": "qualified",
+          "expected_owner": "<anonymous-namespace>@2866:1::AssignDescriptorsImpl",
+          "expected_status": "exact",
+          "correct_targets": [
+            "<anonymous-namespace>@2866:1::MetadataOwner::Instance"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/protobuf/src/google/protobuf/map_entry_lite.h",
+          "line": 426,
+          "column": 11,
+          "form": "unknown",
+          "expected_owner": "google::protobuf::internal::MapEntryImpl::Parser::ParseWithEnumValidation",
+          "expected_status": "unavailable",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/zlib-ng/win32/depcheck.cpp",
+          "line": 82,
+          "column": 36,
+          "form": "member",
+          "expected_owner": "main",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "3rdparty/zlib-ng/win32/depcheck.cpp",
+          "line": 98,
+          "column": 36,
+          "form": "member",
+          "expected_owner": "main",
+          "expected_status": "external",
+          "correct_targets": [],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "apps/interactive-calibration/frameProcessor.cpp",
+          "line": 435,
+          "column": 31,
+          "form": "pointer-member",
+          "expected_owner": "ShowProcessor::processFrame",
+          "expected_status": "exact",
+          "correct_targets": [
+            "calib::calibController::getFramesNumberState"
+          ],
+          "runtime_dispatch": false
+        },
+        {
+          "path": "apps/interactive-calibration/frameProcessor.cpp",
+          "line": 455,
+          "column": 12,
+          "form": "pointer-member",
+          "expected_owner": "ShowProcessor::processFrame",
+          "expected_status": "exact",
+          "correct_targets": [
+            "calib::calibController::getRMSState"
+          ],
+          "runtime_dispatch": false
+        }
+      ]
+    }
+  ]
+}

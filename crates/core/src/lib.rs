@@ -23,15 +23,18 @@ pub use analysis::{
 };
 pub use analyzer::{
     AnalysisDiagnostic, AnalysisFacts, AnalysisInput, AnalysisLevel, AnalyzerCapability,
-    AnalyzerDescriptor, AnalyzerRegistry, AnalyzerRegistryError, CallArgumentShape, CallReference,
+    AnalyzerDescriptor, AnalyzerRegistry, AnalyzerRegistryError, CallArgument, CallArgumentShape,
+    CallForm, CallReference, CallableParameter, CallableQualifier, CallableSignature,
     DecisionEvent, DecisionEventKind, Decorator, DependencyKind, DependencyReference,
     DiagnosticSeverity, DocumentationStatus, ExplicitExportName, ExplicitExportStatus,
     ExplicitExports, FileAnalysis, FileAnalysisStatus, GrammarDescriptor, ImportContext,
     ImportReference, ImportRequirement, ImportScope, ImportUsage, IncludeDelimiter,
-    IncludeReference, LanguageAnalyzer, Measurement, MeasurementConcept, MeasurementDescriptor,
-    MeasurementStatus, NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor,
-    ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolDocumentation,
-    SymbolId, SymbolKind, SymbolModifier,
+    IncludeReference, LanguageAnalyzer, LanguageModule, LanguageModuleKind, Measurement,
+    MeasurementConcept, MeasurementDescriptor, MeasurementStatus, ModuleExport, ModuleImport,
+    ModuleImportKind, NestingEvent, NestingEventKind, Parameter, ParameterKind, QueryDescriptor,
+    ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness, SymbolDeclaration,
+    SymbolDocumentation, SymbolId, SymbolKind, SymbolModifier, SymbolOccurrenceRole,
+    UsingReference, UsingReferenceKind,
 };
 pub use call_output::CallJsonReport;
 pub use calls::{
@@ -39,9 +42,10 @@ pub use calls::{
     CALL_REPORT_SCHEMA_VERSION, CALL_SCC_DEFINITION_VERSION, CallDirection, CallEvidence,
     CallGraphAnalysis, CallGraphCoverage, CallGraphFilter, CallGraphFilterError, CallGraphView,
     CallGraphViewNode, CallNode, CallNodeMetrics, CallRelation, CallRelationKind,
-    CallResolutionOutcome, CallScc, ProjectCallResolution, ProjectSymbol, ProjectSymbolId,
-    analyze_call_graph, call_closure, call_node_name, filter_call_graph, render_call_dot,
-    render_call_mermaid, shortest_call_path,
+    CallResolutionOutcome, CallScc, ProjectCallResolution, ProjectLanguageModule, ProjectSymbol,
+    ProjectSymbolId, ProjectSymbolLocation, SymbolLinkStatus, analyze_call_graph,
+    analyze_call_graph_with_modules, call_closure, call_node_name, filter_call_graph,
+    render_call_dot, render_call_mermaid, shortest_call_path,
 };
 pub use dependencies::{
     DEPENDENCY_CYCLE_DEFINITION_VERSION, DEPENDENCY_FAN_IN_DEFINITION_VERSION,

@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use codegraide_core::{
     CallResolutionOutcome, DependencyResolutionOutcome, DependencyTarget, ModuleId,
-    ProjectCallResolution, ProjectSymbol, ProjectSymbolId, RepositoryAnalysis, SymbolKind,
+    ProjectCallResolution, ProjectSymbol, ProjectSymbolId, ProjectSymbolLocation,
+    RepositoryAnalysis, SymbolKind, SymbolLinkStatus,
 };
 
 use crate::PythonDependencyResolution;
@@ -62,6 +63,16 @@ pub fn resolve_python_calls(
                     },
                     path: file.path.clone(),
                     span: symbol.span,
+                    signature: None,
+                    declarations: Vec::new(),
+                    definition: Some(ProjectSymbolLocation {
+                        path: file.path.clone(),
+                        span: symbol.span,
+                    }),
+                    link_status: SymbolLinkStatus::DefinitionOnly,
+                    language_module: None,
+                    architecture_groups: Vec::new(),
+                    primary_architecture_group: None,
                 };
                 by_syntax_id.insert(
                     (file.path.clone(), symbol.id.as_str().to_owned()),

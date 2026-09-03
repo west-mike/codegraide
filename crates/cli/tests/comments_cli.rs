@@ -56,7 +56,7 @@ fn analyze_reports_documentation_by_default_and_can_disable_it() {
     let enabled = run(&["analyze", root, "--format", "json"]);
     let report: Value = serde_json::from_slice(&enabled.stdout).expect("analysis JSON");
     assert!(enabled.status.success());
-    assert_eq!(report["report_schema_version"], "0.7.0");
+    assert_eq!(report["report_schema_version"], "0.8.0");
     assert_eq!(report["documentation_coverage"]["status"], "complete");
     assert_eq!(report["documentation_coverage"]["counts"]["eligible"], 7);
     assert_eq!(report["documentation_coverage"]["counts"]["documented"], 4);

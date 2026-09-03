@@ -84,11 +84,11 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert_eq!(report["report_schema_version"], "0.7.0");
+    assert_eq!(report["report_schema_version"], "0.8.0");
     assert_eq!(report["analysis"]["kind"], "syntax-analysis");
     assert_eq!(
         report["analysis"]["definition_version"],
-        "syntax-analysis-v5"
+        "syntax-analysis-v6"
     );
     assert_eq!(report["inventory"]["inventory_only_languages"]["rust"], 1);
     assert_eq!(
@@ -481,7 +481,7 @@ auto callback = [](int value) { return value ? value : 0; };
     ]);
     let report: Value = serde_json::from_slice(&output.stdout).expect("report should be JSON");
     assert!(output.status.success());
-    assert_eq!(report["report_schema_version"], "0.7.0");
+    assert_eq!(report["report_schema_version"], "0.8.0");
     let analyzers = report["analyzers"].as_array().expect("analyzers array");
     assert_eq!(analyzers.len(), 2);
     let cpp = analyzers
@@ -489,7 +489,7 @@ auto callback = [](int value) { return value ? value : 0; };
         .find(|run| run["language"] == "cpp")
         .expect("C++ analyzer run");
     assert_eq!(cpp["id"], "cpp-tree-sitter");
-    assert_eq!(cpp["version"], "0.3.0");
+    assert_eq!(cpp["version"], "0.4.0");
     assert_eq!(cpp["counts"]["analyzed"], 4);
     assert!(report["diagnostics"].as_array().is_some_and(|diagnostics| {
         diagnostics.iter().any(|diagnostic| {

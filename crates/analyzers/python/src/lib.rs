@@ -267,8 +267,13 @@ impl LanguageAnalyzer for PythonAnalyzer {
             diagnostics,
             facts: AnalysisFacts {
                 symbols: extraction.symbols,
+                declarations: Vec::new(),
                 dependencies: extraction.dependencies,
                 calls: extraction.calls,
+                modules: Vec::new(),
+                module_imports: Vec::new(),
+                module_exports: Vec::new(),
+                using_references: Vec::new(),
                 explicit_exports: Some(explicit_exports),
             },
         }
@@ -333,6 +338,7 @@ impl<'a> Extraction<'a> {
             modifiers: BTreeSet::new(),
             parameters: Vec::new(),
             decorators: Vec::new(),
+            callable_signature: None,
             documentation,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
@@ -532,6 +538,7 @@ impl<'a> Extraction<'a> {
             modifiers,
             parameters,
             decorators,
+            callable_signature: None,
             documentation,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
@@ -595,6 +602,7 @@ impl<'a> Extraction<'a> {
             modifiers: BTreeSet::new(),
             parameters,
             decorators: Vec::new(),
+            callable_signature: None,
             documentation: None,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
@@ -832,12 +840,18 @@ impl<'a> Extraction<'a> {
         }
         shape.keywords.sort();
         self.calls.push(CallReference {
+            expression: node_text(node, self.source),
             callee: node_text(function, self.source),
             components: call_components(function, self.source).unwrap_or_default(),
             enclosing_symbol,
             arguments: shape,
+            argument_details: Vec::new(),
+            form: codegraide_core::CallForm::Unknown,
+            receiver: None,
+            receiver_type_hint: None,
             span: source_span(node),
             syntax_complete: !node.has_error(),
+            preprocessing_uncertain: false,
         });
     }
 

@@ -7,13 +7,16 @@ use std::path::PathBuf;
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::DiGraph;
 
-use crate::{CallReference, LanguageId, ModuleId, SourceSpan, SymbolKind};
+use crate::{
+    CallReference, CallableSignature, LanguageId, LanguageModule, ModuleExport, ModuleId,
+    ModuleImport, SourceSpan, SymbolKind,
+};
 
-pub const CALL_GRAPH_DEFINITION_VERSION: &str = "call-graph-v1";
-pub const CALL_FAN_IN_DEFINITION_VERSION: &str = "call-fan-in-v1";
-pub const CALL_FAN_OUT_DEFINITION_VERSION: &str = "call-fan-out-v1";
-pub const CALL_SCC_DEFINITION_VERSION: &str = "call-scc-v1";
-pub const CALL_REPORT_SCHEMA_VERSION: &str = "0.1.0";
+pub const CALL_GRAPH_DEFINITION_VERSION: &str = "call-graph-v2";
+pub const CALL_FAN_IN_DEFINITION_VERSION: &str = "call-fan-in-v2";
+pub const CALL_FAN_OUT_DEFINITION_VERSION: &str = "call-fan-out-v2";
+pub const CALL_SCC_DEFINITION_VERSION: &str = "call-scc-v2";
+pub const CALL_REPORT_SCHEMA_VERSION: &str = "0.2.0";
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProjectSymbolId {
@@ -26,7 +29,11 @@ pub struct ProjectSymbolId {
 
 impl ProjectSymbolId {
     pub fn base_selector(&self) -> String {
-        format!("{}::{}", self.module.qualified_name(), self.qualified_name)
+        if self.language.as_str() == "cpp" {
+            self.qualified_name.clone()
+        } else {
+            format!("{}::{}", self.module.qualified_name(), self.qualified_name)
+        }
     }
 
     pub fn ordinal_selector(&self) -> String {
@@ -34,19 +41,59 @@ impl ProjectSymbolId {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SymbolLinkStatus {
+    Linked,
+    DeclarationOnly,
+    DefinitionOnly,
+    Ambiguous,
+    Unavailable,
+}
+
+impl SymbolLinkStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Linked => "linked",
+            Self::DeclarationOnly => "declaration-only",
+            Self::DefinitionOnly => "definition-only",
+            Self::Ambiguous => "ambiguous",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ProjectSymbolLocation {
+    pub path: PathBuf,
+    pub span: SourceSpan,
+}
+
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProjectSymbol {
     pub id: ProjectSymbolId,
     pub path: PathBuf,
     pub span: SourceSpan,
+    pub signature: Option<CallableSignature>,
+    pub declarations: Vec<ProjectSymbolLocation>,
+    pub definition: Option<ProjectSymbolLocation>,
+    pub link_status: SymbolLinkStatus,
+    pub language_module: Option<String>,
+    pub architecture_groups: Vec<String>,
+    pub primary_architecture_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CallResolutionOutcome {
     Exact(ProjectSymbol),
+    Inferred {
+        target: ProjectSymbol,
+        alternatives: Vec<ProjectSymbol>,
+        reason: String,
+    },
     Ambiguous(Vec<ProjectSymbol>),
     External(String),
     Unresolved(String),
+    Unavailable(String),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -57,9 +104,17 @@ pub struct ProjectCallResolution {
     pub outcome: CallResolutionOutcome,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ProjectLanguageModule {
+    pub path: PathBuf,
+    pub module: LanguageModule,
+    pub imports: Vec<ModuleImport>,
+    pub exports: Vec<ModuleExport>,
+}
+
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CallNode {
-    LocalSymbol(ProjectSymbol),
+    LocalSymbol(Box<ProjectSymbol>),
     External {
         source: ProjectSymbolId,
         name: String,
@@ -73,6 +128,10 @@ pub enum CallNode {
         source: ProjectSymbolId,
         spelling: String,
     },
+    Unavailable {
+        source: ProjectSymbolId,
+        spelling: String,
+    },
 }
 
 impl CallNode {
@@ -82,6 +141,7 @@ impl CallNode {
             Self::External { .. } => "external",
             Self::Ambiguous { .. } => "ambiguous",
             Self::Unresolved { .. } => "unresolved",
+            Self::Unavailable { .. } => "unavailable",
         }
     }
 }
@@ -89,18 +149,22 @@ impl CallNode {
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CallRelationKind {
     Exact,
+    Inferred,
     External,
     Ambiguous,
     Unresolved,
+    Unavailable,
 }
 
 impl CallRelationKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "exact",
+            Self::Inferred => "inferred",
             Self::External => "external",
             Self::Ambiguous => "ambiguous",
             Self::Unresolved => "unresolved",
+            Self::Unavailable => "unavailable",
         }
     }
 }
@@ -117,6 +181,8 @@ pub struct CallRelation {
     pub target: CallNode,
     pub kind: CallRelationKind,
     pub evidence: Vec<CallEvidence>,
+    pub alternatives: Vec<ProjectSymbol>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -136,9 +202,11 @@ pub struct CallScc {
 pub struct CallGraphCoverage {
     pub total_calls: usize,
     pub exact_calls: usize,
+    pub inferred_calls: usize,
     pub external_calls: usize,
     pub ambiguous_calls: usize,
     pub unresolved_calls: usize,
+    pub unavailable_calls: usize,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -149,30 +217,57 @@ pub struct CallGraphAnalysis {
     pub strongly_connected_components: Vec<CallScc>,
     pub cycles: Vec<CallScc>,
     pub coverage: CallGraphCoverage,
+    pub language_modules: Vec<ProjectLanguageModule>,
 }
 
 pub fn analyze_call_graph(
     symbols: &[ProjectSymbol],
     resolutions: &[ProjectCallResolution],
 ) -> CallGraphAnalysis {
+    analyze_call_graph_with_modules(symbols, resolutions, Vec::new())
+}
+
+pub fn analyze_call_graph_with_modules(
+    symbols: &[ProjectSymbol],
+    resolutions: &[ProjectCallResolution],
+    language_modules: Vec<ProjectLanguageModule>,
+) -> CallGraphAnalysis {
     let mut nodes = symbols
         .iter()
         .cloned()
-        .map(CallNode::LocalSymbol)
+        .map(|symbol| CallNode::LocalSymbol(Box::new(symbol)))
         .collect::<BTreeSet<_>>();
-    let mut grouped = BTreeMap::<(CallNode, CallNode, CallRelationKind), Vec<CallEvidence>>::new();
+    let mut grouped = BTreeMap::<
+        (CallNode, CallNode, CallRelationKind),
+        (Vec<CallEvidence>, BTreeSet<ProjectSymbol>, BTreeSet<String>),
+    >::new();
     let mut coverage = CallGraphCoverage {
         total_calls: resolutions.len(),
         ..Default::default()
     };
     for resolution in resolutions {
-        let source = CallNode::LocalSymbol(resolution.source.clone());
-        let (target, kind) = match &resolution.outcome {
+        let source = CallNode::LocalSymbol(Box::new(resolution.source.clone()));
+        let (target, kind, alternatives, reason) = match &resolution.outcome {
             CallResolutionOutcome::Exact(target) => {
                 coverage.exact_calls += 1;
                 (
-                    CallNode::LocalSymbol(target.clone()),
+                    CallNode::LocalSymbol(Box::new(target.clone())),
                     CallRelationKind::Exact,
+                    Vec::new(),
+                    None,
+                )
+            }
+            CallResolutionOutcome::Inferred {
+                target,
+                alternatives,
+                reason,
+            } => {
+                coverage.inferred_calls += 1;
+                (
+                    CallNode::LocalSymbol(Box::new(target.clone())),
+                    CallRelationKind::Inferred,
+                    alternatives.clone(),
+                    Some(reason.clone()),
                 )
             }
             CallResolutionOutcome::External(name) => {
@@ -183,6 +278,8 @@ pub fn analyze_call_graph(
                         name: name.clone(),
                     },
                     CallRelationKind::External,
+                    Vec::new(),
+                    None,
                 )
             }
             CallResolutionOutcome::Ambiguous(candidates) => {
@@ -194,6 +291,8 @@ pub fn analyze_call_graph(
                         candidates: candidates.clone(),
                     },
                     CallRelationKind::Ambiguous,
+                    candidates.clone(),
+                    Some("multiple equally plausible local targets".to_owned()),
                 )
             }
             CallResolutionOutcome::Unresolved(spelling) => {
@@ -204,29 +303,50 @@ pub fn analyze_call_graph(
                         spelling: spelling.clone(),
                     },
                     CallRelationKind::Unresolved,
+                    Vec::new(),
+                    Some(spelling.clone()),
+                )
+            }
+            CallResolutionOutcome::Unavailable(reason) => {
+                coverage.unavailable_calls += 1;
+                (
+                    CallNode::Unavailable {
+                        source: resolution.source.id.clone(),
+                        spelling: resolution.reference.callee.clone(),
+                    },
+                    CallRelationKind::Unavailable,
+                    Vec::new(),
+                    Some(reason.clone()),
                 )
             }
         };
         nodes.insert(target.clone());
-        grouped
-            .entry((source, target, kind))
-            .or_default()
-            .push(CallEvidence {
-                source_path: resolution.source_path.clone(),
-                reference: resolution.reference.clone(),
-            });
+        let group = grouped.entry((source, target, kind)).or_default();
+        group.0.push(CallEvidence {
+            source_path: resolution.source_path.clone(),
+            reference: resolution.reference.clone(),
+        });
+        group.1.extend(alternatives);
+        if let Some(reason) = reason {
+            group.2.insert(reason);
+        }
     }
     let relations = grouped
         .into_iter()
-        .map(|((source, target, kind), mut evidence)| {
-            evidence.sort_by_key(|item| item.reference.span.start_byte);
-            CallRelation {
-                source,
-                target,
-                kind,
-                evidence,
-            }
-        })
+        .map(
+            |((source, target, kind), (mut evidence, alternatives, reasons))| {
+                evidence.sort_by_key(|item| item.reference.span.start_byte);
+                CallRelation {
+                    source,
+                    target,
+                    kind,
+                    evidence,
+                    alternatives: alternatives.into_iter().collect(),
+                    reason: (!reasons.is_empty())
+                        .then(|| reasons.into_iter().collect::<Vec<_>>().join("; ")),
+                }
+            },
+        )
         .collect::<Vec<_>>();
     let nodes = nodes.into_iter().collect::<Vec<_>>();
     let edges = relations
@@ -255,6 +375,7 @@ pub fn analyze_call_graph(
         strongly_connected_components,
         cycles,
         coverage,
+        language_modules,
     }
 }
 
@@ -263,7 +384,7 @@ fn call_sccs(symbols: &[ProjectSymbol], edges: &BTreeSet<(CallNode, CallNode)>) 
     let indexes = symbols
         .iter()
         .cloned()
-        .map(CallNode::LocalSymbol)
+        .map(|symbol| CallNode::LocalSymbol(Box::new(symbol)))
         .map(|node| {
             let index = graph.add_node(node.clone());
             (node, index)
@@ -340,6 +461,7 @@ pub struct CallGraphView {
     pub nodes: Vec<CallGraphViewNode>,
     pub relations: Vec<CallRelation>,
     pub strongly_connected_components: Vec<CallScc>,
+    pub language_modules: Vec<ProjectLanguageModule>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -406,6 +528,15 @@ pub fn filter_call_graph(
             selected.extend(cycle.members.iter().cloned());
         }
     }
+    let candidate_nodes = relations
+        .iter()
+        .filter(|relation| {
+            selected.contains(&relation.source) || selected.contains(&relation.target)
+        })
+        .flat_map(|relation| relation.alternatives.iter().cloned())
+        .map(|symbol| CallNode::LocalSymbol(Box::new(symbol)))
+        .collect::<Vec<_>>();
+    selected.extend(candidate_nodes);
     if filter.exact_only || filter.local_only || filter.cycles_only {
         selected.retain(|node| matches!(node, CallNode::LocalSymbol(_)));
     }
@@ -455,6 +586,7 @@ pub fn filter_call_graph(
         nodes,
         relations,
         strongly_connected_components,
+        language_modules: analysis.language_modules.clone(),
     })
 }
 
@@ -608,9 +740,9 @@ pub fn call_node_name(node: &CallNode) -> String {
     match node {
         CallNode::LocalSymbol(symbol) => symbol.id.base_selector(),
         CallNode::External { name, .. } => name.clone(),
-        CallNode::Ambiguous { spelling, .. } | CallNode::Unresolved { spelling, .. } => {
-            spelling.clone()
-        }
+        CallNode::Ambiguous { spelling, .. }
+        | CallNode::Unresolved { spelling, .. }
+        | CallNode::Unavailable { spelling, .. } => spelling.clone(),
     }
 }
 
@@ -629,15 +761,17 @@ pub fn render_call_mermaid(view: &CallGraphView) -> String {
         ));
     }
     for relation in &view.relations {
+        let arrow = match relation.kind {
+            CallRelationKind::Exact => "-->|exact|",
+            CallRelationKind::Inferred => "-. inferred .->",
+            CallRelationKind::Ambiguous => "-. ambiguous .->",
+            CallRelationKind::External => "-. external .->",
+            CallRelationKind::Unresolved => "-. unresolved .->",
+            CallRelationKind::Unavailable => "-. unavailable .->",
+        };
         output.push_str(&format!(
-            "  {} {} {}\n",
-            ids[&relation.source],
-            if relation.kind == CallRelationKind::Exact {
-                "-->"
-            } else {
-                "-.->"
-            },
-            ids[&relation.target]
+            "  {} {arrow} {}\n",
+            ids[&relation.source], ids[&relation.target]
         ));
     }
     output
@@ -658,15 +792,17 @@ pub fn render_call_dot(view: &CallGraphView) -> String {
         ));
     }
     for relation in &view.relations {
+        let attributes = match relation.kind {
+            CallRelationKind::Exact => "label=\"exact\",color=\"#16805c\"",
+            CallRelationKind::Inferred => "label=\"inferred\",style=dashed,color=\"#a76210\"",
+            CallRelationKind::Ambiguous => "label=\"ambiguous\",style=dashed,color=\"#b93443\"",
+            CallRelationKind::External => "label=\"external\",style=dashed",
+            CallRelationKind::Unresolved => "label=\"unresolved\",style=dashed,color=\"#b93443\"",
+            CallRelationKind::Unavailable => "label=\"unavailable\",style=dotted,color=\"#b93443\"",
+        };
         output.push_str(&format!(
-            "  {} -> {}{};\n",
-            ids[&relation.source],
-            ids[&relation.target],
-            if relation.kind == CallRelationKind::Exact {
-                ""
-            } else {
-                " [style=dashed]"
-            }
+            "  {} -> {} [{attributes}];\n",
+            ids[&relation.source], ids[&relation.target]
         ));
     }
     output.push_str("}\n");
@@ -704,6 +840,16 @@ mod tests {
             },
             path: PathBuf::from("src/pkg/mod.py"),
             span: span(0),
+            signature: None,
+            declarations: Vec::new(),
+            definition: Some(ProjectSymbolLocation {
+                path: PathBuf::from("src/pkg/mod.py"),
+                span: span(0),
+            }),
+            link_status: SymbolLinkStatus::DefinitionOnly,
+            language_module: None,
+            architecture_groups: Vec::new(),
+            primary_architecture_group: None,
         }
     }
 
@@ -732,6 +878,7 @@ mod tests {
             source: source.clone(),
             source_path: source.path.clone(),
             reference: CallReference {
+                expression: format!("{callee}()"),
                 callee: callee.to_owned(),
                 components: vec![callee.to_owned()],
                 enclosing_symbol: None,
@@ -741,8 +888,13 @@ mod tests {
                     has_star_args: false,
                     has_star_kwargs: false,
                 },
+                argument_details: Vec::new(),
+                form: crate::CallForm::Unknown,
+                receiver: None,
+                receiver_type_hint: None,
                 span: span(byte),
                 syntax_complete: true,
+                preprocessing_uncertain: false,
             },
             outcome,
         }
