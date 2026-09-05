@@ -512,7 +512,9 @@ lightweight syntax highlighting and never replaces the graph.
 
 Enable **Top-down layout**, then its indented **Grouped call sequence** option
 to keep the normal interactive graph while stacking each caller's callees in
-source order. Group boundaries separate callers. Order uses the first written
+source order. Group boundaries separate callers. Each caller connects to the top
+of its downstream group; short arrows identify the calls inside. Connectors route
+around other groups with separate lanes for unrelated callers. Order uses the first written
 call site, not runtime execution; repeated calls retain one function node with
 a call-site count. Shared callees retain one identity in an explicit shared
 group rather than imposing an order across unrelated callers. Pan, zoom, node

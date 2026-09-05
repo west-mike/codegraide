@@ -107,3 +107,43 @@ test('compact group cues derive from parser ancestry',()=>{
  assert.equal(c.callCue('s',{line:7,column:9}).join(', '),'loop, condition');
  assert.equal(c.callCue('s',{line:8,column:9}).length,0);
 });
+
+function routingContext(){
+ const c=groupedContext();c.topDown=true;c.groupedSequence=true;
+ const names=['s','a','b','c','a1','a2','b1','b2','b3','c1','d','e'];
+ c.nodes=new Map(names.map(id=>[id,{id,name:id,short_name:id,path:'a.cpp'}]));
+ c.graphEdges=[['s','a'],['s','b'],['s','c'],['a','a1'],['a','a2'],['b','b1'],['b','b2'],['b','b3'],['c','c1'],['a1','d'],['b1','e'],['b3','e']].map(([source,target])=>({source,target,status:'inferred'}));
+ for(const owner of names)c.outgoing.set(owner,c.graphEdges.filter(e=>e.source===owner).map((e,i)=>({...e,evidence:[{path:'a.cpp',line:i+1,column:1}]})));
+ const layer=new Map(names.map(id=>[id,id==='s'?0:['a','b','c'].includes(id)?1:['d','e'].includes(id)?3:2]));
+ const layout=c.groupedPositions(layer,c.graphEdges,500,300);c.graphPositions=layout.positions;c.graphGroups=layout.groups;c.rebuildGroupRoutes();return c;
+}
+function segments(points){return points.slice(1).map((p,i)=>[points[i],p]).filter(([a,b])=>a.x!==b.x||a.y!==b.y)}
+test('group entry routes keep separate callers and avoid unrelated group interiors',()=>{
+ const c=routingContext();assert.equal(c.groupRoutes.length,7);
+ for(const route of c.groupRoutes){
+  const group=c.graphGroups[route.index],end=route.points.at(-1),bounds=c.groupBounds(group);
+  assert.ok(group.owners.includes(route.owner));assert.equal(end.y,bounds.y);assert.equal(route.points.at(-2).x,end.x);assert.ok(route.points.at(-2).y<end.y);
+  const parent=c.graphGroups.find(g=>g.ids.includes(route.owner));
+  for(const [a,b] of segments(route.points)){
+   assert.ok(a.x===b.x||a.y===b.y,'route remains orthogonal');
+   for(const other of c.graphGroups.filter(g=>g!==parent&&g!==group)){
+    const r=c.groupBounds(other);assert.ok(!(a.x===b.x?a.x>r.x&&a.x<r.x+r.width&&Math.max(a.y,b.y)>r.y&&Math.min(a.y,b.y)<r.y+r.height:a.y>r.y&&a.y<r.y+r.height&&Math.max(a.x,b.x)>r.x&&Math.min(a.x,b.x)<r.x+r.width),'no route through unrelated group');
+   }
+  }
+ }
+});
+test('different group owners do not share positive-length connector trunks',()=>{
+ const c=routingContext();
+ for(let i=0;i<c.groupRoutes.length;i++)for(let j=i+1;j<c.groupRoutes.length;j++){
+  for(const [a,b] of segments(c.groupRoutes[i].points))for(const [d,e] of segments(c.groupRoutes[j].points)){
+   if(a.x===b.x&&d.x===e.x&&a.x===d.x)assert.ok(Math.min(Math.max(a.y,b.y),Math.max(d.y,e.y))<=Math.max(Math.min(a.y,b.y),Math.min(d.y,e.y)));
+   if(a.y===b.y&&d.y===e.y&&a.y===d.y)assert.ok(Math.min(Math.max(a.x,b.x),Math.max(d.x,e.x))<=Math.max(Math.min(a.x,b.x),Math.min(d.x,e.x)));
+  }
+ }
+});
+test('dragging a caller regenerates its group entry while preserving shared identity',()=>{
+ const c=routingContext(),before=JSON.stringify(c.groupRoutes.find(r=>r.owner==='a').points);
+ c.graphPositions.get('a').x+=40;c.rebuildGroupRoutes();assert.notEqual(JSON.stringify(c.groupRoutes.find(r=>r.owner==='a').points),before);
+ assert.equal(c.graphGroups.filter(g=>g.ids.includes('e')).length,1);
+ assert.equal(c.groupRoutes.filter(r=>c.graphGroups[r.index].ids.includes('e')).length,2);
+});
