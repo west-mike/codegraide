@@ -22,6 +22,7 @@ const GRAPH_DATA_MARKER: &str = "__CODEGRAIDE_GRAPH_DATA__";
 
 #[derive(Debug, Serialize)]
 struct CallExplorerGraph {
+    flow_definition: &'static str,
     max_expansion_depth: u8,
     initial_selection: Option<String>,
     nodes: Vec<CallExplorerNode>,
@@ -30,6 +31,7 @@ struct CallExplorerGraph {
 
 #[derive(Debug, Serialize)]
 struct CallExplorerNode {
+    call_flow: Option<crate::CallFlow>,
     id: String,
     name: String,
     short_name: String,
@@ -318,6 +320,7 @@ fn render_call_html_graph(
         .map(|node| (node.node.clone(), node.id.clone()))
         .collect::<BTreeMap<_, _>>();
     let graph = CallExplorerGraph {
+        flow_definition: "cpp-structural-flow-v1",
         max_expansion_depth,
         initial_selection: view
             .filter
@@ -538,6 +541,10 @@ fn call_explorer_node(
         .map(|export| export.target.clone())
         .collect::<Vec<_>>();
     CallExplorerNode {
+        call_flow: match node {
+            CallNode::LocalSymbol(symbol) if source.is_some() => symbol.call_flow.clone(),
+            _ => None,
+        },
         id: id.to_owned(),
         name,
         short_name,

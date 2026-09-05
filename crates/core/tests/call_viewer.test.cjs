@@ -35,7 +35,7 @@ test('qualified template calls keep token styling and escape angle brackets',()=
 });
 
 function layoutContext(){
-  const context={orientationOffsets:{horizontal:new Map(),vertical:new Map()},viewport:{x:0,y:0,scale:1},renderGraph:()=>{}};
+  const context={groupedSequence:false,document:{getElementById:()=>({})},orientationOffsets:{horizontal:new Map(),vertical:new Map()},viewport:{x:0,y:0,scale:1},renderGraph:()=>{}};
   vm.createContext(context);
   vm.runInContext(html.slice(html.indexOf('    function layoutPosition('),html.indexOf('    function renderGraph(')),context);
   vm.runInContext(html.slice(html.indexOf('    function routeEdge('),html.indexOf('    function edgePath(')),context);
@@ -76,4 +76,34 @@ test('top-down recenter fits wide rows without discarding drag offsets',()=>{
   assert.ok((p.x+110)*c.viewport.scale+c.viewport.x<=1000);
  }
  assert.equal(c.graphPositions.get('a').x,-250);
+});
+
+function groupedContext(){
+ const c=layoutContext();c.nodeW=220;c.nodeH=76;c.nodeOffsets=new Map();
+ c.nodes=new Map(['s','a','b','c','d'].map(id=>[id,{id,name:id,short_name:id,path:'a.cpp'}]));
+ c.outgoing=new Map();
+ vm.runInContext(html.slice(html.indexOf('    function sourceSites('),html.indexOf('    function layoutPosition(')),c);
+ return c;
+}
+test('native groups stack normal function identities in source order and separate callers',()=>{
+ const c=groupedContext();
+ c.outgoing.set('s',[{target:'a',evidence:[{path:'a.cpp',line:10,column:1},{path:'a.cpp',line:20,column:1}]},{target:'b',evidence:[{path:'a.cpp',line:2,column:1}]}]);
+ const layer=new Map([['s',0],['a',1],['b',1],['c',2],['d',2]]),edges=[{source:'s',target:'a'},{source:'s',target:'b'},{source:'a',target:'c'},{source:'b',target:'d'}];
+ const result=c.groupedPositions(layer,edges,500,300);
+ assert.equal(result.positions.size,5);assert.ok(result.positions.get('b').y<result.positions.get('a').y);
+ assert.equal(result.positions.get('a').x,result.positions.get('b').x);
+ assert.match(result.info.get('a').text,/2 call sites/);
+ assert.equal(result.groups.filter(g=>g.owners[0]==='a').length,1);assert.equal(result.groups.filter(g=>g.owners[0]==='b').length,1);
+ assert.ok(result.positions.get('c').y>result.positions.get('a').y+76);
+});
+test('shared callees have one identity and explicitly no shared source order',()=>{
+ const c=groupedContext(),result=c.groupedPositions(new Map([['s',0],['a',1],['b',1],['c',2]]),[{source:'s',target:'a'},{source:'s',target:'b'},{source:'a',target:'c'},{source:'b',target:'c'}],500,300);
+ assert.equal(result.positions.size,4);assert.equal(result.groups.at(-1).label,'Shared callees');
+ assert.match(result.groups.at(-1).caption,/no shared order/);
+});
+test('compact group cues derive from parser ancestry',()=>{
+ const c=groupedContext(),call={kind:'call',line:7,column:9,children:[]};
+ c.nodes.get('s').call_flow={kind:'loop',children:[{kind:'condition',children:[call]}]};
+ assert.equal(c.callCue('s',{line:7,column:9}).join(', '),'loop, condition');
+ assert.equal(c.callCue('s',{line:8,column:9}).length,0);
 });

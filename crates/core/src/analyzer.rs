@@ -797,6 +797,7 @@ pub struct Symbol {
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct AnalysisFacts {
+    pub call_flows: std::collections::BTreeMap<SymbolId, crate::CallFlow>,
     pub symbols: Vec<Symbol>,
     pub declarations: Vec<SymbolDeclaration>,
     pub dependencies: Vec<DependencyReference>,

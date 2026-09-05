@@ -654,3 +654,56 @@ fn cpp_duplicate_definitions_keep_file_local_call_ownership() {
         "a shared declaration must not pick an arbitrary definition"
     );
 }
+
+#[test]
+fn cpp_flow_keeps_occurrences_and_source_opt_in() {
+    let repository = tempfile::tempdir().unwrap();
+    fs::write(
+        repository.path().join("flow.cpp"),
+        "int step(){return 1;} int f(){if(step())step();step();return step();}",
+    )
+    .unwrap();
+    for include_source in [false, true] {
+        let mut args = vec![
+            "calls",
+            repository.path().to_str().unwrap(),
+            "--language",
+            "cpp",
+            "--format",
+            "html",
+        ];
+        if include_source {
+            args.push("--include-source");
+        }
+        let output = run(&args);
+        assert!(output.status.success());
+        let html = String::from_utf8(output.stdout).unwrap();
+        let payload = html
+            .split("const data=")
+            .nth(1)
+            .unwrap()
+            .split(";\n")
+            .next()
+            .unwrap();
+        let data: Value = serde_json::from_str(payload).unwrap();
+        let node = data["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "f")
+            .unwrap();
+        if include_source {
+            fn calls(value: &Value) -> usize {
+                usize::from(value["kind"] == "call")
+                    + value["children"]
+                        .as_array()
+                        .map(|cs| cs.iter().map(calls).sum::<usize>())
+                        .unwrap_or(0)
+            }
+            assert_eq!(calls(&node["call_flow"]), 4);
+            assert!(node["call_flow"].to_string().contains("alternatives"));
+        } else {
+            assert!(node["call_flow"].is_null());
+        }
+    }
+}

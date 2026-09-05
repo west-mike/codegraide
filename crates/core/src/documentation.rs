@@ -453,6 +453,7 @@ mod tests {
                 status: file_status,
                 diagnostics: Vec::new(),
                 facts: AnalysisFacts {
+                    call_flows: Default::default(),
                     symbols: vec![
                         symbol(
                             "module",

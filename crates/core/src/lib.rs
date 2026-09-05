@@ -1,5 +1,6 @@
 mod analysis;
 mod analyzer;
+mod call_flow;
 mod call_output;
 mod calls;
 mod config;
@@ -36,6 +37,7 @@ pub use analyzer::{
     SymbolDocumentation, SymbolId, SymbolKind, SymbolModifier, SymbolOccurrenceRole,
     UsingReference, UsingReferenceKind,
 };
+pub use call_flow::{CallFlow, CallFlowKind};
 pub use call_output::CallJsonReport;
 pub use calls::{
     CALL_FAN_IN_DEFINITION_VERSION, CALL_FAN_OUT_DEFINITION_VERSION, CALL_GRAPH_DEFINITION_VERSION,

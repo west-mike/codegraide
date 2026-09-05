@@ -266,6 +266,7 @@ impl LanguageAnalyzer for PythonAnalyzer {
             },
             diagnostics,
             facts: AnalysisFacts {
+                call_flows: Default::default(),
                 symbols: extraction.symbols,
                 declarations: Vec::new(),
                 dependencies: extraction.dependencies,

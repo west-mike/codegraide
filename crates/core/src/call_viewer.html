@@ -15,6 +15,7 @@
     .right-tabs{padding:9px 12px;border-bottom:1px solid var(--line);display:flex;gap:5px}.right-body{overflow:auto;flex:1}.right h2{font-size:16px;margin:0;overflow-wrap:anywhere}.right h3{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 8px}.symbol-meta{font-size:11px;color:var(--muted);margin:4px 0}.status-exact{--relation-color:var(--exact)}.status-inferred{--relation-color:var(--inferred)}.status-ambiguous,.status-unresolved,.status-unavailable,.status-external{--relation-color:var(--uncertain)}.relation-link{display:block;width:100%;border:0;border-radius:0;padding:7px 8px;text-align:left;overflow-wrap:anywhere;background:color-mix(in srgb,var(--relation-color) 15%,var(--panel));border-left:3px solid var(--relation-color)}.relation-link:hover{background:color-mix(in srgb,var(--relation-color) 26%,var(--panel))}.right .notice,.right .empty{padding:8px 0}.symbol-header>*{margin-left:0;padding-left:0}.signature,.location{font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}.signature code{background:var(--code);border:1px solid var(--line);padding:2px 4px;font:inherit;box-decoration-break:clone}.stats{display:grid;grid-template-columns:1fr auto;gap:4px 12px;margin:0;font-size:12px}.stats dt{color:var(--muted)}.stats dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.other-calls{margin-top:12px}.other-calls summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}.links{display:grid;gap:3px}.link{border:0;background:transparent;text-align:left;padding:5px 4px;overflow-wrap:anywhere}.link:hover{background:var(--accent2)}.evidence{padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.evidence:last-child{border:0}.call-expression{font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.projection{margin:7px 0 3px 12px;border-left:3px solid var(--accent);padding:8px;background:var(--panel2)}
     .source-tools{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:7px}.source-view{margin:0;background:var(--code);border:1px solid var(--line);border-radius:8px;overflow:auto;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.code-line{display:block;min-width:max-content;padding-right:12px}.code-line:hover{background:var(--accent2)}.line-no{display:inline-block;width:44px;padding-right:9px;text-align:right;color:var(--muted);user-select:none}.tok-comment{color:#6a9955}.tok-string{color:#ce6a50}.tok-keyword{color:#7b61d1;font-weight:600}.tok-type{color:#247e9d}.tok-number{color:#b06b20}.tok-preproc{color:#9b4f96}.tok-literal{color:#237c75}
     @media(max-width:1100px){.header-control{font-size:12px;padding-inline:7px}}@media(max-width:820px){html,body{overflow:auto}.layout,.layout.hide-left,.layout.hide-right,.layout.hide-left.hide-right{height:auto;display:block}.left,.right{border:0;max-height:520px}.layout.hide-left .left,.layout.hide-right .right{display:none}.center{height:70vh}.right{border-top:1px solid var(--line)}.search-wrap{width:100%;order:3}header{height:auto;flex-wrap:wrap}.graph-legend{display:none}.graph-title span{display:none}}
+    .check.subordinate{margin-left:22px}.check.subordinate:has(input:disabled){opacity:.45}.call-group{pointer-events:none}.call-group rect{fill:var(--panel);fill-opacity:.45;stroke:var(--line);stroke-dasharray:5 4}.call-group text{fill:var(--muted);font-size:12px;font-weight:600}.call-group .group-caption{font-size:10px;font-weight:400}
     .callee-call{color:inherit;background:color-mix(in srgb,var(--relation-color) 20%,var(--code));border-bottom:2px solid var(--relation-color);font-weight:600}.callee-call.status-inferred{border-bottom-style:dashed}.callee-call.status-unresolved,.callee-call.status-ambiguous,.callee-call.status-unavailable,.callee-call.status-external{border-bottom-style:dotted}
     .pane-resizer{position:absolute;top:0;bottom:0;width:7px;z-index:5;cursor:col-resize;touch-action:none}.left .pane-resizer{right:0}.right .pane-resizer{left:0}.pane-resizer:hover,.pane-resizer:focus-visible{background:var(--accent);outline:0}.resizing,.resizing *{cursor:col-resize!important;user-select:none!important}.code-line.call-site{background:color-mix(in srgb,var(--inferred) 22%,var(--code));box-shadow:inset 3px 0 var(--inferred)}.code-line.call-site .line-no{color:var(--text);font-weight:bold}
     @media(max-width:820px){.pane-resizer{display:none}}
@@ -23,7 +24,7 @@
 <body>
   <header><div class="brand-block"><button class="brand" id="homeButton" title="Return to the project overview"><h1>Call Graph Explorer</h1></button><div class="subtitle" id="summary"></div></div><button class="header-control" id="leftPaneToggle" aria-pressed="true">Hide navigator</button><button class="header-control" id="rightPaneToggle" aria-pressed="false">Show details</button><div class="search-wrap"><input id="search" type="search" placeholder="Find a file, class, function, module, or architecture group"><button class="clear-search" id="clearSearch" aria-label="Clear search" title="Clear search" hidden>×</button></div></header>
   <div class="layout" id="layout">
-    <aside class="pane left"><div class="pane-resizer" id="leftResizer" role="separator" aria-label="Resize navigator" aria-orientation="vertical" tabindex="0"></div><div class="section tabs" id="perspectives" role="tablist" aria-label="Navigator views"></div><div id="navigator" role="tabpanel"></div><div class="section controls"><label class="check"><input id="orientationToggle" type="checkbox"> Top-down layout</label><label class="check"><input id="fileNamesToggle" type="checkbox"> Show file names</label><label class="check"><input id="uncertainToggle" type="checkbox"> Show uncertain and external calls</label><label class="check" title="Include test files and libraries copied into this repository, such as doctest."><input id="supportToggle" type="checkbox"> Tests and vendor code</label><label class="check" title="Include unnamed functions and symbols whose names could not be read reliably, often around macros."><input id="noiseToggle" type="checkbox"> Unnamed and unparsed symbols</label></div></aside>
+    <aside class="pane left"><div class="pane-resizer" id="leftResizer" role="separator" aria-label="Resize navigator" aria-orientation="vertical" tabindex="0"></div><div class="section tabs" id="perspectives" role="tablist" aria-label="Navigator views"></div><div id="navigator" role="tabpanel"></div><div class="section controls"><label class="check"><input id="orientationToggle" type="checkbox"> Top-down layout</label><label class="check subordinate"><input id="sequenceToggle" type="checkbox" disabled> Grouped call sequence</label><label class="check"><input id="fileNamesToggle" type="checkbox"> Show file names</label><label class="check"><input id="uncertainToggle" type="checkbox"> Show uncertain and external calls</label><label class="check" title="Include test files and libraries copied into this repository, such as doctest."><input id="supportToggle" type="checkbox"> Tests and vendor code</label><label class="check" title="Include unnamed functions and symbols whose names could not be read reliably, often around macros."><input id="noiseToggle" type="checkbox"> Unnamed and unparsed symbols</label></div></aside>
     <main class="center"><div class="graph-toolbar"><button class="icon" id="backButton" hidden aria-label="Back" title="Back">←</button><div class="graph-title"><strong id="graphTitle">Call graph</strong></div><label class="depth-control"><span class="subtitle">Call depth</span><input id="depthSlider" type="range" min="1" max="10" value="1" aria-label="Call depth"><input id="depthInput" type="number" min="1" max="10" value="1" inputmode="numeric" aria-label="Call depth value"></label><button class="icon" id="zoomOut" aria-label="Zoom out" title="Zoom out">−</button><button class="icon" id="zoomIn" aria-label="Zoom in" title="Zoom in">+</button><button id="resetView">Recenter</button><button id="resetLayout" title="Restore default node positions">Reset layout</button></div><div class="canvas-wrap" id="canvasWrap"><svg id="graphCanvas" role="img" aria-label="Interactive caller and callee graph"></svg><div class="graph-hint">Click to explore · drag nodes to arrange · drag background to pan</div><div class="graph-legend"><span class="legend-line"></span>Exact match <span class="legend-line likely"></span>Likely match</div></div></main>
     <aside class="pane right"><div class="pane-resizer" id="rightResizer" role="separator" aria-label="Resize details" aria-orientation="vertical" tabindex="0"></div><div class="right-tabs" id="rightTabs"></div><div class="right-body" id="rightBody"></div></aside>
   </div>
@@ -39,7 +40,8 @@
     let perspective=data.nodes.some(n=>n.primary_architecture_group)?'architecture':'symbols',activeGroup=null,detailTab='details',graphDepth=1,showUncertain=false,showSupport=false,showNoise=false,history=[],renderedCards=0,selectedOccurrence=0,groupLimit=12,leftOpen=true,rightOpen=false;
     let viewport={x:0,y:0,scale:1},drag=null,noticeTimer=null,suppressNodeClick=false;
     // Offsets survive neighborhood changes without tying nodes to a viewport size.
-    const orientationOffsets={horizontal:new Map(),vertical:new Map()};
+    const orientationOffsets={horizontal:new Map(),vertical:new Map(),grouped:new Map()};
+    let groupedSequence=false;let graphGroups=[],groupedNodeInfo=new Map();
     let topDown=false,nodeOffsets=orientationOffsets.horizontal;
     let graphPositions=new Map(),graphEdges=[];
     const nodeW=220;let nodeH=58,showFileNames=false;
@@ -70,6 +72,54 @@
     function applyViewport(){const g=document.getElementById('viewport');if(g)g.setAttribute('transform',`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`)}
     function zoomViewport(nextScale,clientX,clientY){const svg=document.getElementById('graphCanvas'),rect=svg.getBoundingClientRect(),view=svg.viewBox.baseVal,scale=Math.max(.35,Math.min(2.5,nextScale));if(scale===viewport.scale||!rect.width||!rect.height)return;const anchorX=Number.isFinite(clientX)?(clientX-rect.left)*view.width/rect.width:view.width/2,anchorY=Number.isFinite(clientY)?(clientY-rect.top)*view.height/rect.height:view.height/2,ratio=scale/viewport.scale;viewport.x=anchorX-(anchorX-viewport.x)*ratio;viewport.y=anchorY-(anchorY-viewport.y)*ratio;viewport.scale=scale;applyViewport()}
     function showGraphNotice(wrap,message){clearTimeout(noticeTimer);wrap.querySelector('.truncated')?.remove();if(!message)return;wrap.insertAdjacentHTML('beforeend',`<div class="truncated" role="status">${esc(message)}</div>`);noticeTimer=setTimeout(()=>wrap.querySelector('.truncated')?.remove(),3500)}
+    function sourceSites(owner,target){return (outgoing.get(owner)||[]).filter(r=>r.target===target).flatMap(r=>r.evidence).filter(e=>e.path===nodes.get(owner)?.path).sort((a,b)=>a.line-b.line||a.column-b.column)}
+    function hasFlowCall(flow){return flow.kind==='call'||flow.children.some(hasFlowCall)}
+    function callCue(owner,site){
+      let result=[];
+      function visit(flow,cues){
+        const next=[...cues];
+        if(flow.kind==='loop')next.push('loop');
+        if(flow.kind==='condition')next.push('condition');
+        if(flow.kind==='branch')next.push('branch');
+        if(flow.kind==='unspecified'&&flow.children.filter(hasFlowCall).length>1)next.push('order unspecified');
+        if(flow.kind==='unsupported')next.push('partial structure');
+        if(flow.kind==='call'&&flow.line===site?.line&&flow.column===site?.column)result=[...new Set(next)];
+        for(const child of flow.children)visit(child,next)
+      }
+      const flow=nodes.get(owner)?.call_flow;if(flow&&site)visit(flow,[]);return result
+    }
+    function groupedPositions(layer,edges,centerX,centerY){
+      const positions=new Map(),groups=[],info=new Map(),values=[...new Set(layer.values())].sort((a,b)=>a-b);
+      let nextY=centerY+130;
+      for(const value of values){
+        const ids=[...layer].filter(([,v])=>v===value).map(([id])=>id);
+        if(value<=0){ids.forEach((id,index)=>{const base=layoutPosition(value,index,ids.length,centerX,centerY,true),offset=nodeOffsets.get(id)||{x:0,y:0};positions.set(id,{x:base.x+offset.x,y:base.y+offset.y})});continue}
+        const buckets=new Map();
+        for(const id of ids){
+          const owners=[...new Set(edges.filter(e=>e.target===id&&layer.get(e.source)===value-1).map(e=>e.source))].sort();
+          const key=owners.join('|');if(!buckets.has(key))buckets.set(key,{owners,ids:[]});buckets.get(key).ids.push(id)
+        }
+        const tier=[...buckets.values()].sort((a,b)=>(positions.get(a.owners[0])?.x||0)-(positions.get(b.owners[0])?.x||0));
+        let bottom=nextY;
+        tier.forEach((group,index)=>{
+          const owner=group.owners.length===1?group.owners[0]:null;
+          group.ids.sort((a,b)=>{const x=sourceSites(owner,a)[0],y=sourceSites(owner,b)[0];return (x?.line??Infinity)-(y?.line??Infinity)||(x?.column??Infinity)-(y?.column??Infinity)||nodes.get(a).name.localeCompare(nodes.get(b).name)});
+          const x=centerX+(index-(tier.length-1)/2)*(nodeW+110);
+          group.ids.forEach((id,row)=>{
+            const offset=nodeOffsets.get(id)||{x:0,y:0};positions.set(id,{x:x+offset.x,y:nextY+50+nodeH/2+row*(nodeH+28)+offset.y});
+            const sites=sourceSites(owner,id),first=sites[0],cues=callCue(owner,first);
+            info.set(id,{owners:group.owners,text:owner?[first?'L'+first.line:'Location unavailable',sites.length>1?sites.length+' call sites':'',...cues].filter(Boolean).join(' · '):'Shared by '+group.owners.length+' callers'})
+          });
+          group.label=owner?'Calls from '+(nodes.get(owner).short_name||nodes.get(owner).name):'Shared callees';
+          group.caption=owner?'Source order':'Multiple callers · no shared order';
+          group.title=owner?'Ordered by first written call site, not runtime execution. Repeated calls share their function node.':'Shared function identity; incoming arrows retain the separate callers: '+group.owners.map(id=>nodes.get(id).name).join(', ');
+          groups.push(group);bottom=Math.max(bottom,nextY+60+group.ids.length*(nodeH+28))
+        });nextY=bottom+110
+      }
+      return {positions,groups,info}
+    }
+    function groupBounds(group){const points=group.ids.map(id=>graphPositions.get(id));return {x:Math.min(...points.map(p=>p.x))-nodeW/2-20,y:Math.min(...points.map(p=>p.y))-nodeH/2-48,width:Math.max(...points.map(p=>p.x))-Math.min(...points.map(p=>p.x))+nodeW+40,height:Math.max(...points.map(p=>p.y))-Math.min(...points.map(p=>p.y))+nodeH+68}}
+    function groupHtml(){return graphGroups.map((group,index)=>{const b=groupBounds(group);return `<g class="call-group" data-group-index="${index}"><rect x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}"></rect><text x="${b.x+12}" y="${b.y+19}">${esc(short(group.label,36))}</text><text class="group-caption" x="${b.x+12}" y="${b.y+35}">${esc(group.caption)}</text><title>${esc(group.title)}</title></g>`}).join('')}
     function layoutPosition(value,index,count,centerX,centerY,vertical){
       const across=index-(count-1)/2;
       return vertical?{x:centerX+across*250,y:centerY+value*190}:{x:centerX+value*330,y:centerY+across*84}
@@ -85,11 +135,13 @@
       applyViewport()
     }
     function setOrientation(vertical){
-      topDown=vertical;nodeOffsets=orientationOffsets[vertical?'vertical':'horizontal'];
+      topDown=vertical;document.getElementById('sequenceToggle').disabled=!vertical;nodeOffsets=orientationOffsets[vertical?(groupedSequence?'grouped':'vertical'):'horizontal'];
       viewport={x:0,y:0,scale:1};renderGraph(false);recenterGraph()
     }
     function renderGraph(refreshSidebar=true){
-      nodeH=showFileNames?76:58;
+      const grouped=topDown&&groupedSequence;
+      nodeH=(showFileNames?76:58)+(grouped?18:0);
+      document.querySelector('.graph-hint').textContent=grouped?'Source order, not execution order · click to explore · drag to arrange':'Click to explore · drag nodes to arrange · drag background to pan';
       const svg=document.getElementById('graphCanvas'),wrap=document.getElementById('canvasWrap'),current=nodes.get(selected);
       if(!current){svg.innerHTML='';return}
       const container=['class','struct','namespace'].includes(current.kind);
@@ -100,14 +152,16 @@
         const ids=[...layer].filter(([,v])=>v===value).map(([id])=>id).sort((a,b)=>connectionCount(nodes.get(b))-connectionCount(nodes.get(a))||nodes.get(a).name.localeCompare(nodes.get(b).name));
         ids.forEach((id,index)=>{const offset=nodeOffsets.get(id)||{x:0,y:0},base=layoutPosition(value,index,ids.length,centerX,centerY,topDown);positions.set(id,{x:base.x+offset.x,y:base.y+offset.y})})
       }
+      graphGroups=[];groupedNodeInfo=new Map();
+      if(grouped){const layout=groupedPositions(layer,edges,centerX,centerY);positions.clear();for(const [id,p] of layout.positions)positions.set(id,p);graphGroups=layout.groups;groupedNodeInfo=layout.info}
       graphPositions=positions;graphEdges=edges;
       const marker=`<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path></marker></defs>`;
       const edgeHtml=edges.map((edge,index)=>{const cls=edge.status==='exact'?'':edge.status==='inferred'?' inferred':edge.status==='contains'?' contains':' uncertain';return `<path class="edge${cls}" data-edge="${index}" d="${edgePath(edge)}" marker-end="url(#arrow)"><title>${esc(statusLabels[edge.status]||edge.label)}</title></path>`}).join('');
-      const selectedName=short(current.short_name||current.name,18),nodeHtml=[...positions].map(([id,position])=>{const node=nodes.get(id),value=layer.get(id),relation=edges.find(edge=>value<0?edge.source===id:edge.target===id),certainty=relation?.status==='exact'?'exact match':relation?.status==='inferred'?'likely match':'',meta=id===selected?`${plainKind(node.kind)} · selected`:relation?.status==='contains'?`${plainKind(node.kind)} in ${selectedName}`:value===-1?`calls ${selectedName}${certainty?' · '+certainty:''}`:value===1?`called here${certainty?' · '+certainty:''}`:`${value<0?'upstream caller':'downstream call'}${certainty?' · '+certainty:''}`,classes=['graph-node',id===selected?'selected':'',isBoundary(node)?'boundary':'',node.noise?'noise':''].filter(Boolean).join(' ');return `<g class="${classes}" data-id="${id}" transform="translate(${position.x-nodeW/2} ${position.y-nodeH/2})" tabindex="0" role="button"><rect width="${nodeW}" height="${nodeH}" rx="9"></rect><text class="node-title" x="11" y="23">${esc(short(node.short_name||node.name,30))}</text><text class="node-meta" x="11" y="42">${esc(meta)}</text>${showFileNames?`<text class="node-meta node-file" x="11" y="62">${esc(short(node.path?node.path.split('/').pop():'No local file',36))}<title>${esc(node.path||'No local file')}</title></text>`:''}<title>${esc(displayIdentity(node))}${node.signature?' · '+esc(node.signature):''}</title></g>`}).join('');
+      const selectedName=short(current.short_name||current.name,18),nodeHtml=[...positions].map(([id,position])=>{const node=nodes.get(id),value=layer.get(id),relation=edges.find(edge=>value<0?edge.source===id:edge.target===id),certainty=relation?.status==='exact'?'exact match':relation?.status==='inferred'?'likely match':'',meta=id===selected?`${plainKind(node.kind)} · selected`:relation?.status==='contains'?`${plainKind(node.kind)} in ${selectedName}`:value===-1?`calls ${selectedName}${certainty?' · '+certainty:''}`:value===1?`called here${certainty?' · '+certainty:''}`:`${value<0?'upstream caller':'downstream call'}${certainty?' · '+certainty:''}`,classes=['graph-node',id===selected?'selected':'',isBoundary(node)?'boundary':'',node.noise?'noise':''].filter(Boolean).join(' ');return `<g class="${classes}" data-id="${id}" transform="translate(${position.x-nodeW/2} ${position.y-nodeH/2})" tabindex="0" role="button"><rect width="${nodeW}" height="${nodeH}" rx="9"></rect><text class="node-title" x="11" y="23">${esc(short(node.short_name||node.name,30))}</text><text class="node-meta" x="11" y="42">${esc(meta)}</text>${grouped&&groupedNodeInfo.has(id)?`<text class="node-meta" x="11" y="60">${esc(short(groupedNodeInfo.get(id).text,34))}<title>${esc(groupedNodeInfo.get(id).text)}</title></text>`:''}${showFileNames?`<text class="node-meta node-file" x="11" y="${grouped?80:62}">${esc(short(node.path?node.path.split('/').pop():'No local file',36))}<title>${esc(node.path||'No local file')}</title></text>`:''}<title>${esc(displayIdentity(node))}${node.signature?' · '+esc(node.signature):''}</title></g>`}).join('');
       const label=(value,text)=>topDown?`<text class="layer-label" text-anchor="start" style="text-anchor:start" x="${Math.min(...[...positions].filter(([id])=>layer.get(id)===value).map(([,p])=>p.x))-nodeW/2}" y="${centerY+value*190-nodeH/2-18}">${text}</text>`:`<text class="layer-label" x="${centerX+value*columnGap}" y="24">${text}</text>`;
-      const labels=[layerValues.some(value=>value<0)&&label(-1,'CALLERS'),label(0,'FUNCTION'),layerValues.some(value=>value>0)&&label(1,container?'MEMBERS':'FUNCTION CALLS')].filter(Boolean).join('');
+      const labels=grouped?'':[layerValues.some(value=>value<0)&&label(-1,'CALLERS'),label(0,'FUNCTION'),layerValues.some(value=>value>0)&&label(1,container?'MEMBERS':'FUNCTION CALLS')].filter(Boolean).join('');
       svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
-      svg.innerHTML=marker+(topDown?'':labels)+`<g id="viewport">${edgeHtml}${nodeHtml}${topDown?labels:''}</g>`;
+      svg.innerHTML=marker+(topDown?'':labels)+`<g id="viewport"><g id="groupBoxes">${groupHtml()}</g>${edgeHtml}${nodeHtml}${topDown?labels:''}</g>`;
       for(const group of svg.querySelectorAll('.graph-node')){group.onclick=event=>{event.stopPropagation();if(!suppressNodeClick)choose(group.dataset.id)};group.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();choose(group.dataset.id)}}}
       showGraphNotice(wrap,omitted?`Showing up to ${perLayer} useful matches at each step · ${omitted} more hidden. Click a visible node to continue.`:layer.size===1?'No connected calls were found for this symbol.':'');
       applyViewport();if(refreshSidebar&&rightOpen&&detailTab!=='source')renderSidebar()
@@ -125,12 +179,17 @@
     }
     function edgePath(edge){
       const a=graphPositions.get(edge.source),b=graphPositions.get(edge.target);
+      if(a&&b&&topDown&&groupedSequence&&b.y>a.y+nodeH){
+        const group=graphGroups.find(g=>g.ids.includes(edge.target)&&g.owners.includes(edge.source));
+        if(group){const bounds=groupBounds(group),lane=bounds.x-16,start=a.y+nodeH/2;return `M ${a.x} ${start} L ${a.x} ${start+24} L ${lane} ${start+24} L ${lane} ${b.y} L ${b.x-nodeW/2} ${b.y}`}
+      }
       return a&&b?routeEdge(a,b,nodeW,nodeH,topDown,edge.source===edge.target):''
     }
     function updateDraggedNode(id){
       const position=graphPositions.get(id);
       for(const group of svg.querySelectorAll('.graph-node'))if(group.dataset.id===id)group.setAttribute('transform',`translate(${position.x-nodeW/2} ${position.y-nodeH/2})`);
-      for(const path of svg.querySelectorAll('.edge')){const edge=graphEdges[Number(path.dataset.edge)];if(edge.source===id||edge.target===id)path.setAttribute('d',edgePath(edge))}
+      if(topDown&&groupedSequence)document.getElementById('groupBoxes').innerHTML=groupHtml();
+      for(const path of svg.querySelectorAll('.edge')){const edge=graphEdges[Number(path.dataset.edge)];if(topDown&&groupedSequence||edge.source===id||edge.target===id)path.setAttribute('d',edgePath(edge))}
     }
     const cppKeywords=new Set('alignas alignof asm auto break case catch class concept const consteval constexpr constinit const_cast continue co_await co_return co_yield decltype default delete do dynamic_cast else enum explicit export extern false for friend goto if inline mutable namespace new noexcept nullptr operator private protected public register reinterpret_cast requires return sizeof static static_assert static_cast struct switch template this thread_local throw true try typedef typeid typename union unsigned using virtual void volatile while'.split(' '));
     const cppTypes=new Set('bool char char8_t char16_t char32_t double float int long short signed size_t string string_view uint8_t uint16_t uint32_t uint64_t wchar_t'.split(' '));
@@ -217,6 +276,7 @@
       handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);handle.addEventListener('lostpointercapture',finish);
       handle.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home'].includes(event.key))return;event.preventDefault();resizePane(side,event.key==='Home'?(side==='left'?260:360):paneWidths[side]+(event.key==='ArrowRight'?24:-24)*(side==='left'?1:-1))})
     }
+    document.getElementById('sequenceToggle').onchange=event=>{groupedSequence=event.target.checked;setOrientation(topDown)};
     document.getElementById('orientationToggle').onchange=event=>setOrientation(event.target.checked);
     document.getElementById('fileNamesToggle').onchange=event=>{showFileNames=event.target.checked;renderGraph(false)};
     function wheelZoomDelta(e){return Math.abs(e.deltaY)>=Math.abs(e.deltaX)?e.deltaY:e.deltaX}

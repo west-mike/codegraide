@@ -264,6 +264,7 @@ pub fn resolve_cpp_calls(
             _ => SymbolLinkStatus::Unavailable,
         };
         let project = ProjectSymbol {
+            call_flow: None,
             id: ProjectSymbolId {
                 language: LanguageId::new("cpp"),
                 module: ModuleId::new(LanguageId::new("cpp"), "<project>"),
@@ -308,6 +309,7 @@ pub fn resolve_cpp_calls(
                 file.path.to_string_lossy().replace(['\\', '/'], "::")
             );
             symbols.push(ProjectSymbol {
+                call_flow: None,
                 id: ProjectSymbolId {
                     language: LanguageId::new("cpp"),
                     module: ModuleId::new(LanguageId::new("cpp"), "<project>"),
@@ -369,6 +371,7 @@ pub fn resolve_cpp_calls(
                             == signature_key
                 }) {
                     by_syntax_id.insert((file.path.clone(), symbol.id.as_str().to_owned()), index);
+                    symbols[index].call_flow = file.facts.call_flows.get(&symbol.id).cloned();
                 }
             }
         }

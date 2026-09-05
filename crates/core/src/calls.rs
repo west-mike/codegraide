@@ -70,6 +70,7 @@ pub struct ProjectSymbolLocation {
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProjectSymbol {
+    pub call_flow: Option<crate::CallFlow>,
     pub id: ProjectSymbolId,
     pub path: PathBuf,
     pub span: SourceSpan,
@@ -831,6 +832,7 @@ mod tests {
     fn symbol(name: &str) -> ProjectSymbol {
         let module = ModuleId::new(LanguageId::new("python"), "pkg.mod");
         ProjectSymbol {
+            call_flow: None,
             id: ProjectSymbolId {
                 language: LanguageId::new("python"),
                 module,

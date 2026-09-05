@@ -1,3 +1,4 @@
+mod call_flow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
@@ -238,6 +239,7 @@ impl LanguageAnalyzer for CppAnalyzer {
                 declarations: extraction.declarations,
                 dependencies: extraction.includes,
                 calls: extraction.calls,
+                call_flows: extraction.call_flows,
                 modules,
                 module_imports,
                 module_exports,
@@ -726,6 +728,7 @@ struct Extraction<'a> {
     declarations: Vec<SymbolDeclaration>,
     includes: Vec<DependencyReference>,
     calls: Vec<CallReference>,
+    call_flows: BTreeMap<SymbolId, codegraide_core::CallFlow>,
     using_references: Vec<UsingReference>,
     id_counts: BTreeMap<String, usize>,
     preprocessor_uncertain: BTreeSet<SymbolId>,
@@ -740,6 +743,7 @@ impl<'a> Extraction<'a> {
             declarations: Vec::new(),
             includes: Vec::new(),
             calls: Vec::new(),
+            call_flows: BTreeMap::new(),
             using_references: Vec::new(),
             id_counts: BTreeMap::new(),
             preprocessor_uncertain: BTreeSet::new(),
@@ -945,6 +949,8 @@ impl<'a> Extraction<'a> {
             measurements: Vec::new(),
         });
         if let Some(body) = body {
+            self.call_flows
+                .insert(id.clone(), call_flow::extract(body, self.source));
             self.visit_node(body, Some(id.clone()), Some(id), 0);
         }
     }

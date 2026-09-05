@@ -510,6 +510,19 @@ exact versus likely matches use distinct solid arrow colors. Clicking the
 product title returns to the project overview. Embedded C++ source has
 lightweight syntax highlighting and never replaces the graph.
 
+Enable **Top-down layout**, then its indented **Grouped call sequence** option
+to keep the normal interactive graph while stacking each caller's callees in
+source order. Group boundaries separate callers. Order uses the first written
+call site, not runtime execution; repeated calls retain one function node with
+a call-site count. Shared callees retain one identity in an explicit shared
+group rather than imposing an order across unrelated callers. Pan, zoom, node
+dragging, navigation and source panels work as in the ordinary graph.
+For C++ reports with source, parser-derived `cpp-structural-flow-v1` evidence adds
+compact loop, condition, branch or unspecified-order cues. It is not a runtime
+trace or full CFG: implicit operations, constructors, preprocessing, exceptions,
+jumps and coroutines are not fully modeled. Without that evidence, only source
+locations and order are shown. Graph confidence, filters and depth still apply.
+
 Add `--include-source` to HTML to enable explanatory call expansion directly
 beneath a written call. It does not pretend to inline compiled C++. Expansion
 stops at `--max-expansion-depth` (default 3), at recursion, or after 100 cards.

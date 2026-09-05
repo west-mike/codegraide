@@ -54,6 +54,7 @@ pub fn resolve_python_calls(
                     .or_default();
                 *ordinal += 1;
                 let project = ProjectSymbol {
+                    call_flow: None,
                     id: ProjectSymbolId {
                         language: module.language().clone(),
                         module: module.clone(),
