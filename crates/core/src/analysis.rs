@@ -396,6 +396,30 @@ fn finalize_analysis(
     Ok(())
 }
 
+/// Analyze supplied committed files without reading the working tree or project config.
+pub fn analyze_source_files(
+    sources: BTreeMap<PathBuf, Vec<u8>>,
+    registry: &mut AnalyzerRegistry,
+) -> RepositoryAnalysis {
+    let selection = AnalysisSelection {
+        root: PathBuf::from("/codegraide-snapshot"),
+        target_kind: AnalysisTargetKind::Directory,
+        match_patterns: Vec::new(),
+        selected_files: sources.keys().cloned().collect(),
+    };
+    let mut languages = BTreeMap::new();
+    let count = sources.len();
+    let sources = sources
+        .into_iter()
+        .filter_map(|(path, source)| {
+            let language = detect_language(&path)?;
+            *languages.entry(language.clone()).or_default() += 1;
+            Some((path, language, source))
+        })
+        .collect();
+    run_analyzers(selection, count, languages, sources, registry)
+}
+
 fn run_analyzers(
     selection: AnalysisSelection,
     inventoried_files: usize,

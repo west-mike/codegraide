@@ -737,3 +737,21 @@ for `else`, `default`, `switch` itself, `try`, `throw`, `goto`, `break`,
 and catch bodies. An `else if` remains at its chain depth, catch bodies remain
 at their associated try depth, case labels add no depth, and lambdas start a
 new callable scope.
+
+## Git review context
+
+Compare committed C++ functions and retrieve their surrounding code:
+
+```sh
+codegraide review-context . --base BASE --head HEAD
+codegraide review-context . --base BASE --head HEAD --include-callees --format json
+```
+
+The report includes full before/after source, unchanged callers, callee
+signatures, supporting types and explicit resolution/omission status.
+Declarations are hidden by default; add `--show-declarations` to include them.
+Declaration-only changes remain flagged. Identical unchanged context is shared
+across revisions. Relationships focus on the changed functions by default;
+`--all-relations` includes the rest of the expanded context. Snapshot-qualified references support
+follow-up source retrieval and expansion.
+See [Git review context](REVIEW_CONTEXT.md) for options, schema and limitations.
