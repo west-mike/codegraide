@@ -1,0 +1,37 @@
+Examples:
+  codegraide dependencies . --format html --output graphs --open
+  codegraide dependencies . --language cpp --compile-commands build/compile_commands.json
+  codegraide dependencies . --language python --venv .venv
+  codegraide dependencies . --language python --focus shop.api --direction both --depth 2
+  codegraide dependencies . --path-from python:shop.api --path-to python:shop.models
+  codegraide dependencies . --language cpp --closure src/main.cpp --direction dependencies
+  codegraide dependencies . --format dot > dependencies.dot
+
+Languages and selectors:
+  Installed dependency languages: python and cpp. Omit --language to analyze all
+  present languages, or repeat it to select several. Graphs remain separate.
+  Units are Python module names (shop.api) or C++ repository-relative file paths
+  (src/main.cpp). Multi-language runs require language:identity selectors, such
+  as python:shop.api or cpp:src/main.cpp. Queries cannot cross language graphs.
+  Focus defaults to direction both and depth 1. --direction needs --focus or
+  --closure. Closure defaults to dependencies and accepts dependencies or
+  dependents, not both. --path-from and --path-to must be supplied together and
+  cannot combine with focus/depth/direction/closure/cycles-only. Closure cannot
+  combine with focus/depth/path queries/cycles-only. --depth requires --focus.
+  --exact-only removes inferred and other non-exact relations. --local-only
+  hides nonlocal units but retains inferred local relations.
+  Path and closure queries use exact local relations. --exclude-* flags remove
+  Python imports before analysis, changing coverage and graph metrics; ordinary
+  graph filters change the view. Terminal --top defaults to 10 and must be positive.
+
+Environment and output:
+  Python import roots use supported pyproject.toml layouts, then src/ or flat
+  layout. --python and --venv are mutually exclusive and explicitly start the
+  chosen Python (3.8+) for environment metadata; normal site initialization runs.
+  Packages are not imported and the active environment is not auto-selected.
+  --compile-commands requires the C++ resolver, reads GCC/Clang include search
+  metadata and never executes compiler commands; it is not auto-discovered.
+  --output and --open require --format html. HTML output is a DIRECTORY, default
+  codegraide-dependencies, containing index.html and one offline page per language.
+  Regeneration replaces a codegraide-owned bundle; unrelated nonempty directories
+  are refused. Other formats write to stdout; redirect them to a file as above.

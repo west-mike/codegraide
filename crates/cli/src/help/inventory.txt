@@ -1,0 +1,48 @@
+Examples:
+  codegraide inventory . --list-files source --list-files uncategorized
+  codegraide inventory . --include-ignored 'generated/**' --audit-ignored
+  codegraide inventory . --config rules.json --format json
+
+Discovery and output:
+  Repository .gitignore files are respected. Parent/global Git ignore rules,
+  .git/info/exclude and .ignore are not used. Symlinks are not followed.
+  .git, target and __pycache__ are always excluded, even with --include-ignored
+  or --audit-ignored. Repeat --include-ignored for multiple globs.
+  Without --audit-ignored, ignored directory contents are not counted.
+  --list-files accepts source, documentation, configuration, data, assets,
+  uncategorized or all; it is terminal-only. JSON includes category paths.
+  Line counts currently cover Python, Rust, C and C++.
+
+Configuration (--config):
+  Supply one JSON file explicitly; repository config is not auto-discovered.
+  Save this example as rules.json:
+
+  {
+    "config_version": "0.1.0",
+    "inventory": {
+      "ignore_defaults": false,
+      "categories": {
+        "source": {
+          "mode": "extend",
+          "include_extensions": ["go"],
+          "include_filenames": ["special.source"],
+          "include_filename_regexes": [".*\\.generated\\.rs"],
+          "exclude_filenames": ["not-source.txt"],
+          "exclude_filename_regexes": ["private/.*\\.generated\\.rs"]
+        }
+      }
+    }
+  }
+
+  categories accepts the six file categories above. Each category supports all
+  five selector arrays shown; omitted arrays are empty. Extensions are
+  case-insensitive and must omit the leading dot and path separators. Exact
+  filenames are case-sensitive and cannot contain directories; include_filenames
+  requires an extension (use a regex for extensionless names). Regexes match the whole
+  filename, or the whole repository-relative path if the regex contains '/'.
+  Regexes must be nonempty and cannot start with / or ^/.
+  A more-specific match wins: exact filename, then regex, then extension.
+  Equal-specificity matches across categories and contradictory rules are errors.
+  mode defaults to extend; replace discards that category's embedded rules.
+  ignore_defaults: true discards all embedded category rules. These are category
+  rules, not filesystem ignore rules. --no-warnings hides warnings, never errors.

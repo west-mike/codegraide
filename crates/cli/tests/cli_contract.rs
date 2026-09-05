@@ -153,3 +153,87 @@ fn graph_commands_enforce_environment_and_html_option_contracts() {
     assert_error(&["calls", "--direction", "both"], 2, "--focus <SYMBOL>");
     assert_error(&["calls", "--depth", "2"], 2, "--focus <SYMBOL>");
 }
+
+fn help_text(arguments: &[&str]) -> String {
+    let output = run(arguments);
+    assert!(output.status.success(), "help failed for {arguments:?}");
+    assert!(output.stderr.is_empty());
+    String::from_utf8(output.stdout).expect("help is UTF-8")
+}
+
+#[test]
+fn detailed_help_is_available_without_inputs_and_short_help_stays_short() {
+    assert!(help_text(&["--help"]).contains("configuration formats"));
+    for command in [
+        "inventory",
+        "analyze",
+        "comments",
+        "dependencies",
+        "calls",
+        "review-context",
+    ] {
+        let long = help_text(&[command, "--help"]);
+        assert!(long.contains("Examples:"), "{command} needs examples");
+        assert_eq!(long, help_text(&["help", command]));
+        let short = help_text(&[command, "-h"]);
+        assert!(!short.contains("Examples:"));
+        assert!(short.contains("Use --help"));
+    }
+    let dependencies = help_text(&["dependencies", "--help"]);
+    assert!(dependencies.contains("--output <DIRECTORY>"));
+    assert!(dependencies.contains("language:identity"));
+    let calls = help_text(&["calls", "--help"]);
+    assert!(calls.contains("inferred local calls remain visible"));
+}
+
+// Extract the JSON users can copy from the installed binary's help, then run it
+// through real commands. This catches examples drifting from accepted formats.
+fn help_json(command: &str) -> String {
+    let text = help_text(&[command, "--help"]);
+    let start = text.find("  {\n").expect("help includes a JSON example");
+    let mut json = String::new();
+    for line in text[start..].lines() {
+        json.push_str(line.strip_prefix("  ").unwrap_or(line));
+        json.push('\n');
+        if line == "  }" {
+            return json;
+        }
+    }
+    panic!("unterminated JSON example in {command} help")
+}
+
+#[test]
+fn configuration_examples_from_help_are_accepted_by_the_commands() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("sample.go"), "package sample\n").unwrap();
+    std::fs::write(root.join("sample.py"), "\"\"\"Documented module.\"\"\"\n").unwrap();
+    std::fs::write(
+        root.join("sample.cpp"),
+        "namespace app { int run() { return 1; } }\n",
+    )
+    .unwrap();
+    for (command, flag, filename) in [
+        ("inventory", "--config", "rules.json"),
+        ("analyze", "--policy", "policy.json"),
+        ("comments", "--policy", "comments-policy.json"),
+        ("calls", "--architecture", "architecture.json"),
+    ] {
+        std::fs::write(root.join(filename), help_json(command)).unwrap();
+        let mut invocation = Command::new(env!("CARGO_BIN_EXE_codegraide"));
+        invocation
+            .current_dir(root)
+            .args([command, ".", flag, filename, "--format", "json"]);
+        if command == "calls" {
+            invocation.args(["--language", "cpp"]);
+        }
+        let output = invocation.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(report.is_object());
+    }
+}

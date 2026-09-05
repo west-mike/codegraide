@@ -1,0 +1,36 @@
+Review policy (--policy):
+  Supply one JSON file explicitly. Omitted fields keep built-in defaults;
+  matching CLI thresholds override file values. Save as policy.json:
+
+  {
+    "policy_version": "0.2.0",
+    "cyclomatic_complexity": {
+      "human_review_at": 11,
+      "block_at": 21,
+      "risk_bands": {"moderate_at": 6, "high_at": 11, "critical_at": 21},
+      "exceptions": [
+        {
+          "symbol_id": "src/legacy.py::function:legacy#1",
+          "reason": "Reviewed generated parser",
+          "approved_max": 24
+        }
+      ]
+    },
+    "documentation_coverage": {"human_review_below": 80}
+  }
+
+  Without a policy, complexity requires review at 11; blocking and documentation
+  thresholds are off. Risk bands label measurements independently of actions.
+  Complexity thresholds must be positive; block_at must be at least human_review_at.
+  Risk-band boundaries must increase strictly, starting at 2 or above.
+  Documentation thresholds are integer percentages from 1 through 100.
+  block_at: null leaves blocking off; --no-complexity-block on analyze also
+  disables a file's block threshold. Policy 0.1.0 accepts complexity settings only.
+  Exceptions need an exact symbol_id from analysis JSON and a nonblank reason.
+  Use either approved_max (positive, inclusive) or unbounded: true, never both.
+  An exception suppresses complexity actions within its bound, while preserving
+  measurements and rankings. unbounded: true suppresses those actions at any score.
+  Documentation coverage currently measures Python docstrings only. Conventional
+  test paths are excluded unless --include-tests is set. Missing and unavailable
+  documentation are distinct; unavailable evidence prevents a threshold pass.
+  Unknown JSON fields are errors.
