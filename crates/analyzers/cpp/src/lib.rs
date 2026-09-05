@@ -33,6 +33,7 @@ pub use call_resolution::{
 pub use resolution::{
     CPP_HEADER_RESOLUTION_DEFINITION_VERSION, CppDependencyResolution, CppDependencyResolver,
     CppResolutionError, CppResolutionOptions, CppResolutionSummary, resolve_cpp_dependencies,
+    resolve_cpp_snapshot_dependencies,
 };
 
 pub const CPP_CYCLOMATIC_COMPLEXITY: &str = "cpp-cyclomatic-complexity";

@@ -35,6 +35,7 @@ use codegraide_core::{
 use crate::bootstrap::{BuiltinAnalyzerFeatures, build_builtin_analyzer_registry};
 
 mod bootstrap;
+mod review_context;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -49,6 +50,8 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Compare committed C++ functions and retrieve bounded review context
+    ReviewContext(review_context::ReviewContextArgs),
     /// Inventory the files and languages found in a repository
     Inventory {
         /// Path to the repository
@@ -639,6 +642,7 @@ fn main() -> ExitCode {
             output: output.as_deref(),
             open: *open,
         }),
+        Command::ReviewContext(args) => review_context::run(args),
         Command::Calls {
             path,
             language,

@@ -13,15 +13,17 @@ mod dependency_query;
 mod documentation;
 mod error;
 mod explorer_shell;
+pub mod git_snapshot;
 mod graph;
 mod inventory;
 mod lines;
 mod report;
 mod review;
+pub mod review_context;
 
 pub use analysis::{
     AnalysisError, AnalysisOptions, AnalysisSelection, AnalysisTargetKind, AnalyzerRun,
-    LanguageAnalysisCounts, RepositoryAnalysis, analyze_repository,
+    LanguageAnalysisCounts, RepositoryAnalysis, analyze_repository, analyze_source_files,
 };
 pub use analyzer::{
     AnalysisDiagnostic, AnalysisFacts, AnalysisInput, AnalysisLevel, AnalyzerCapability,

@@ -172,6 +172,21 @@ pub fn resolve_cpp_dependencies(
     analysis: &RepositoryAnalysis,
     options: &CppResolutionOptions,
 ) -> Result<CppDependencyResolution, CppResolutionError> {
+    resolve_dependencies(analysis, options, false)
+}
+
+/// Resolve committed include facts without filesystem or compilation-database access.
+pub fn resolve_cpp_snapshot_dependencies(
+    analysis: &RepositoryAnalysis,
+) -> Result<CppDependencyResolution, CppResolutionError> {
+    resolve_dependencies(analysis, &CppResolutionOptions::default(), true)
+}
+
+fn resolve_dependencies(
+    analysis: &RepositoryAnalysis,
+    options: &CppResolutionOptions,
+    snapshot: bool,
+) -> Result<CppDependencyResolution, CppResolutionError> {
     if !matches!(
         analysis.selection.target_kind,
         codegraide_core::AnalysisTargetKind::Directory
@@ -236,6 +251,7 @@ pub fn resolve_cpp_dependencies(
                 Some(&contexts[context_index]),
                 &repository_files,
                 &mut catalog,
+                snapshot,
             ) else {
                 continue;
             };
@@ -272,6 +288,7 @@ pub fn resolve_cpp_dependencies(
                             Some(&contexts[*index]),
                             &repository_files,
                             &mut catalog,
+                            snapshot,
                         )
                     })
                     .collect::<Vec<_>>(),
@@ -282,6 +299,7 @@ pub fn resolve_cpp_dependencies(
                     None,
                     &repository_files,
                     &mut catalog,
+                    snapshot,
                 )],
             };
             resolutions.push(ProjectDependencyResolution::new(
@@ -540,6 +558,7 @@ fn resolve_include(
     context: Option<&CompileContext>,
     repository_files: &[PathBuf],
     catalog: &mut BTreeMap<PathBuf, LocalModule>,
+    snapshot: bool,
 ) -> ContextResolution {
     if include.delimiter == IncludeDelimiter::Macro {
         return ContextResolution::Unresolved(UnresolvedDependencyReason::MacroInclude);
@@ -572,7 +591,33 @@ fn resolve_include(
             );
         }
     }
+    if snapshot && include.delimiter == IncludeDelimiter::Quote {
+        let relative = source_path
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join(&include.target);
+        let mut normalized = PathBuf::new();
+        let valid = relative.components().all(|part| match part {
+            std::path::Component::Normal(name) => {
+                normalized.push(name);
+                true
+            }
+            std::path::Component::CurDir => true,
+            std::path::Component::ParentDir => normalized.pop(),
+            _ => false,
+        });
+        if valid && repository_files.contains(&normalized) {
+            let module = catalog
+                .entry(normalized.clone())
+                .or_insert_with(|| local_file(normalized, false))
+                .clone();
+            return ContextResolution::Target(DependencyTarget::LocalModule(module));
+        }
+    }
     for (directory, kind) in search {
+        if snapshot {
+            continue;
+        }
         let candidate = directory.join(&include.target);
         if !candidate.is_file() {
             continue;
