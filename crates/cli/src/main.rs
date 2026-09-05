@@ -41,7 +41,8 @@ mod review_context;
 #[command(
     name = "codegraide",
     version,
-    about = "Tool to analyze a code repository"
+    about = "Tool to analyze a code repository",
+    after_help = "Run codegraide <COMMAND> --help for all options, examples and configuration formats.\nUse -h for a short option list; --help includes the full reference."
 )]
 struct Args {
     #[command(subcommand)]
@@ -51,8 +52,10 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Compare committed C++ functions and retrieve bounded review context
+    #[command(after_help = "Use --help for examples and reference retrieval details.", after_long_help = include_str!("help/review-context.txt"))]
     ReviewContext(review_context::ReviewContextArgs),
     /// Inventory the files and languages found in a repository
+    #[command(after_help = "Use --help for examples and configuration details.", after_long_help = include_str!("help/inventory.txt"))]
     Inventory {
         /// Path to the repository
         #[arg(value_name = "PATH", default_value = ".")]
@@ -74,7 +77,7 @@ enum Command {
         #[arg(long)]
         no_warnings: bool,
 
-        /// Print repository-relative paths for a category; may be repeated
+        /// Print category paths (source/documentation/configuration/data/assets/uncategorized/all); terminal-only, may repeat
         #[arg(long, value_name = "CATEGORY", action = clap::ArgAction::Append)]
         list_files: Vec<FileListSelection>,
 
@@ -83,6 +86,7 @@ enum Command {
         format: InventoryOutputFormat,
     },
     /// Parse supported source files and report syntax recovery diagnostics
+    #[command(after_help = "Use --help for examples and configuration details.", after_long_help = concat!(include_str!("help/analyze.txt"), include_str!("help/policy.txt")))]
     Analyze {
         /// File or directory to analyze
         #[arg(value_name = "PATH", default_value = ".")]
@@ -144,11 +148,11 @@ enum Command {
         #[arg(long, value_name = "PERCENT", value_parser = parse_percentage)]
         documentation_review_below: Option<u8>,
 
-        /// Return gate-specific exit codes for review status
+        /// Exit 0 for pass, 2 for review required, 3 for blocked (errors use 1)
         #[arg(long)]
         gate: bool,
 
-        /// Select the JSON report profile; full preserves the complete analysis report
+        /// JSON profile; review requires --format json, full preserves all facts
         #[arg(long, value_enum, default_value_t = ReportProfile::Full)]
         profile: ReportProfile,
 
@@ -161,6 +165,7 @@ enum Command {
         format: AnalyzeOutputFormat,
     },
     /// Report Python module, class, function, and method docstring coverage
+    #[command(after_help = "Use --help for examples and configuration details.", after_long_help = concat!(include_str!("help/comments.txt"), include_str!("help/policy.txt")))]
     Comments {
         /// File or directory to analyze
         #[arg(value_name = "PATH", default_value = ".")]
@@ -199,6 +204,7 @@ enum Command {
         format: CommentsOutputFormat,
     },
     /// Resolve supported language dependencies and build language-pure graphs
+    #[command(after_help = "Use --help for examples and configuration details.", after_long_help = include_str!("help/dependencies.txt"))]
     Dependencies {
         /// Project directory to analyze
         #[arg(value_name = "PATH", default_value = ".")]
@@ -263,11 +269,11 @@ enum Command {
         )]
         closure: Option<String>,
 
-        /// Hide ambiguous and unresolved relations
+        /// Keep only exact dependency relations; remove inferred and uncertain relations
         #[arg(long)]
         exact_only: bool,
 
-        /// Show repository-local units and exact local relations only
+        /// Show repository-local units and relations, including inferred relations
         #[arg(long)]
         local_only: bool,
 
@@ -299,8 +305,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = DependencyOutputFormat::Terminal)]
         format: DependencyOutputFormat,
 
-        /// Write an interactive HTML graph to this file
-        #[arg(long, value_name = "FILE")]
+        /// Write an HTML bundle directory (default: codegraide-dependencies); requires --format html
+        #[arg(long, value_name = "DIRECTORY")]
         output: Option<PathBuf>,
 
         /// Open the interactive HTML graph in the default browser
@@ -308,6 +314,7 @@ enum Command {
         open: bool,
     },
     /// Explore Python or C++ symbols and conservative written-call targets
+    #[command(after_help = "Use --help for examples and configuration details.", after_long_help = include_str!("help/calls.txt"))]
     Calls {
         /// Project directory to analyze
         #[arg(value_name = "PATH", default_value = ".")]
@@ -345,11 +352,11 @@ enum Command {
         #[arg(long, value_name = "N", requires = "focus")]
         depth: Option<usize>,
 
-        /// Hide ambiguous, unresolved, and external call boundaries
+        /// Keep only exact call relations; remove inferred and other uncertain relations
         #[arg(long)]
         exact_only: bool,
 
-        /// Show project symbols and exact local calls only
+        /// Show project symbols and local calls, including inferred calls
         #[arg(long)]
         local_only: bool,
 
@@ -361,7 +368,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = CallOutputFormat::Terminal)]
         format: CallOutputFormat,
 
-        /// Write HTML output to this file
+        /// Write HTML to this file (default: codegraide-call-graph.html); requires --format html
         #[arg(long, value_name = "FILE")]
         output: Option<PathBuf>,
 
@@ -373,7 +380,7 @@ enum Command {
         #[arg(long)]
         include_source: bool,
 
-        /// Maximum nested call-expansion depth embedded in HTML
+        /// Nested expansion depth, 1-10 (default: 3); requires --include-source and HTML
         #[arg(long, value_name = "N", value_parser = clap::value_parser!(u8).range(1..=10))]
         max_expansion_depth: Option<u8>,
     },

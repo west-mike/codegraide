@@ -1,0 +1,20 @@
+Examples:
+  codegraide comments . --include-tests
+  codegraide comments . --documentation-review-below 80 --gate
+  codegraide comments . --policy policy.json --format json
+
+Selection and output:
+  --match is a full-match repository-relative regex; repeat for OR selection.
+  Repeat --include-ignored for globs. .git, target and __pycache__ stay excluded.
+  Coverage currently counts nonblank Python docstrings on modules, top-level
+  classes/functions and their direct methods. Nested definitions and lambdas
+  are excluded; overload declarations and implementation count as one function.
+  Coverage = documented / (documented + missing); unavailable is reported separately.
+  --include-tests includes test/ and tests/ directories, test_*.py, *_test.py and
+  conftest.py in coverage. Other languages do not yet have documentation coverage.
+  --top is a positive terminal detail limit (default 20); JSON stays complete.
+  --gate requires a documentation threshold from the CLI or policy. It exits 0
+  for pass or 2 for review required; complexity policy does not control this gate.
+  Without --gate, completed reports exit 0. Operational errors exit 1 and invalid
+  command-line syntax exits 2.
+

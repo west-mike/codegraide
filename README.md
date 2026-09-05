@@ -72,7 +72,16 @@ codegraide analyze . --format json --profile review
 codegraide review-context . --base HEAD~1 --head HEAD
 ```
 
-Each command has its own help, for example `codegraide calls --help`.
+Use `codegraide --help` to see the commands, then `codegraide <command> --help`
+for all its options, examples, and config file formats. For example:
+
+```sh
+codegraide inventory --help
+codegraide analyze --help
+codegraide calls --help
+```
+
+Use `-h` instead of `--help` for a short option list.
 [Git review context](REVIEW_CONTEXT.md) has more detail on comparing commits.
 
 ## Current limits

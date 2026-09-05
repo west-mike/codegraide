@@ -1,0 +1,47 @@
+Examples:
+  codegraide calls . --language python --focus shop.service::Client.send --depth 2
+  codegraide calls . --language cpp --focus 'app::run' --direction callees
+  codegraide calls . --format html --include-source --output calls.html --open
+  codegraide calls . --language cpp --architecture architecture.json --format json
+
+Selection and output:
+  A single present language is selected automatically; mixed Python/C++ projects
+  require --language. Python selectors use module::qualified.symbol; C++ uses
+  qualified names such as app::run. Duplicate names require #N; use the
+  symbol selector fields in --format json to find their ordinals. Repeat --focus for multiple roots.
+  --direction and --depth require --focus; defaults are both and 1.
+  --exact-only removes all non-exact relations, including inferred calls.
+  --local-only hides nonlocal boundary nodes; inferred local calls remain visible.
+  Cycles and fan metrics count exact local calls only.
+  --output, --open and --include-source require --format html. HTML defaults to
+  codegraide-call-graph.html, a single offline file. --output replaces that file.
+  Other formats write to stdout. Source embedding includes private code in the
+  report. --max-expansion-depth requires --include-source and HTML; range 1-10,
+  default 3. Expansion also stops at recursion or 100 cards.
+  --python/--venv are Python-only, mutually exclusive and explicitly start the
+  selected Python (3.8+) for metadata, including normal site initialization.
+  --compile-commands/--architecture are C++-only. Compilation commands are read
+  for include visibility, never executed. Config files are not auto-discovered.
+
+Architecture groups (--architecture):
+  Save this JSON as architecture.json:
+
+  {
+    "architecture_schema_version": "0.1.0",
+    "groups": [
+      {
+        "id": "api",
+        "name": "Public API",
+        "path_globs": ["include/**"],
+        "symbol_regexes": ["^app::"],
+        "module_regexes": ["^app$"]
+      }
+    ]
+  }
+
+  id and name must be nonblank; IDs must be unique. All three selector arrays
+  are optional. Globs use repository-relative paths; regexes match symbol/owner or
+  C++ module names (use ^ and $ for whole-name matching). Any selector can match
+  a group. A symbol retains all matching groups; the first is its primary group.
+  Unknown fields and invalid patterns are errors. These groups label symbols;
+  they are separate from the dependency explorer's browser-side architecture rules.

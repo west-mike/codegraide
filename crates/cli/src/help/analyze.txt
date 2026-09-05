@@ -1,0 +1,22 @@
+Examples:
+  codegraide analyze . --match 'src/.*\.py' --details
+  codegraide analyze . --diagnostics src/service.py
+  codegraide analyze . --format json --profile review --top 20
+  codegraide analyze . --policy policy.json --format gate --gate
+
+Selection and output:
+  Python and C++ have syntax analysis. Other languages remain visible as inventory
+  only. Repeat --match for OR selection; patterns match entire repository-relative
+  paths. Repeat --include-ignored for Git-ignored globs. .git, target and
+  __pycache__ stay excluded. Source is read, not executed.
+  --diagnostics and --details are terminal-only; omit FILE to show all or repeat
+  the option for exact selected file paths. Place PATH before optional FILE flags.
+  Full JSON includes all facts and diagnostics. --profile review requires
+  --format json. --format gate is a minimal report; --gate separately enables
+  policy exit codes. --top must be positive and bounds projected output, not
+  analysis: review defaults to 20 findings/rankings, gate to 10. Full JSON is not
+  truncated by --top. Normal terminal output shows up to 5 review findings.
+  Without --gate, completed analysis exits 0 regardless of findings. With --gate:
+  0 = pass, 2 = human review required, 3 = blocked. Operational errors exit 1;
+  invalid command-line syntax exits 2. Partial parses are reported as diagnostics.
+

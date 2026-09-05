@@ -1,0 +1,26 @@
+Examples:
+  codegraide review-context . --base HEAD~1 --head HEAD
+  codegraide review-context . --base v1.0 --include-callees --format json
+  codegraide review-context . --body 'REFERENCE_FROM_JSON'
+  codegraide review-context . --symbol 'REFERENCE_FROM_JSON' --depth 2 --format json
+
+Comparison and retrieval:
+  Semantic context currently covers C++ only. Both revisions must exist locally;
+  comparison is direct, not a merge-base diff. Uncommitted/untracked files are
+  excluded. Unsupported changed files retain metadata, not function context.
+  Comparison includes before/after definitions, unchanged callers, callee
+  signatures and lexical supporting types. --include-callees adds callee bodies.
+  --show-declarations adds declaration source, also for --symbol; declaration-only
+  changes remain flagged without it. Identical unchanged context shares its body.
+  Relationships normally touch changed/requested functions; --all-relations adds
+  incidental relationships without expanding the selected context.
+  Copy a complete source reference from JSON (including other_snapshots) for
+  --body or --symbol. --body reads the exact committed range; --symbol reanalyzes
+  that snapshot and expands callers/callees. Neither combines with --base/--head;
+  --body and --symbol are mutually exclusive. References need their original
+  commits/blobs locally and UTF-8 paths/source.
+  --depth accepts 0-10; --max-symbols 1-10000; --max-edges 1-100000. Byte limits
+  must be positive. Input limits bound C++ source ingestion per snapshot, not
+  parser time. Code limits omit whole bodies with reasons instead of truncating
+  them. Limits and resolver uncertainty remain visible in the report.
+  Output goes to stdout; redirect to save it. No review gate is applied here.
