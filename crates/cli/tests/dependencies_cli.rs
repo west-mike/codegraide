@@ -672,6 +672,8 @@ fn html_bundle_separates_language_payloads_and_regenerates_known_files() {
     let index = fs::read_to_string(destination.join("index.html")).expect("overview");
     let python = fs::read_to_string(destination.join("python.html")).expect("Python page");
     let cpp = fs::read_to_string(destination.join("cpp.html")).expect("C++ page");
+    assert!(python.contains("aria-label=\"Dependency languages\""));
+    assert!(cpp.contains("aria-label=\"Dependency languages\""));
     assert!(index.contains("href=\"python.html\"") && index.contains("href=\"cpp.html\""));
     assert!(python.contains("\"name\":\"shop.api\""));
     assert!(!python.contains("\"name\":\"native/main.cpp\""));

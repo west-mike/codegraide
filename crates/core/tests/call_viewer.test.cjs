@@ -3,11 +3,12 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
-const html=fs.readFileSync(`${__dirname}/../src/call_viewer.html`,'utf8');
-const script=html.slice(html.indexOf('    const cppKeywords='),html.indexOf('    window.showOccurrence='));
+const html=fs.readFileSync(`${__dirname}/../src/call_viewer.js`,'utf8');
+const createCallSource=require('../src/call_source.js');
+const languages=require('../src/explorer_languages.js');
 function render(lines,evidence,status='inferred',startColumn=1){
   const context={TextEncoder,outgoing:new Map([['caller',[{target:'callee',status,evidence}]]]),nodes:new Map([['callee',{name:'stock_for'}]]),statusLabels:{inferred:'Likely match',exact:'Exact match',unresolved:'Unresolved'},esc:s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))};
-  vm.createContext(context);vm.runInContext(script,context);
+  context.nodes.set('caller',{language:'cpp'});Object.assign(context,createCallSource({...context,languages}));
   return context.sourceHtml({start_line:7,start_column:startColumn,end_line:6+lines.length,lines},[],'caller','a.cpp');
 }
 const ev=(expression,column=1,line=7,path='a.cpp',callee='stock_for')=>({expression,column,line,path,callee});
@@ -149,7 +150,7 @@ test('dragging a caller regenerates its group entry while preserving shared iden
 });
 
 test('support filter recognizes nested C++ test and third-party directories',()=>{
- const context={};vm.createContext(context);vm.runInContext(html.slice(html.indexOf('    function isSupport('),html.indexOf('    function readableLabel(')),context);
+ const context={ExplorerLanguages:languages};vm.createContext(context);vm.runInContext(html.slice(html.indexOf('    function isSupport('),html.indexOf('    function readableLabel(')),context);
  for(const path of ['modules/imgproc/perf/perf_thresh.cpp','modules/core/test/test_mat.cpp','3rdparty/zlib/zutil.c','tests/main.cpp'])assert(context.isSupport({path}));
  for(const path of ['modules/imgproc/src/thresh.cpp','src/test_result.cpp'])assert(!context.isSupport({path}));
 });

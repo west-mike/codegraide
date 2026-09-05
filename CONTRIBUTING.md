@@ -16,3 +16,6 @@ cargo test --workspace
 ```
 
 Avoid introducing abstractions solely for hypothetical future languages or output formats.
+
+Graph UI integration and per-language offline files are documented in
+[EXPLORER_ADAPTERS.md](EXPLORER_ADAPTERS.md).

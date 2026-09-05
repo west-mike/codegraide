@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>__VIEW_STYLE__
+__SHARED_STYLE__</style>
+</head>
+<body>
+<div class="explorer-app __APP_CLASS__" data-explorer="__TOOL__">
+<header class="explorer-header">
+  <div class="brand-block"><button class="brand" id="homeButton" title="Return to the project overview"><h1>__TITLE__</h1></button><div class="summary subtitle" id="summary"></div><nav id="breadcrumbs" class="breadcrumbs" aria-label="Graph hierarchy" hidden></nav></div>
+  <button class="header-control" id="__LEFT_TOGGLE__" aria-pressed="true">Hide navigator</button>
+  <button class="header-control" id="__RIGHT_TOGGLE__" aria-pressed="__DETAILS_OPEN__">__DETAILS_ACTION__ details</button>
+  <div class="search-wrap"><input id="search" type="search" list="module-names" placeholder="__SEARCH_LABEL__" aria-label="__SEARCH_LABEL__" autocomplete="off"><datalist id="module-names"></datalist><button class="clear-search" id="clearSearch" aria-label="Clear search" title="Clear search" hidden>×</button></div>
+</header>
+<main class="explorer-workspace __WORKSPACE_CLASS__" id="layout">
+  <aside class="explorer-pane explorer-left __LEFT_CLASS__">__NAVIGATOR__</aside>
+  <section class="explorer-center __CENTER_CLASS__">
+    <div class="graph-toolbar">
+      <button class="icon" id="__BACK__" hidden aria-label="Back" title="Back">←</button>
+      <div class="graph-title"><strong id="__FOCUS_TITLE__">__TITLE__</strong></div>
+      <label class="depth-control"><span>Depth</span><input id="__DEPTH_SLIDER__" type="range" min="__MIN_DEPTH__" max="__MAX_DEPTH__" value="1" aria-label="Graph depth"><input id="__DEPTH_INPUT__" type="number" min="__MIN_DEPTH__" max="__MAX_DEPTH__" value="1" inputmode="numeric" aria-label="Graph depth value"></label>
+      <button class="icon" id="__ZOOM_OUT__" aria-label="Zoom out" title="Zoom out">−</button><button class="icon" id="__ZOOM_IN__" aria-label="Zoom in" title="Zoom in">+</button><button id="__RECENTER__">Recenter</button><button id="__RESET__" title="Restore default node positions">Reset layout</button>
+    </div>
+    __CANVAS__
+  </section>
+  <aside class="explorer-pane explorer-right __RIGHT_CLASS__" aria-live="polite">__DETAILS__</aside>
+</main>
+</div>
+<script id="graph-data" type="application/json">__CODEGRAIDE_GRAPH_DATA__</script>
+<script>__SHARED_SCRIPT__</script>
+<script>__VIEW_SCRIPT__</script>
+</body>
+</html>

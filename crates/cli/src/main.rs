@@ -29,8 +29,7 @@ use codegraide_core::{
     analyze_repository, call_node_name, dependency_query_view, explain_dependency_cycles,
     filter_call_graph, filter_dependency_graph, inventory_repository_with_options,
     query_dependency_graph, render_call_dot, render_call_html, render_call_html_with_source,
-    render_call_mermaid, render_dependency_dot, render_dependency_html,
-    render_dependency_html_with_query, render_dependency_mermaid, review_status_code,
+    render_call_mermaid, render_dependency_dot, render_dependency_mermaid, review_status_code,
 };
 
 use crate::bootstrap::{BuiltinAnalyzerFeatures, build_builtin_analyzer_registry};
@@ -1260,11 +1259,15 @@ fn emit_dependency_html_bundle(
         }
     };
     for (run, (_, filename)) in runs.iter().zip(&language_pages) {
-        let rendered = if run.query.is_some() {
-            render_dependency_html_with_query(&run.view, run.query.as_ref())
-        } else {
-            render_dependency_html(&run.view)
-        };
+        let presentation = codegraide_core::DependencyExplorerPresentation::new(
+            &run.language,
+            run.resolver.unit_kind,
+        );
+        let rendered = codegraide_core::render_dependency_html_with_presentation(
+            &run.view,
+            run.query.as_ref(),
+            &presentation,
+        );
         let html = match rendered {
             Ok(html) => inject_dependency_navigation(&html, &run.language, &language_pages),
             Err(error) => {
