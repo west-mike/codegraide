@@ -19,7 +19,70 @@ use crate::graph::{
     DependencyRelation, DependencyRelationKind, DependencyScc,
 };
 
-pub const DEPENDENCY_REPORT_SCHEMA_VERSION: &str = "0.4.0";
+pub const DEPENDENCY_REPORT_SCHEMA_VERSION: &str = "0.5.0";
+
+#[derive(Debug, Serialize)]
+pub struct DependencyBundleJsonReport {
+    pub report_schema_version: &'static str,
+    pub tool: DependencyJsonTool,
+    pub languages: Vec<DependencyLanguageJsonReport>,
+    pub unavailable_languages: Vec<UnavailableDependencyLanguage>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DependencyLanguageJsonReport {
+    pub language: String,
+    pub resolver: DependencyResolverReport,
+    pub graph: DependencyJsonReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DependencyResolverReport {
+    pub id: String,
+    pub version: String,
+    pub definition_version: String,
+    pub unit_kind: &'static str,
+    pub hierarchy_behavior: String,
+    pub resolution_capabilities: Vec<String>,
+    pub status: &'static str,
+    pub context: Vec<DependencyResolverContextReport>,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DependencyResolverContextReport {
+    pub kind: String,
+    pub selected: bool,
+    pub total: usize,
+    pub supported: usize,
+    pub unsupported: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnavailableDependencyLanguage {
+    pub language: String,
+    pub status: &'static str,
+    pub installation_hint: Option<String>,
+}
+
+impl DependencyBundleJsonReport {
+    pub fn new(
+        mut languages: Vec<DependencyLanguageJsonReport>,
+        mut unavailable_languages: Vec<UnavailableDependencyLanguage>,
+    ) -> Self {
+        languages.sort_by(|left, right| left.language.cmp(&right.language));
+        unavailable_languages.sort_by(|left, right| left.language.cmp(&right.language));
+        Self {
+            report_schema_version: DEPENDENCY_REPORT_SCHEMA_VERSION,
+            tool: DependencyJsonTool {
+                name: "codegraide",
+                version: env!("CARGO_PKG_VERSION"),
+            },
+            languages,
+            unavailable_languages,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -89,7 +152,7 @@ impl fmt::Display for DependencyGraphFilterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "focus module {:?} is not a local module",
+            "focus unit {:?} is not a local dependency unit",
             self.module
         )?;
         if !self.suggestions.is_empty() {
@@ -160,7 +223,9 @@ pub fn filter_dependency_graph(
         selected.retain(|node| {
             !matches!(
                 node.kind(),
-                DependencyNodeKind::Ambiguous | DependencyNodeKind::Unresolved
+                DependencyNodeKind::Ambiguous
+                    | DependencyNodeKind::Unresolved
+                    | DependencyNodeKind::ContextDependent
             )
         });
     }
@@ -358,11 +423,17 @@ pub fn render_dependency_mermaid(view: &DependencyGraphView) -> String {
             DependencyRelationKind::Exact => {
                 output.push_str(&format!("  {source} --> {target}\n"));
             }
+            DependencyRelationKind::Inferred => {
+                output.push_str(&format!("  {source} -. inferred .-> {target}\n"));
+            }
             DependencyRelationKind::Ambiguous => {
                 output.push_str(&format!("  {source} -. ambiguous .-> {target}\n"));
             }
             DependencyRelationKind::Unresolved => {
                 output.push_str(&format!("  {source} -. unresolved .-> {target}\n"));
+            }
+            DependencyRelationKind::ContextDependent => {
+                output.push_str(&format!("  {source} -. context-dependent .-> {target}\n"));
             }
         }
     }
@@ -377,8 +448,11 @@ pub fn render_dependency_mermaid(view: &DependencyGraphView) -> String {
             DependencyNodeKind::LocalModule => "local",
             DependencyNodeKind::StandardLibrary => "standard",
             DependencyNodeKind::InstalledDistribution => "installed",
+            DependencyNodeKind::SystemHeader => "standard",
+            DependencyNodeKind::ExternalHeader => "installed",
             DependencyNodeKind::Ambiguous => "ambiguous",
             DependencyNodeKind::Unresolved => "unresolved",
+            DependencyNodeKind::ContextDependent => "ambiguous",
         };
         output.push_str(&format!("  class {} {class}\n", node.id));
         if node.cyclic_component.is_some() {
@@ -438,11 +512,17 @@ pub fn render_dependency_dot(view: &DependencyGraphView) -> String {
         let target = ids[&relation.target];
         let attributes = match relation.kind {
             DependencyRelationKind::Exact => "",
+            DependencyRelationKind::Inferred => {
+                " [style=dashed,color=\"#2563eb\",label=\"inferred\"]"
+            }
             DependencyRelationKind::Ambiguous => {
                 " [style=dashed,color=\"#ea580c\",label=\"ambiguous\"]"
             }
             DependencyRelationKind::Unresolved => {
                 " [style=dashed,color=\"#dc2626\",label=\"unresolved\"]"
+            }
+            DependencyRelationKind::ContextDependent => {
+                " [style=dashed,color=\"#7c3aed\",label=\"context-dependent\"]"
             }
         };
         output.push_str(&format!("  {source} -> {target}{attributes};\n"));
@@ -456,8 +536,11 @@ fn dot_node(node: &DependencyGraphViewNode, indent: &str) -> String {
         DependencyNodeKind::LocalModule => ("box", "#dbeafe"),
         DependencyNodeKind::StandardLibrary => ("ellipse", "#f3f4f6"),
         DependencyNodeKind::InstalledDistribution => ("component", "#dcfce7"),
+        DependencyNodeKind::SystemHeader => ("ellipse", "#f3f4f6"),
+        DependencyNodeKind::ExternalHeader => ("component", "#dcfce7"),
         DependencyNodeKind::Ambiguous => ("diamond", "#ffedd5"),
         DependencyNodeKind::Unresolved => ("octagon", "#fee2e2"),
+        DependencyNodeKind::ContextDependent => ("diamond", "#ede9fe"),
     };
     let color = if node.cyclic_component.is_some() {
         "#dc2626"
@@ -491,12 +574,21 @@ fn node_label(node: &DependencyGraphViewNode) -> String {
                 .map(|value| format!("=={value}"))
                 .unwrap_or_default()
         ),
+        DependencyNode::SystemHeader { name, .. } => {
+            format!("{name}\nsystem header")
+        }
+        DependencyNode::ExternalHeader { name, .. } => {
+            format!("{name}\nexternal header")
+        }
         DependencyNode::Ambiguous { requested, .. } => {
             format!("{requested}\nambiguous")
         }
         DependencyNode::Unresolved {
             requested, reason, ..
         } => format!("{requested}\n{}", reason.as_str()),
+        DependencyNode::ContextDependent { requested, .. } => {
+            format!("{requested}\ncontext dependent")
+        }
     }
 }
 
@@ -518,7 +610,7 @@ fn escape_dot(value: &str) -> String {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DependencyEnvironmentReport {
-    pub selection: &'static str,
+    pub selection: String,
     pub implementation: String,
     pub python_version: String,
     pub virtual_environment: bool,
@@ -547,10 +639,10 @@ pub struct JsonDependencyQuery {
     pub kind: &'static str,
     pub from: Option<String>,
     pub to: Option<String>,
-    pub module: Option<String>,
+    pub unit: Option<String>,
     pub direction: Option<&'static str>,
     pub found: bool,
-    pub ordered_modules: Vec<String>,
+    pub ordered_units: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -573,8 +665,10 @@ pub struct DependencyDefinitionVersions {
 pub struct JsonDependencyCoverage {
     pub total_references: usize,
     pub exact_references: usize,
+    pub inferred_references: usize,
     pub ambiguous_references: usize,
     pub unresolved_references: usize,
+    pub context_dependent_references: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -587,7 +681,7 @@ pub struct JsonDependencyInputExclusions {
 
 #[derive(Debug, Serialize)]
 pub struct JsonDependencyView {
-    pub focus_modules: Vec<String>,
+    pub focus: Vec<String>,
     pub direction: &'static str,
     pub depth: usize,
     pub exact_only: bool,
@@ -605,6 +699,8 @@ pub struct JsonDependencyNode {
     pub name: String,
     pub path: Option<String>,
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outgoing_dependencies_analyzed: Option<bool>,
     pub unresolved_reason: Option<&'static str>,
     pub candidates: Vec<JsonDependencyCandidate>,
     pub fan_in: usize,
@@ -625,21 +721,34 @@ pub struct JsonDependencyRelation {
     pub source: String,
     pub target: String,
     pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inference_basis: Option<&'static str>,
     pub evidence: Vec<JsonDependencyEvidence>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct JsonDependencyEvidence {
-    pub source_path: String,
-    pub module: Option<String>,
-    pub imported_name: Option<String>,
-    pub relative_level: usize,
-    pub line: usize,
-    pub column: usize,
-    pub scope: &'static str,
-    pub usage: &'static str,
-    pub requirement: &'static str,
-    pub conditional: bool,
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum JsonDependencyEvidence {
+    Import {
+        source_path: String,
+        module: Option<String>,
+        imported_name: Option<String>,
+        relative_level: usize,
+        line: usize,
+        column: usize,
+        scope: &'static str,
+        usage: &'static str,
+        requirement: &'static str,
+        conditional: bool,
+    },
+    Include {
+        source_path: String,
+        target: String,
+        delimiter: &'static str,
+        line: usize,
+        column: usize,
+        conditional: bool,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -716,7 +825,7 @@ impl DependencyJsonReport {
                 conditional: exclusions.conditional,
             },
             view: JsonDependencyView {
-                focus_modules: view.filter.focus_modules.clone(),
+                focus: view.filter.focus_modules.clone(),
                 direction: view.filter.direction.as_str(),
                 depth: view.filter.depth,
                 exact_only: view.filter.exact_only,
@@ -788,27 +897,39 @@ fn json_relation(
         source: ids[&relation.source].clone(),
         target: ids[&relation.target].clone(),
         kind: relation.kind.as_str(),
+        inference_basis: (relation.kind == DependencyRelationKind::Inferred)
+            .then_some("unique-repository-suffix"),
         evidence: relation
             .evidence
             .iter()
-            .map(|evidence| JsonDependencyEvidence {
-                source_path: crate::report::json_path(&evidence.source_path),
-                module: evidence.reference.module.clone(),
-                imported_name: evidence.reference.imported_name.clone(),
-                relative_level: evidence.reference.relative_level,
-                line: evidence.reference.span.start.line,
-                column: evidence.reference.span.start.column,
-                scope: evidence.reference.context.scope.as_str(),
-                usage: evidence.reference.context.usage.as_str(),
-                requirement: evidence.reference.context.requirement.as_str(),
-                conditional: evidence.reference.context.conditional,
+            .map(|evidence| match &evidence.reference {
+                crate::DependencyReference::Import(reference) => JsonDependencyEvidence::Import {
+                    source_path: crate::report::json_path(&evidence.source_path),
+                    module: reference.module.clone(),
+                    imported_name: reference.imported_name.clone(),
+                    relative_level: reference.relative_level,
+                    line: reference.span.start.line,
+                    column: reference.span.start.column,
+                    scope: reference.context.scope.as_str(),
+                    usage: reference.context.usage.as_str(),
+                    requirement: reference.context.requirement.as_str(),
+                    conditional: reference.context.conditional,
+                },
+                crate::DependencyReference::Include(reference) => JsonDependencyEvidence::Include {
+                    source_path: crate::report::json_path(&evidence.source_path),
+                    target: reference.target.clone(),
+                    delimiter: reference.delimiter.as_str(),
+                    line: reference.span.start.line,
+                    column: reference.span.start.column,
+                    conditional: reference.conditional,
+                },
             })
             .collect(),
     }
 }
 
 fn json_query(result: &DependencyGraphQueryResult) -> JsonDependencyQuery {
-    let ordered_modules = result
+    let ordered_units = result
         .nodes
         .iter()
         .filter_map(|node| match node {
@@ -821,22 +942,22 @@ fn json_query(result: &DependencyGraphQueryResult) -> JsonDependencyQuery {
             kind: "shortest-path",
             from: Some(from.clone()),
             to: Some(to.clone()),
-            module: None,
+            unit: None,
             direction: None,
             found: result.found,
-            ordered_modules,
+            ordered_units,
         },
         DependencyGraphQuery::Closure { module, direction } => JsonDependencyQuery {
             kind: "closure",
             from: None,
             to: None,
-            module: Some(module.clone()),
+            unit: Some(module.clone()),
             direction: Some(match direction {
                 DependencyQueryDirection::Dependencies => "dependencies",
                 DependencyQueryDirection::Dependents => "dependents",
             }),
             found: result.found,
-            ordered_modules,
+            ordered_units,
         },
     }
 }
@@ -845,8 +966,10 @@ fn coverage_report(coverage: DependencyGraphCoverage) -> JsonDependencyCoverage 
     JsonDependencyCoverage {
         total_references: coverage.total_references,
         exact_references: coverage.exact_references,
+        inferred_references: coverage.inferred_references,
         ambiguous_references: coverage.ambiguous_references,
         unresolved_references: coverage.unresolved_references,
+        context_dependent_references: coverage.context_dependent_references,
     }
 }
 
@@ -892,6 +1015,22 @@ fn json_node(node: &DependencyGraphViewNode) -> JsonDependencyNode {
             None,
             Vec::new(),
         ),
+        DependencyNode::SystemHeader { language, name } => (
+            format!("{}:system-header:{name}", language.as_str()),
+            name.clone(),
+            None,
+            None,
+            None,
+            Vec::new(),
+        ),
+        DependencyNode::ExternalHeader { language, name } => (
+            format!("{}:external-header:{name}", language.as_str()),
+            name.clone(),
+            None,
+            None,
+            None,
+            Vec::new(),
+        ),
         DependencyNode::Ambiguous {
             source_module,
             requested,
@@ -925,14 +1064,40 @@ fn json_node(node: &DependencyGraphViewNode) -> JsonDependencyNode {
             Some(reason.as_str()),
             Vec::new(),
         ),
+        DependencyNode::ContextDependent {
+            source_module,
+            requested,
+            candidates,
+            unresolved_reasons,
+        } => (
+            format!(
+                "{}:context-dependent:{}:{requested}",
+                source_module.language().as_str(),
+                source_module.qualified_name()
+            ),
+            requested.clone(),
+            None,
+            None,
+            unresolved_reasons.first().map(|reason| reason.as_str()),
+            candidates.iter().map(json_candidate).collect(),
+        ),
     };
     JsonDependencyNode {
         id: node.id.clone(),
-        kind: node.node.kind().as_str(),
+        kind: match &node.node {
+            DependencyNode::LocalModule(module) if module.id.language().as_str() == "cpp" => {
+                "local-file"
+            }
+            _ => node.node.kind().as_str(),
+        },
         identity,
         name,
         path,
         version,
+        outgoing_dependencies_analyzed: match &node.node {
+            DependencyNode::LocalModule(module) => Some(module.outgoing_dependencies_analyzed),
+            _ => None,
+        },
         unresolved_reason,
         candidates,
         fan_in: node.fan_in,
@@ -965,6 +1130,13 @@ fn json_candidate(target: &DependencyTarget) -> JsonDependencyCandidate {
             path: None,
             version: version.clone(),
         },
+        DependencyTarget::SystemHeader { name, .. }
+        | DependencyTarget::ExternalHeader { name, .. } => JsonDependencyCandidate {
+            kind: target.kind().as_str(),
+            name: name.clone(),
+            path: None,
+            version: None,
+        },
     }
 }
 
@@ -972,7 +1144,7 @@ fn json_candidate(target: &DependencyTarget) -> JsonDependencyCandidate {
 mod tests {
     use super::*;
     use crate::{
-        DependencyKind, DependencyReference, DependencyResolutionOutcome, LocalModule, ModuleId,
+        DependencyReference, DependencyResolutionOutcome, LocalModule, ModuleId,
         ProjectDependencyResolution, ResolutionLevel, SourcePosition, SourceSpan,
         analyze_dependency_graph,
     };
@@ -988,8 +1160,7 @@ mod tests {
         ProjectDependencyResolution::new(
             source.path.clone(),
             source.id.clone(),
-            DependencyReference {
-                kind: DependencyKind::Import,
+            DependencyReference::Import(crate::ImportReference {
                 module: Some(target.id.qualified_name().to_owned()),
                 imported_name: None,
                 alias: None,
@@ -1004,7 +1175,7 @@ mod tests {
                     start: SourcePosition { line: 1, column: 0 },
                     end: SourcePosition { line: 1, column: 1 },
                 },
-            },
+            }),
             DependencyResolutionOutcome::exact(DependencyTarget::LocalModule(target.clone())),
         )
     }
@@ -1060,8 +1231,7 @@ mod tests {
         let unresolved = ProjectDependencyResolution::new(
             a.path.clone(),
             a.id.clone(),
-            DependencyReference {
-                kind: DependencyKind::Import,
+            DependencyReference::Import(crate::ImportReference {
                 module: Some("missing".to_owned()),
                 imported_name: None,
                 alias: None,
@@ -1076,7 +1246,7 @@ mod tests {
                     start: SourcePosition { line: 1, column: 0 },
                     end: SourcePosition { line: 1, column: 1 },
                 },
-            },
+            }),
             DependencyResolutionOutcome::unresolved(
                 "missing",
                 crate::UnresolvedDependencyReason::ModuleNotFound,

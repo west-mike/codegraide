@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::calls::{CallGraphView, CallNode, CallRelation, ProjectSymbol};
+use crate::calls::{CallGraphView, CallNode, CallRelation, ProjectLanguageModule, ProjectSymbol};
 use crate::dependencies::DependencyTarget;
 use crate::dependency_cycles::explain_dependency_cycle;
 use crate::dependency_hierarchy::{DependencyHierarchyMember, build_dependency_hierarchy};
@@ -17,10 +17,85 @@ use crate::dependency_query::{DependencyGraphQuery, DependencyGraphQueryResult};
 use crate::graph::{DependencyNode, DependencyRelation};
 
 const VIEWER_TEMPLATE: &str = include_str!("dependency_viewer.html");
+const CALL_VIEWER_TEMPLATE: &str = include_str!("call_viewer.html");
 const GRAPH_DATA_MARKER: &str = "__CODEGRAIDE_GRAPH_DATA__";
 
 #[derive(Debug, Serialize)]
+struct CallExplorerGraph {
+    filtered_report: bool,
+    flow_definition: &'static str,
+    max_expansion_depth: u8,
+    initial_selection: Option<String>,
+    nodes: Vec<CallExplorerNode>,
+    relations: Vec<CallExplorerRelation>,
+}
+
+#[derive(Debug, Serialize)]
+struct CallExplorerNode {
+    call_flow: Option<crate::CallFlow>,
+    id: String,
+    name: String,
+    short_name: String,
+    kind: String,
+    path: Option<String>,
+    signature: Option<String>,
+    parameters: Vec<String>,
+    link_status: Option<&'static str>,
+    declarations: Vec<String>,
+    definition: Option<String>,
+    module: Option<String>,
+    module_imports: Vec<String>,
+    module_exports: Vec<String>,
+    architecture_groups: Vec<String>,
+    primary_architecture_group: Option<String>,
+    fan_in: usize,
+    fan_out: usize,
+    cyclic_component: Option<usize>,
+    candidates: Vec<CallExplorerCandidate>,
+    occurrences: Vec<CallExplorerOccurrence>,
+    source: Option<HtmlSource>,
+    noise: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CallExplorerOccurrence {
+    kind: &'static str,
+    label: String,
+    source: HtmlSource,
+}
+
+#[derive(Debug, Serialize)]
+struct CallExplorerCandidate {
+    id: Option<String>,
+    name: String,
+    signature: Option<String>,
+    path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CallExplorerRelation {
+    source: String,
+    target: String,
+    status: &'static str,
+    reason: Option<String>,
+    alternatives: Vec<CallExplorerCandidate>,
+    evidence: Vec<CallExplorerEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+struct CallExplorerEvidence {
+    path: String,
+    line: usize,
+    column: usize,
+    expression: String,
+    callee: String,
+    form: &'static str,
+    arguments: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct HtmlGraph {
+    filtered_report: bool,
     graph_kind: &'static str,
     nodes: Vec<HtmlNode>,
     relations: Vec<HtmlRelation>,
@@ -38,6 +113,8 @@ struct HtmlNode {
     subtitle: String,
     path: Option<String>,
     version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outgoing_dependencies_analyzed: Option<bool>,
     unresolved_reason: Option<&'static str>,
     candidates: Vec<HtmlCandidate>,
     cyclic_component: Option<usize>,
@@ -48,6 +125,7 @@ struct HtmlNode {
 #[derive(Debug, Clone, Serialize)]
 struct HtmlSource {
     start_line: usize,
+    start_column: usize,
     end_line: usize,
     lines: Vec<String>,
 }
@@ -64,6 +142,8 @@ struct HtmlRelation {
     source: String,
     target: String,
     kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inference_basis: Option<&'static str>,
     evidence: Vec<HtmlEvidence>,
 }
 
@@ -157,6 +237,11 @@ pub fn render_dependency_html_with_query(
         .map(|node| (node.node.clone(), node.id.clone()))
         .collect::<BTreeMap<_, _>>();
     let graph = HtmlGraph {
+        filtered_report: !view.filter.focus_modules.is_empty()
+            || view.filter.exact_only
+            || view.filter.local_only
+            || view.filter.cycles_only
+            || query.is_some(),
         graph_kind: "dependencies",
         nodes: view.nodes.iter().map(html_node).collect(),
         relations: view
@@ -214,7 +299,7 @@ pub fn render_dependency_html_with_query(
 
 /// Render a call graph through the same offline explorer infrastructure.
 pub fn render_call_html(view: &CallGraphView) -> Result<String, serde_json::Error> {
-    render_call_html_graph(view, &BTreeMap::new())
+    render_call_html_graph(view, &BTreeMap::new(), 3)
 }
 
 /// Render a call graph with repository source embedded for sidebar inspection.
@@ -224,151 +309,513 @@ pub fn render_call_html(view: &CallGraphView) -> Result<String, serde_json::Erro
 pub fn render_call_html_with_source(
     view: &CallGraphView,
     project_root: &Path,
+    max_expansion_depth: u8,
 ) -> Result<String, CallHtmlSourceError> {
     let sources = load_call_sources(view, project_root)?;
-    render_call_html_graph(view, &sources).map_err(CallHtmlSourceError::Serialize)
+    render_call_html_graph(view, &sources, max_expansion_depth)
+        .map_err(CallHtmlSourceError::Serialize)
 }
 
 fn render_call_html_graph(
     view: &CallGraphView,
-    sources: &BTreeMap<ProjectSymbol, HtmlSource>,
+    sources: &BTreeMap<String, HtmlSource>,
+    max_expansion_depth: u8,
 ) -> Result<String, serde_json::Error> {
     let ids = view
         .nodes
         .iter()
         .map(|node| (node.node.clone(), node.id.clone()))
         .collect::<BTreeMap<_, _>>();
-    let hierarchy_members = view
-        .nodes
-        .iter()
-        .filter_map(|node| match &node.node {
-            CallNode::LocalSymbol(symbol) => {
-                let mut segments = symbol
-                    .id
-                    .module
-                    .qualified_name()
-                    .split('.')
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                if matches!(
-                    symbol.id.kind,
-                    crate::SymbolKind::Class | crate::SymbolKind::Method
-                ) {
-                    let mut owners = symbol.id.qualified_name.split('.').collect::<Vec<_>>();
-                    if symbol.id.kind == crate::SymbolKind::Method {
-                        owners.pop();
+    let graph = CallExplorerGraph {
+        filtered_report: !view.filter.focus_symbols.is_empty()
+            || view.filter.exact_only
+            || view.filter.local_only
+            || view.filter.cycles_only,
+        flow_definition: "cpp-structural-flow-v1",
+        max_expansion_depth,
+        initial_selection: view
+            .filter
+            .focus_symbols
+            .first()
+            .and_then(|requested| {
+                view.nodes.iter().find_map(|node| match &node.node {
+                    CallNode::LocalSymbol(symbol)
+                        if symbol.id.base_selector() == *requested
+                            || symbol.id.ordinal_selector() == *requested =>
+                    {
+                        Some(node.id.clone())
                     }
-                    segments.extend(owners.into_iter().map(str::to_owned));
-                }
-                Some(DependencyHierarchyMember {
-                    node_id: node.id.clone(),
-                    group_segments: segments,
+                    _ => None,
                 })
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let graph = HtmlGraph {
-        graph_kind: "calls",
+            })
+            .or_else(|| default_call_selection(view)),
         nodes: view
             .nodes
             .iter()
             .map(|node| {
-                let source = match &node.node {
-                    CallNode::LocalSymbol(symbol) => sources.get(symbol).cloned(),
-                    _ => None,
-                };
-                html_call_node(&node.id, &node.node, node.cyclic_component, source)
+                call_explorer_node(
+                    &node.id,
+                    &node.node,
+                    node.fan_in,
+                    node.fan_out,
+                    node.cyclic_component,
+                    sources,
+                    &view.language_modules,
+                )
             })
             .collect(),
         relations: view
             .relations
             .iter()
-            .map(|relation| html_call_relation(relation, &ids))
+            .map(|relation| call_explorer_relation(relation, &ids))
             .collect(),
-        cycles: view
-            .strongly_connected_components
-            .iter()
-            .filter(|component| component.cyclic)
-            .enumerate()
-            .map(|(index, component)| HtmlCycle {
-                number: index + 1,
-                members: component
-                    .members
-                    .iter()
-                    .filter_map(|member| ids.get(member).cloned())
-                    .collect(),
-                witness_nodes: Vec::new(),
-                witness_relations: Vec::new(),
-                recommended_cuts: Vec::new(),
-            })
-            .collect(),
-        hierarchy: build_dependency_hierarchy(&hierarchy_members)
-            .into_iter()
-            .map(|group| HtmlHierarchyGroup {
-                id: group.id,
-                name: group.name,
-                qualified_name: group.qualified_name,
-                parent: group.parent,
-                direct_members: group.direct_modules,
-                members: group.descendants,
-            })
-            .collect(),
-        query: None,
     };
-    render_html_graph(&graph)
+    let data = serde_json::to_string(&graph)?
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e");
+    Ok(CALL_VIEWER_TEMPLATE
+        .replace(
+            "__CODEGRAIDE_EXPLORER_CONTROLS__",
+            include_str!("explorer_controls.css"),
+        )
+        .replace(
+            "__CODEGRAIDE_EXPLORER_INTERACTIONS__",
+            include_str!("explorer_interactions.js"),
+        )
+        .replace(GRAPH_DATA_MARKER, &data))
+}
+
+fn call_explorer_node(
+    id: &str,
+    node: &CallNode,
+    fan_in: usize,
+    fan_out: usize,
+    cyclic_component: Option<usize>,
+    sources: &BTreeMap<String, HtmlSource>,
+    language_modules: &[ProjectLanguageModule],
+) -> CallExplorerNode {
+    let (
+        name,
+        kind,
+        path,
+        signature,
+        parameters,
+        link_status,
+        declarations,
+        definition,
+        module,
+        groups,
+        primary,
+        candidates,
+        occurrences,
+        source,
+    ) = match node {
+        CallNode::LocalSymbol(symbol) => {
+            let occurrences = symbol_occurrences(symbol, sources);
+            let source = symbol
+                .definition
+                .as_ref()
+                .and_then(|location| sources.get(&location_label(location)))
+                .cloned()
+                .or_else(|| occurrences.first().map(|item| item.source.clone()));
+            (
+                symbol.id.base_selector(),
+                symbol.id.kind.as_str().to_owned(),
+                Some(crate::report::json_path(&symbol.path)),
+                symbol
+                    .signature
+                    .as_ref()
+                    .map(|signature| signature.normalized_key.clone()),
+                symbol
+                    .signature
+                    .as_ref()
+                    .map(|signature| {
+                        signature
+                            .parameters
+                            .iter()
+                            .map(|parameter| {
+                                parameter.name.clone().unwrap_or_else(|| {
+                                    parameter
+                                        .type_spelling
+                                        .clone()
+                                        .unwrap_or_else(|| "?".to_owned())
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                Some(symbol.link_status.as_str()),
+                symbol.declarations.iter().map(location_label).collect(),
+                symbol.definition.as_ref().map(location_label),
+                symbol.language_module.clone(),
+                symbol.architecture_groups.clone(),
+                symbol.primary_architecture_group.clone(),
+                Vec::new(),
+                occurrences,
+                source,
+            )
+        }
+        CallNode::External { name, .. } => (
+            name.clone(),
+            "external".to_owned(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+        ),
+        CallNode::Ambiguous {
+            spelling,
+            candidates,
+            ..
+        } => (
+            spelling.clone(),
+            "ambiguous".to_owned(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            candidates.iter().map(call_explorer_candidate).collect(),
+            Vec::new(),
+            None,
+        ),
+        CallNode::Unresolved { spelling, .. } => (
+            spelling.clone(),
+            "unresolved".to_owned(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+        ),
+        CallNode::Unavailable { spelling, .. } => (
+            spelling.clone(),
+            "unavailable".to_owned(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+        ),
+    };
+    let short_name = name
+        .rsplit(['.', ':'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(&name)
+        .to_owned();
+    let noise = is_low_level_call_node(&name, &kind);
+    let module_imports = module
+        .as_ref()
+        .into_iter()
+        .flat_map(|name| {
+            language_modules
+                .iter()
+                .filter(move |item| item.module.name == *name)
+        })
+        .flat_map(|item| item.imports.iter())
+        .map(|import| {
+            let prefix = if import.exported {
+                "export import"
+            } else {
+                "import"
+            };
+            format!("{prefix} {} ({})", import.target, import.kind.as_str())
+        })
+        .collect::<Vec<_>>();
+    let module_exports = module
+        .as_ref()
+        .into_iter()
+        .flat_map(|name| {
+            language_modules
+                .iter()
+                .filter(move |item| item.module.name == *name)
+        })
+        .flat_map(|item| item.exports.iter())
+        .map(|export| export.target.clone())
+        .collect::<Vec<_>>();
+    CallExplorerNode {
+        call_flow: match node {
+            CallNode::LocalSymbol(symbol) if source.is_some() => {
+                symbol.call_flow.as_deref().cloned()
+            }
+            _ => None,
+        },
+        id: id.to_owned(),
+        name,
+        short_name,
+        kind,
+        path,
+        signature,
+        parameters,
+        link_status,
+        declarations,
+        definition,
+        module,
+        module_imports,
+        module_exports,
+        architecture_groups: groups,
+        primary_architecture_group: primary,
+        fan_in,
+        fan_out,
+        cyclic_component,
+        candidates,
+        occurrences,
+        source,
+        noise,
+    }
+}
+
+fn default_call_selection(view: &CallGraphView) -> Option<String> {
+    view.nodes
+        .iter()
+        .filter(|node| match &node.node {
+            CallNode::LocalSymbol(symbol) => {
+                matches!(
+                    symbol.id.kind,
+                    crate::SymbolKind::Function | crate::SymbolKind::Method
+                ) && !is_low_level_call_node(&symbol.id.base_selector(), symbol.id.kind.as_str())
+            }
+            _ => false,
+        })
+        .max_by(|left, right| {
+            let rank = |node: &crate::calls::CallGraphViewNode| {
+                let implementation_path = match &node.node {
+                    CallNode::LocalSymbol(symbol) => {
+                        !["test", "tests", "sample", "samples", "example", "examples"]
+                            .iter()
+                            .any(|prefix| symbol.path.starts_with(prefix))
+                    }
+                    _ => false,
+                };
+                let outgoing = view
+                    .relations
+                    .iter()
+                    .filter(|relation| {
+                        relation.source == node.node
+                            && matches!(
+                                relation.kind,
+                                crate::calls::CallRelationKind::Exact
+                                    | crate::calls::CallRelationKind::Inferred
+                            )
+                    })
+                    .count();
+                (implementation_path, outgoing, node.fan_in + node.fan_out)
+            };
+            rank(left).cmp(&rank(right)).then_with(|| {
+                crate::call_node_name(&right.node).cmp(&crate::call_node_name(&left.node))
+            })
+        })
+        .map(|node| node.id.clone())
+        .or_else(|| {
+            view.nodes
+                .iter()
+                .find(|node| matches!(node.node, CallNode::LocalSymbol(_)))
+                .map(|node| node.id.clone())
+        })
+}
+
+fn is_low_level_call_node(name: &str, kind: &str) -> bool {
+    name.contains("<anonymous-")
+        || name.contains("<lambda>@")
+        || name.starts_with("@file::")
+        || name.split("::").any(|part| part.starts_with("DOCTEST_"))
+        || name.matches('<').count() != name.matches('>').count()
+        || kind == "lambda"
+}
+
+fn symbol_occurrences(
+    symbol: &ProjectSymbol,
+    sources: &BTreeMap<String, HtmlSource>,
+) -> Vec<CallExplorerOccurrence> {
+    let mut result = symbol
+        .declarations
+        .iter()
+        // A definition is also a declaration; show one source choice at that location.
+        .filter(|location| {
+            symbol
+                .definition
+                .as_ref()
+                .is_none_or(|definition| location_label(location) != location_label(definition))
+        })
+        .filter_map(|location| {
+            let label = location_label(location);
+            sources
+                .get(&label)
+                .cloned()
+                .map(|source| CallExplorerOccurrence {
+                    kind: "declaration",
+                    label,
+                    source,
+                })
+        })
+        .collect::<Vec<_>>();
+    if let Some(location) = &symbol.definition {
+        let label = location_label(location);
+        if let Some(source) = sources.get(&label).cloned() {
+            result.push(CallExplorerOccurrence {
+                kind: "definition",
+                label,
+                source,
+            });
+        }
+    }
+    result
+}
+
+fn location_label(location: &crate::ProjectSymbolLocation) -> String {
+    format!(
+        "{}:{}:{}",
+        crate::report::json_path(&location.path),
+        location.span.start.line,
+        location.span.start.column
+    )
+}
+
+fn call_explorer_candidate(symbol: &ProjectSymbol) -> CallExplorerCandidate {
+    CallExplorerCandidate {
+        id: None,
+        name: symbol.id.ordinal_selector(),
+        signature: symbol
+            .signature
+            .as_ref()
+            .map(|signature| signature.normalized_key.clone()),
+        path: Some(crate::report::json_path(&symbol.path)),
+    }
+}
+
+fn call_explorer_relation(
+    relation: &CallRelation,
+    ids: &BTreeMap<CallNode, String>,
+) -> CallExplorerRelation {
+    let id_by_symbol = ids
+        .iter()
+        .filter_map(|(node, id)| match node {
+            CallNode::LocalSymbol(symbol) => Some((&symbol.id, id)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let alternative = |symbol: &ProjectSymbol| CallExplorerCandidate {
+        id: id_by_symbol.get(&symbol.id).map(|id| (*id).clone()),
+        name: symbol.id.ordinal_selector(),
+        signature: symbol
+            .signature
+            .as_ref()
+            .map(|signature| signature.normalized_key.clone()),
+        path: Some(crate::report::json_path(&symbol.path)),
+    };
+    CallExplorerRelation {
+        source: ids[&relation.source].clone(),
+        target: ids[&relation.target].clone(),
+        status: relation.kind.as_str(),
+        reason: relation.reason.clone(),
+        alternatives: relation.alternatives.iter().map(alternative).collect(),
+        evidence: relation
+            .evidence
+            .iter()
+            .map(|evidence| CallExplorerEvidence {
+                path: crate::report::json_path(&evidence.source_path),
+                line: evidence.reference.span.start.line,
+                column: evidence.reference.span.start.column,
+                expression: evidence.reference.expression.clone(),
+                callee: evidence
+                    .reference
+                    .components
+                    .last()
+                    .cloned()
+                    .unwrap_or_default(),
+                form: evidence.reference.form.as_str(),
+                arguments: evidence
+                    .reference
+                    .argument_details
+                    .iter()
+                    .map(|argument| argument.expression.clone())
+                    .collect(),
+            })
+            .collect(),
+    }
 }
 
 fn load_call_sources(
     view: &CallGraphView,
     project_root: &Path,
-) -> Result<BTreeMap<ProjectSymbol, HtmlSource>, CallHtmlSourceError> {
+) -> Result<BTreeMap<String, HtmlSource>, CallHtmlSourceError> {
     let mut files = BTreeMap::<PathBuf, String>::new();
     let mut sources = BTreeMap::new();
     for symbol in view.nodes.iter().filter_map(|node| match &node.node {
-        CallNode::LocalSymbol(symbol)
-            if matches!(
-                symbol.id.kind,
-                crate::SymbolKind::Function | crate::SymbolKind::Method | crate::SymbolKind::Lambda
-            ) =>
-        {
-            Some(symbol)
-        }
+        CallNode::LocalSymbol(symbol) => Some(symbol),
         _ => None,
     }) {
-        if !files.contains_key(&symbol.path) {
-            let absolute_path = project_root.join(&symbol.path);
-            let contents =
-                fs::read_to_string(&absolute_path).map_err(|source| CallHtmlSourceError::Read {
-                    path: absolute_path,
-                    source,
-                })?;
-            files.insert(symbol.path.clone(), contents);
+        let mut locations = symbol.declarations.clone();
+        locations.extend(symbol.definition.clone());
+        if locations.is_empty() {
+            locations.push(crate::ProjectSymbolLocation {
+                path: symbol.path.clone(),
+                span: symbol.span,
+            });
         }
-        if let Some(source) = files
-            .get(&symbol.path)
-            .and_then(|contents| source_for_span(contents, symbol.span))
-        {
-            sources.insert(symbol.clone(), source);
+        locations.sort();
+        locations.dedup();
+        for location in locations {
+            if !files.contains_key(&location.path) {
+                let absolute_path = project_root.join(&location.path);
+                let contents = fs::read_to_string(&absolute_path).map_err(|source| {
+                    CallHtmlSourceError::Read {
+                        path: absolute_path,
+                        source,
+                    }
+                })?;
+                files.insert(location.path.clone(), contents);
+            }
+            if let Some(source) = files
+                .get(&location.path)
+                .and_then(|contents| source_for_span(contents, location.span))
+            {
+                sources.insert(location_label(&location), source);
+            }
         }
     }
     Ok(sources)
 }
 
 fn source_for_span(source: &str, span: crate::SourceSpan) -> Option<HtmlSource> {
-    let lines = source.lines().collect::<Vec<_>>();
-    let start = span.start.line.checked_sub(1)?;
-    let end = span.end.line.min(lines.len());
-    if start >= end {
+    // Byte bounds keep a declaration preview from including adjacent code on its line.
+    let excerpt = source.get(span.start_byte..span.end_byte)?;
+    let lines = excerpt.lines().map(str::to_owned).collect::<Vec<_>>();
+    if lines.is_empty() {
         return None;
     }
     Some(HtmlSource {
         start_line: span.start.line,
-        end_line: end,
-        lines: lines[start..end]
-            .iter()
-            .map(|line| (*line).to_owned())
-            .collect(),
+        start_column: span.start.column,
+        end_line: span.start.line + lines.len() - 1,
+        lines,
     })
 }
 
@@ -377,98 +824,24 @@ fn render_html_graph(graph: &HtmlGraph) -> Result<String, serde_json::Error> {
         .replace('&', "\\u0026")
         .replace('<', "\\u003c")
         .replace('>', "\\u003e");
-    Ok(VIEWER_TEMPLATE.replace(GRAPH_DATA_MARKER, &data))
-}
-
-fn html_call_node(
-    id: &str,
-    node: &CallNode,
-    cyclic_component: Option<usize>,
-    source: Option<HtmlSource>,
-) -> HtmlNode {
-    let (name, kind, subtitle, path, candidates) = match node {
-        CallNode::LocalSymbol(symbol) => {
-            let path = crate::report::json_path(&symbol.path);
-            (
-                symbol.id.base_selector(),
-                "local-module",
-                format!("{} · {path}", symbol.id.kind.as_str()),
-                Some(path),
-                Vec::new(),
-            )
-        }
-        CallNode::External { name, .. } => (
-            name.clone(),
-            "installed-distribution",
-            "External call boundary".to_owned(),
-            None,
-            Vec::new(),
-        ),
-        CallNode::Ambiguous {
-            spelling,
-            candidates,
-            ..
-        } => (
-            spelling.clone(),
-            "ambiguous",
-            "Multiple possible call targets".to_owned(),
-            None,
-            candidates
-                .iter()
-                .map(|candidate| HtmlCandidate {
-                    kind: "local-symbol",
-                    name: candidate.id.ordinal_selector(),
-                    detail: Some(crate::report::json_path(&candidate.path)),
-                })
-                .collect(),
-        ),
-        CallNode::Unresolved { spelling, .. } => (
-            spelling.clone(),
-            "unresolved",
-            "Conservative static resolution stopped here".to_owned(),
-            None,
-            Vec::new(),
-        ),
-    };
-    HtmlNode {
-        id: id.to_owned(),
-        short_name: name
-            .rsplit(['.', ':'])
-            .find(|part| !part.is_empty())
-            .unwrap_or(&name)
-            .to_owned(),
-        name,
-        kind,
-        subtitle,
-        path,
-        version: None,
-        unresolved_reason: matches!(node, CallNode::Unresolved { .. }).then_some("unresolved-call"),
-        candidates,
-        cyclic_component,
-        source,
-    }
-}
-
-fn html_call_relation(relation: &CallRelation, ids: &BTreeMap<CallNode, String>) -> HtmlRelation {
-    HtmlRelation {
-        source: ids[&relation.source].clone(),
-        target: ids[&relation.target].clone(),
-        kind: relation.kind.as_str(),
-        evidence: relation
-            .evidence
-            .iter()
-            .map(|evidence| HtmlEvidence {
-                source_path: crate::report::json_path(&evidence.source_path),
-                import_name: evidence.reference.callee.clone(),
-                line: evidence.reference.span.start.line,
-                column: evidence.reference.span.start.column,
-                scope: "call-site",
-                usage: "runtime",
-                requirement: "required",
-                conditional: false,
-            })
-            .collect(),
-    }
+    Ok(VIEWER_TEMPLATE
+        .replace(
+            "__CODEGRAIDE_EXPLORER_CONTROLS__",
+            include_str!("explorer_controls.css"),
+        )
+        .replace(
+            "__CODEGRAIDE_DEPENDENCY_TOOLS__",
+            include_str!("dependency_explorer.js"),
+        )
+        .replace(
+            "__CODEGRAIDE_DEPENDENCY_CONTROLS__",
+            include_str!("dependency_controls.js"),
+        )
+        .replace(
+            "__CODEGRAIDE_EXPLORER_INTERACTIONS__",
+            include_str!("explorer_interactions.js"),
+        )
+        .replace(GRAPH_DATA_MARKER, &data))
 }
 
 fn html_query(
@@ -502,13 +875,25 @@ fn html_hierarchy(view: &DependencyGraphView) -> Vec<HtmlHierarchyGroup> {
         .iter()
         .filter_map(|node| match &node.node {
             DependencyNode::LocalModule(module) => {
-                let mut segments = module
-                    .id
-                    .qualified_name()
-                    .split('.')
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                if module.path.file_name().and_then(|name| name.to_str()) != Some("__init__.py") {
+                let mut segments = if module.id.language().as_str() == "python" {
+                    module
+                        .id
+                        .qualified_name()
+                        .split('.')
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                } else {
+                    module
+                        .path
+                        .parent()
+                        .into_iter()
+                        .flat_map(|path| path.components())
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                };
+                if module.id.language().as_str() == "python"
+                    && module.path.file_name().and_then(|name| name.to_str()) != Some("__init__.py")
+                {
                     segments.pop();
                 }
                 Some(DependencyHierarchyMember {
@@ -538,7 +923,11 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
             let path = crate::report::json_path(&module.path);
             (
                 module.id.qualified_name().to_owned(),
-                "local-module",
+                if module.id.language().as_str() == "cpp" {
+                    "local-file"
+                } else {
+                    "local-module"
+                },
                 path.clone(),
                 Some(path),
                 None,
@@ -571,6 +960,24 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
             None,
             Vec::new(),
         ),
+        DependencyNode::SystemHeader { name, .. } => (
+            name.clone(),
+            "system-header",
+            "System header".to_owned(),
+            None,
+            None,
+            None,
+            Vec::new(),
+        ),
+        DependencyNode::ExternalHeader { name, .. } => (
+            name.clone(),
+            "external-header",
+            "External header".to_owned(),
+            None,
+            None,
+            None,
+            Vec::new(),
+        ),
         DependencyNode::Ambiguous {
             requested,
             candidates,
@@ -595,15 +1002,41 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
             Some(reason.as_str()),
             Vec::new(),
         ),
+        DependencyNode::ContextDependent {
+            requested,
+            candidates,
+            unresolved_reasons,
+            ..
+        } => (
+            requested.clone(),
+            "context-dependent",
+            "Different build contexts select different targets".to_owned(),
+            None,
+            None,
+            unresolved_reasons.first().map(|reason| reason.as_str()),
+            candidates.iter().map(html_candidate).collect(),
+        ),
+    };
+    let short_name = if kind == "local-file" {
+        path.as_deref()
+            .and_then(|path| Path::new(path).file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| short_name(&name))
+    } else {
+        short_name(&name)
     };
     HtmlNode {
         id: node.id.clone(),
-        short_name: short_name(&name),
+        short_name,
         name,
         kind,
         subtitle,
         path,
         version,
+        outgoing_dependencies_analyzed: match &node.node {
+            DependencyNode::LocalModule(module) => Some(module.outgoing_dependencies_analyzed),
+            _ => None,
+        },
         unresolved_reason,
         candidates,
         cyclic_component: node.cyclic_component,
@@ -614,7 +1047,11 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
 fn html_candidate(candidate: &DependencyTarget) -> HtmlCandidate {
     match candidate {
         DependencyTarget::LocalModule(module) => HtmlCandidate {
-            kind: candidate.kind().as_str(),
+            kind: if module.id.language().as_str() == "cpp" {
+                "local-file"
+            } else {
+                candidate.kind().as_str()
+            },
             name: module.id.qualified_name().to_owned(),
             detail: Some(crate::report::json_path(&module.path)),
         },
@@ -632,6 +1069,16 @@ fn html_candidate(candidate: &DependencyTarget) -> HtmlCandidate {
             name: distribution_display_name.clone(),
             detail: version.clone(),
         },
+        DependencyTarget::SystemHeader { name, .. } => HtmlCandidate {
+            kind: candidate.kind().as_str(),
+            name: name.clone(),
+            detail: Some("System header".to_owned()),
+        },
+        DependencyTarget::ExternalHeader { name, .. } => HtmlCandidate {
+            kind: candidate.kind().as_str(),
+            name: name.clone(),
+            detail: Some("External header".to_owned()),
+        },
     }
 }
 
@@ -643,24 +1090,37 @@ fn html_relation(
         source: ids[&relation.source].clone(),
         target: ids[&relation.target].clone(),
         kind: relation.kind.as_str(),
+        inference_basis: (relation.kind == crate::DependencyRelationKind::Inferred)
+            .then_some("unique repository suffix"),
         evidence: relation
             .evidence
             .iter()
-            .map(|evidence| HtmlEvidence {
-                source_path: crate::report::json_path(&evidence.source_path),
-                import_name: evidence
-                    .reference
-                    .module
-                    .as_deref()
-                    .or(evidence.reference.imported_name.as_deref())
-                    .unwrap_or("import")
-                    .to_owned(),
-                line: evidence.reference.span.start.line,
-                column: evidence.reference.span.start.column,
-                scope: evidence.reference.context.scope.as_str(),
-                usage: evidence.reference.context.usage.as_str(),
-                requirement: evidence.reference.context.requirement.as_str(),
-                conditional: evidence.reference.context.conditional,
+            .map(|evidence| match &evidence.reference {
+                crate::DependencyReference::Import(reference) => HtmlEvidence {
+                    source_path: crate::report::json_path(&evidence.source_path),
+                    import_name: reference
+                        .module
+                        .as_deref()
+                        .or(reference.imported_name.as_deref())
+                        .unwrap_or("import")
+                        .to_owned(),
+                    line: reference.span.start.line,
+                    column: reference.span.start.column,
+                    scope: reference.context.scope.as_str(),
+                    usage: reference.context.usage.as_str(),
+                    requirement: reference.context.requirement.as_str(),
+                    conditional: reference.context.conditional,
+                },
+                crate::DependencyReference::Include(reference) => HtmlEvidence {
+                    source_path: crate::report::json_path(&evidence.source_path),
+                    import_name: reference.target.clone(),
+                    line: reference.span.start.line,
+                    column: reference.span.start.column,
+                    scope: "file",
+                    usage: "include",
+                    requirement: "required",
+                    conditional: reference.conditional,
+                },
             })
             .collect(),
     }
@@ -695,7 +1155,7 @@ mod tests {
         let html = render_dependency_html(&view).expect("HTML");
 
         assert!(html.starts_with("<!doctype html>"));
-        assert!(html.contains("Codegraide Dependency Explorer"));
+        assert!(html.contains("Dependency Explorer"));
         assert!(html.contains("\"short_name\":\"service\""));
         assert!(html.contains("\"name\":\"shop.deeply_nested.service\""));
         assert!(html.contains("\"qualified_name\":\"shop.deeply_nested\""));
@@ -717,7 +1177,7 @@ mod tests {
 
         let html = render_dependency_html(&view).expect("HTML");
 
-        assert_eq!(html.matches("</script>").count(), 2);
+        assert_eq!(html.matches("</script>").count(), 3);
         assert!(!html.contains("bad</script>name"));
         assert!(html.contains("bad\\u003c/script\\u003ename"));
     }

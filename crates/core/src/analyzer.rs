@@ -62,6 +62,37 @@ pub struct QueryDescriptor {
     pub version: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MeasurementConcept {
+    DeclarationPhysicalLines,
+    BodyPhysicalLines,
+    DeclaredParameterCount,
+    CallerParameterCount,
+    MaxControlFlowNesting,
+    CyclomaticComplexity,
+}
+
+impl MeasurementConcept {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DeclarationPhysicalLines => "declaration-physical-lines",
+            Self::BodyPhysicalLines => "body-physical-lines",
+            Self::DeclaredParameterCount => "declared-parameter-count",
+            Self::CallerParameterCount => "caller-parameter-count",
+            Self::MaxControlFlowNesting => "max-control-flow-nesting",
+            Self::CyclomaticComplexity => "cyclomatic-complexity",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct MeasurementDescriptor {
+    pub concept: MeasurementConcept,
+    pub id: String,
+    pub definition_version: String,
+    pub unit: String,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AnalyzerDescriptor {
     pub id: String,
@@ -71,6 +102,7 @@ pub struct AnalyzerDescriptor {
     pub capabilities: BTreeSet<AnalyzerCapability>,
     pub grammar: Option<GrammarDescriptor>,
     pub queries: Vec<QueryDescriptor>,
+    pub measurements: Vec<MeasurementDescriptor>,
     pub limitations: Vec<String>,
 }
 
@@ -125,7 +157,9 @@ impl SymbolId {
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SymbolKind {
     Module,
+    Namespace,
     Class,
+    Struct,
     Function,
     Method,
     Lambda,
@@ -135,7 +169,9 @@ impl SymbolKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Module => "module",
+            Self::Namespace => "namespace",
             Self::Class => "class",
+            Self::Struct => "struct",
             Self::Function => "function",
             Self::Method => "method",
             Self::Lambda => "lambda",
@@ -163,6 +199,77 @@ pub enum SymbolModifier {
     Async,
     Static,
     ClassMethod,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CallableQualifier {
+    Const,
+    Volatile,
+    LvalueReference,
+    RvalueReference,
+    Static,
+    Noexcept,
+}
+
+impl CallableQualifier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Const => "const",
+            Self::Volatile => "volatile",
+            Self::LvalueReference => "lvalue-reference",
+            Self::RvalueReference => "rvalue-reference",
+            Self::Static => "static",
+            Self::Noexcept => "noexcept",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CallableParameter {
+    pub name: Option<String>,
+    pub type_spelling: Option<String>,
+    pub has_default: bool,
+    pub variadic: bool,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CallableSignature {
+    pub display: String,
+    pub normalized_key: String,
+    pub return_type: Option<String>,
+    pub parameters: Vec<CallableParameter>,
+    pub qualifiers: BTreeSet<CallableQualifier>,
+    pub template_parameter_count: usize,
+    pub virtual_dispatch: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SymbolOccurrenceRole {
+    Declaration,
+    Definition,
+}
+
+impl SymbolOccurrenceRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Declaration => "declaration",
+            Self::Definition => "definition",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SymbolDeclaration {
+    pub parent_id: Option<SymbolId>,
+    pub kind: SymbolKind,
+    pub name: String,
+    pub qualified_name: String,
+    pub role: SymbolOccurrenceRole,
+    pub span: SourceSpan,
+    pub name_span: Option<SourceSpan>,
+    pub completeness: SymbolCompleteness,
+    pub callable_signature: Option<CallableSignature>,
 }
 
 impl SymbolModifier {
@@ -215,6 +322,7 @@ pub struct Decorator {
 pub enum NestingEventKind {
     Conditional,
     Loop,
+    Switch,
     ExceptionHandling,
     ContextManager,
     Match,
@@ -226,6 +334,7 @@ impl NestingEventKind {
         match self {
             Self::Conditional => "conditional",
             Self::Loop => "loop",
+            Self::Switch => "switch",
             Self::ExceptionHandling => "exception-handling",
             Self::ContextManager => "context-manager",
             Self::Match => "match",
@@ -246,6 +355,7 @@ pub enum DecisionEventKind {
     ComprehensionLoop,
     ComprehensionFilter,
     Assertion,
+    SwitchCase,
 }
 
 impl DecisionEventKind {
@@ -261,6 +371,7 @@ impl DecisionEventKind {
             Self::ComprehensionLoop => "comprehension-loop",
             Self::ComprehensionFilter => "comprehension-filter",
             Self::Assertion => "assertion",
+            Self::SwitchCase => "switch-case",
         }
     }
 }
@@ -330,12 +441,14 @@ pub struct SymbolDocumentation {
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum DependencyKind {
     Import,
+    Include,
 }
 
 impl DependencyKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Import => "import",
+            Self::Include => "include",
         }
     }
 }
@@ -424,8 +537,7 @@ impl ResolutionLevel {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct DependencyReference {
-    pub kind: DependencyKind,
+pub struct ImportReference {
     pub module: Option<String>,
     pub imported_name: Option<String>,
     pub alias: Option<String>,
@@ -437,6 +549,83 @@ pub struct DependencyReference {
     pub span: SourceSpan,
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum IncludeDelimiter {
+    Angle,
+    Quote,
+    Macro,
+}
+
+impl IncludeDelimiter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Angle => "angle",
+            Self::Quote => "quote",
+            Self::Macro => "macro",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct IncludeReference {
+    pub target: String,
+    pub delimiter: IncludeDelimiter,
+    pub conditional: bool,
+    pub resolution: ResolutionLevel,
+    pub enclosing_symbol: Option<SymbolId>,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum DependencyReference {
+    Import(ImportReference),
+    Include(IncludeReference),
+}
+
+impl DependencyReference {
+    pub fn kind(&self) -> DependencyKind {
+        match self {
+            Self::Import(_) => DependencyKind::Import,
+            Self::Include(_) => DependencyKind::Include,
+        }
+    }
+
+    pub fn as_import(&self) -> Option<&ImportReference> {
+        match self {
+            Self::Import(reference) => Some(reference),
+            Self::Include(_) => None,
+        }
+    }
+
+    pub fn as_include(&self) -> Option<&IncludeReference> {
+        match self {
+            Self::Include(reference) => Some(reference),
+            Self::Import(_) => None,
+        }
+    }
+
+    pub fn resolution(&self) -> ResolutionLevel {
+        match self {
+            Self::Import(reference) => reference.resolution,
+            Self::Include(reference) => reference.resolution,
+        }
+    }
+
+    pub fn enclosing_symbol(&self) -> Option<&SymbolId> {
+        match self {
+            Self::Import(reference) => reference.enclosing_symbol.as_ref(),
+            Self::Include(reference) => reference.enclosing_symbol.as_ref(),
+        }
+    }
+
+    pub fn span(&self) -> SourceSpan {
+        match self {
+            Self::Import(reference) => reference.span,
+            Self::Include(reference) => reference.span,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CallArgumentShape {
     pub positional: usize,
@@ -445,14 +634,143 @@ pub struct CallArgumentShape {
     pub has_star_kwargs: bool,
 }
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CallForm {
+    Unknown,
+    Free,
+    Qualified,
+    Member,
+    PointerMember,
+    Functor,
+    Constructor,
+}
+
+impl CallForm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Free => "free",
+            Self::Qualified => "qualified",
+            Self::Member => "member",
+            Self::PointerMember => "pointer-member",
+            Self::Functor => "functor",
+            Self::Constructor => "constructor",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CallArgument {
+    pub expression: String,
+    pub type_hint: Option<String>,
+    pub span: SourceSpan,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CallReference {
+    pub expression: String,
     pub callee: String,
     pub components: Vec<String>,
     pub enclosing_symbol: Option<SymbolId>,
     pub arguments: CallArgumentShape,
+    pub argument_details: Vec<CallArgument>,
+    pub form: CallForm,
+    pub receiver: Option<String>,
+    pub receiver_type_hint: Option<String>,
     pub span: SourceSpan,
     pub syntax_complete: bool,
+    pub preprocessing_uncertain: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum LanguageModuleKind {
+    Interface,
+    Implementation,
+    InterfacePartition,
+    ImplementationPartition,
+}
+
+impl LanguageModuleKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interface => "interface",
+            Self::Implementation => "implementation",
+            Self::InterfacePartition => "interface-partition",
+            Self::ImplementationPartition => "implementation-partition",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct LanguageModule {
+    pub name: String,
+    pub partition: Option<String>,
+    pub kind: LanguageModuleKind,
+    pub exported: bool,
+    pub span: SourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ModuleImportKind {
+    Named,
+    Partition,
+    HeaderAngle,
+    HeaderQuote,
+}
+
+impl ModuleImportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Named => "named",
+            Self::Partition => "partition",
+            Self::HeaderAngle => "header-angle",
+            Self::HeaderQuote => "header-quote",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ModuleImport {
+    pub target: String,
+    pub kind: ModuleImportKind,
+    pub exported: bool,
+    pub conditional: bool,
+    pub span: SourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ModuleExport {
+    pub target: String,
+    pub span: SourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum UsingReferenceKind {
+    Declaration,
+    Namespace,
+    Alias,
+}
+
+impl UsingReferenceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Declaration => "declaration",
+            Self::Namespace => "namespace",
+            Self::Alias => "alias",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UsingReference {
+    pub kind: UsingReferenceKind,
+    pub target: String,
+    pub alias: Option<String>,
+    pub span: SourceSpan,
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -470,6 +788,7 @@ pub struct Symbol {
     pub modifiers: BTreeSet<SymbolModifier>,
     pub parameters: Vec<Parameter>,
     pub decorators: Vec<Decorator>,
+    pub callable_signature: Option<CallableSignature>,
     pub documentation: Option<SymbolDocumentation>,
     pub nesting_events: Vec<NestingEvent>,
     pub decision_events: Vec<DecisionEvent>,
@@ -478,9 +797,15 @@ pub struct Symbol {
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct AnalysisFacts {
+    pub call_flows: std::collections::BTreeMap<SymbolId, crate::CallFlow>,
     pub symbols: Vec<Symbol>,
+    pub declarations: Vec<SymbolDeclaration>,
     pub dependencies: Vec<DependencyReference>,
     pub calls: Vec<CallReference>,
+    pub modules: Vec<LanguageModule>,
+    pub module_imports: Vec<ModuleImport>,
+    pub module_exports: Vec<ModuleExport>,
+    pub using_references: Vec<UsingReference>,
     pub explicit_exports: Option<ExplicitExports>,
 }
 
@@ -667,6 +992,7 @@ mod tests {
                 capabilities: [AnalyzerCapability::Parse].into_iter().collect(),
                 grammar: None,
                 queries: Vec::new(),
+                measurements: Vec::new(),
                 limitations: Vec::new(),
             },
         })

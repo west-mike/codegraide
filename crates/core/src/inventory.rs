@@ -326,13 +326,18 @@ fn should_ignore_directory(name: &OsStr) -> bool {
 }
 
 pub fn detect_language(path: &Path) -> Option<LanguageId> {
-    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    let raw_extension = path.extension()?.to_str()?;
+    if raw_extension == "C" {
+        return Some(LanguageId::new("cpp"));
+    }
+    let extension = raw_extension.to_ascii_lowercase();
 
     let language = match extension.as_str() {
         "py" => "python",
         "rs" => "rust",
         "c" => "c",
-        "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" => "cpp",
+        "cc" | "cpp" | "cxx" | "h" | "hh" | "hpp" | "hxx" | "inl" | "ipp" | "tpp" | "cppm"
+        | "ixx" | "mpp" | "ccm" | "cxxm" => "cpp",
         _ => return None,
     };
 
@@ -361,7 +366,13 @@ mod tests {
             ("script.py", "python"),
             ("library.RS", "rust"),
             ("native.c", "c"),
+            ("legacy.C", "cpp"),
+            ("shared.h", "cpp"),
+            ("legacy.H", "cpp"),
             ("header.HPP", "cpp"),
+            ("template.tpp", "cpp"),
+            ("facade.cppm", "cpp"),
+            ("partition.ixx", "cpp"),
         ];
 
         for (path, expected) in cases {

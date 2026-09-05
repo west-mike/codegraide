@@ -24,6 +24,14 @@ pub enum DependencyNode {
         distribution_display_name: String,
         version: Option<String>,
     },
+    SystemHeader {
+        language: LanguageId,
+        name: String,
+    },
+    ExternalHeader {
+        language: LanguageId,
+        name: String,
+    },
     Ambiguous {
         source_module: ModuleId,
         requested: String,
@@ -34,6 +42,12 @@ pub enum DependencyNode {
         requested: String,
         reason: UnresolvedDependencyReason,
     },
+    ContextDependent {
+        source_module: ModuleId,
+        requested: String,
+        candidates: Vec<DependencyTarget>,
+        unresolved_reasons: Vec<UnresolvedDependencyReason>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -41,8 +55,11 @@ pub enum DependencyNodeKind {
     LocalModule,
     StandardLibrary,
     InstalledDistribution,
+    SystemHeader,
+    ExternalHeader,
     Ambiguous,
     Unresolved,
+    ContextDependent,
 }
 
 impl DependencyNodeKind {
@@ -51,8 +68,11 @@ impl DependencyNodeKind {
             Self::LocalModule => "local-module",
             Self::StandardLibrary => "standard-library",
             Self::InstalledDistribution => "installed-distribution",
+            Self::SystemHeader => "system-header",
+            Self::ExternalHeader => "external-header",
             Self::Ambiguous => "ambiguous",
             Self::Unresolved => "unresolved",
+            Self::ContextDependent => "context-dependent",
         }
     }
 }
@@ -63,8 +83,11 @@ impl DependencyNode {
             Self::LocalModule(_) => DependencyNodeKind::LocalModule,
             Self::StandardLibrary(_) => DependencyNodeKind::StandardLibrary,
             Self::InstalledDistribution { .. } => DependencyNodeKind::InstalledDistribution,
+            Self::SystemHeader { .. } => DependencyNodeKind::SystemHeader,
+            Self::ExternalHeader { .. } => DependencyNodeKind::ExternalHeader,
             Self::Ambiguous { .. } => DependencyNodeKind::Ambiguous,
             Self::Unresolved { .. } => DependencyNodeKind::Unresolved,
+            Self::ContextDependent { .. } => DependencyNodeKind::ContextDependent,
         }
     }
 }
@@ -72,16 +95,20 @@ impl DependencyNode {
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum DependencyRelationKind {
     Exact,
+    Inferred,
     Ambiguous,
     Unresolved,
+    ContextDependent,
 }
 
 impl DependencyRelationKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "exact",
+            Self::Inferred => "inferred",
             Self::Ambiguous => "ambiguous",
             Self::Unresolved => "unresolved",
+            Self::ContextDependent => "context-dependent",
         }
     }
 }
@@ -117,8 +144,10 @@ pub struct DependencyScc {
 pub struct DependencyGraphCoverage {
     pub total_references: usize,
     pub exact_references: usize,
+    pub inferred_references: usize,
     pub ambiguous_references: usize,
     pub unresolved_references: usize,
+    pub context_dependent_references: usize,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -284,6 +313,12 @@ pub fn analyze_dependency_graph(
                 coverage.exact_references += 1;
                 (target_node(target), DependencyRelationKind::Exact)
             }
+            DependencyResolutionOutcome::Inferred { target, .. } => {
+                validate_target_paths(target)?;
+                validate_exact_local_target(target, &catalog)?;
+                coverage.inferred_references += 1;
+                (target_node(target), DependencyRelationKind::Inferred)
+            }
             DependencyResolutionOutcome::Ambiguous {
                 requested,
                 candidates,
@@ -316,6 +351,27 @@ pub fn analyze_dependency_graph(
                         reason: *reason,
                     },
                     DependencyRelationKind::Unresolved,
+                )
+            }
+            DependencyResolutionOutcome::ContextDependent {
+                requested,
+                candidates,
+                unresolved_reasons,
+            } => {
+                coverage.context_dependent_references += 1;
+                (
+                    DependencyNode::ContextDependent {
+                        source_module: resolution.source_module.clone(),
+                        requested: requested.clone(),
+                        candidates: sorted_targets(candidates),
+                        unresolved_reasons: {
+                            let mut reasons = unresolved_reasons.clone();
+                            reasons.sort();
+                            reasons.dedup();
+                            reasons
+                        },
+                    },
+                    DependencyRelationKind::ContextDependent,
                 )
             }
         };
@@ -449,6 +505,14 @@ fn target_node(target: &DependencyTarget) -> DependencyNode {
             distribution_display_name: distribution_display_name.clone(),
             version: version.clone(),
         },
+        DependencyTarget::SystemHeader { language, name } => DependencyNode::SystemHeader {
+            language: language.clone(),
+            name: name.clone(),
+        },
+        DependencyTarget::ExternalHeader { language, name } => DependencyNode::ExternalHeader {
+            language: language.clone(),
+            name: name.clone(),
+        },
     }
 }
 
@@ -528,10 +592,10 @@ fn calculate_sccs(
 fn evidence_key(evidence: &GraphEvidence) -> (&PathBuf, usize, usize, usize, usize) {
     (
         &evidence.source_path,
-        evidence.reference.span.start_byte,
-        evidence.reference.span.end_byte,
-        evidence.reference.span.start.line,
-        evidence.reference.span.start.column,
+        evidence.reference.span().start_byte,
+        evidence.reference.span().end_byte,
+        evidence.reference.span().start.line,
+        evidence.reference.span().start.column,
     )
 }
 
@@ -542,7 +606,7 @@ fn module_name(module: &ModuleId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::{DependencyKind, ResolutionLevel, SourcePosition, SourceSpan};
+    use crate::analyzer::{ResolutionLevel, SourcePosition, SourceSpan};
 
     fn module(name: &str) -> ModuleId {
         ModuleId::new(LanguageId::new("python"), name)
@@ -553,8 +617,7 @@ mod tests {
     }
 
     fn reference(name: &str, start_byte: usize) -> DependencyReference {
-        DependencyReference {
-            kind: DependencyKind::Import,
+        DependencyReference::Import(crate::ImportReference {
             module: Some(name.to_owned()),
             imported_name: None,
             alias: None,
@@ -575,7 +638,7 @@ mod tests {
                     column: name.len(),
                 },
             },
-        }
+        })
     }
 
     fn exact(

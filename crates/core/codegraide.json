@@ -9,12 +9,20 @@
           "cc",
           "cpp",
           "cxx",
+          "cppm",
+          "ixx",
+          "mpp",
+          "ccm",
+          "cxxm",
           "h",
           "hh",
           "hpp",
           "hxx",
+          "inl",
+          "ipp",
           "py",
-          "rs"
+          "rs",
+          "tpp"
         ]
       },
       "documentation": {

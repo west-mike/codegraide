@@ -5,12 +5,12 @@ use std::path::Path;
 use codegraide_core::{
     AnalysisDiagnostic, AnalysisFacts, AnalysisInput, AnalysisLevel, AnalyzerCapability,
     AnalyzerDescriptor, CallArgumentShape, CallReference, DecisionEvent, DecisionEventKind,
-    Decorator, DependencyKind, DependencyReference, DiagnosticSeverity, DocumentationStatus,
-    FileAnalysis, FileAnalysisStatus, GrammarDescriptor, ImportContext, ImportRequirement,
-    ImportScope, ImportUsage, LanguageAnalyzer, LanguageId, Measurement, MeasurementStatus,
-    NestingEvent, NestingEventKind, PYTHON_CYCLOMATIC_COMPLEXITY, Parameter, ParameterKind,
-    QueryDescriptor, ResolutionLevel, SourcePosition, SourceSpan, Symbol, SymbolCompleteness,
-    SymbolDocumentation, SymbolId, SymbolKind, SymbolModifier,
+    Decorator, DependencyReference, DiagnosticSeverity, DocumentationStatus, FileAnalysis,
+    FileAnalysisStatus, GrammarDescriptor, ImportContext, ImportReference, ImportRequirement,
+    ImportScope, ImportUsage, LanguageAnalyzer, LanguageId, Measurement, MeasurementConcept,
+    MeasurementDescriptor, MeasurementStatus, NestingEvent, NestingEventKind, Parameter,
+    ParameterKind, QueryDescriptor, ResolutionLevel, SourcePosition, SourceSpan, Symbol,
+    SymbolCompleteness, SymbolDocumentation, SymbolId, SymbolKind, SymbolModifier,
 };
 use tree_sitter::{Language, Node, Parser, Query};
 
@@ -20,12 +20,28 @@ mod resolution;
 
 pub use call_resolution::{PythonCallResolution, resolve_python_calls};
 pub use resolution::{
-    PythonDependencyResolution, PythonEnvironmentSelection, PythonEnvironmentSummary,
+    PYTHON_IMPORT_RESOLUTION_DEFINITION_VERSION, PythonDependencyResolution,
+    PythonDependencyResolver, PythonEnvironmentSelection, PythonEnvironmentSummary,
     PythonResolutionError, PythonResolutionOptions, resolve_python_dependencies,
 };
 
 const ANALYZER_VERSION: &str = "0.3.0";
 const GRAMMAR_VERSION: &str = "0.25.0";
+pub const PYTHON_CYCLOMATIC_COMPLEXITY: &str = "python-cyclomatic-complexity";
+pub const PYTHON_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION: &str = "python-cyclomatic-complexity-v1";
+
+fn measurement_descriptor(
+    concept: MeasurementConcept,
+    id: &str,
+    unit: &str,
+) -> MeasurementDescriptor {
+    MeasurementDescriptor {
+        concept,
+        id: id.to_owned(),
+        definition_version: format!("{id}-v1"),
+        unit: unit.to_owned(),
+    }
+}
 
 pub struct PythonAnalyzer {
     descriptor: AnalyzerDescriptor,
@@ -160,6 +176,38 @@ impl PythonAnalyzer {
                     version: GRAMMAR_VERSION.to_owned(),
                 }),
                 queries,
+                measurements: vec![
+                    measurement_descriptor(
+                        MeasurementConcept::DeclarationPhysicalLines,
+                        "function-declaration-physical-lines",
+                        "lines",
+                    ),
+                    measurement_descriptor(
+                        MeasurementConcept::BodyPhysicalLines,
+                        "function-body-physical-lines",
+                        "lines",
+                    ),
+                    measurement_descriptor(
+                        MeasurementConcept::DeclaredParameterCount,
+                        "declared-parameter-count",
+                        "parameters",
+                    ),
+                    measurement_descriptor(
+                        MeasurementConcept::CallerParameterCount,
+                        "caller-parameter-count",
+                        "parameters",
+                    ),
+                    measurement_descriptor(
+                        MeasurementConcept::MaxControlFlowNesting,
+                        "python-max-control-flow-nesting",
+                        "levels",
+                    ),
+                    measurement_descriptor(
+                        MeasurementConcept::CyclomaticComplexity,
+                        PYTHON_CYCLOMATIC_COMPLEXITY,
+                        "score",
+                    ),
+                ],
                 limitations,
             },
             parser,
@@ -218,9 +266,15 @@ impl LanguageAnalyzer for PythonAnalyzer {
             },
             diagnostics,
             facts: AnalysisFacts {
+                call_flows: Default::default(),
                 symbols: extraction.symbols,
+                declarations: Vec::new(),
                 dependencies: extraction.dependencies,
                 calls: extraction.calls,
+                modules: Vec::new(),
+                module_imports: Vec::new(),
+                module_exports: Vec::new(),
+                using_references: Vec::new(),
                 explicit_exports: Some(explicit_exports),
             },
         }
@@ -285,6 +339,7 @@ impl<'a> Extraction<'a> {
             modifiers: BTreeSet::new(),
             parameters: Vec::new(),
             decorators: Vec::new(),
+            callable_signature: None,
             documentation,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
@@ -484,6 +539,7 @@ impl<'a> Extraction<'a> {
             modifiers,
             parameters,
             decorators,
+            callable_signature: None,
             documentation,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
@@ -547,6 +603,7 @@ impl<'a> Extraction<'a> {
             modifiers: BTreeSet::new(),
             parameters,
             decorators: Vec::new(),
+            callable_signature: None,
             documentation: None,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
@@ -704,18 +761,18 @@ impl<'a> Extraction<'a> {
         enclosing_symbol: Option<SymbolId>,
     ) {
         let context = self.import_context(node, parent_id.as_ref(), enclosing_symbol.as_ref());
-        self.dependencies.push(DependencyReference {
-            kind: DependencyKind::Import,
-            module,
-            imported_name,
-            alias,
-            relative_level,
-            wildcard,
-            resolution: ResolutionLevel::Syntactic,
-            enclosing_symbol,
-            context,
-            span: source_span(node),
-        });
+        self.dependencies
+            .push(DependencyReference::Import(ImportReference {
+                module,
+                imported_name,
+                alias,
+                relative_level,
+                wildcard,
+                resolution: ResolutionLevel::Syntactic,
+                enclosing_symbol,
+                context,
+                span: source_span(node),
+            }));
     }
 
     fn import_context(
@@ -784,12 +841,18 @@ impl<'a> Extraction<'a> {
         }
         shape.keywords.sort();
         self.calls.push(CallReference {
+            expression: node_text(node, self.source),
             callee: node_text(function, self.source),
             components: call_components(function, self.source).unwrap_or_default(),
             enclosing_symbol,
             arguments: shape,
+            argument_details: Vec::new(),
+            form: codegraide_core::CallForm::Unknown,
+            receiver: None,
+            receiver_type_hint: None,
             span: source_span(node),
             syntax_complete: !node.has_error(),
+            preprocessing_uncertain: false,
         });
     }
 
@@ -937,10 +1000,10 @@ impl<'a> Extraction<'a> {
             });
         }
         self.dependencies.sort_by(|left, right| {
-            left.span
+            left.span()
                 .start_byte
-                .cmp(&right.span.start_byte)
-                .then_with(|| left.span.end_byte.cmp(&right.span.end_byte))
+                .cmp(&right.span().start_byte)
+                .then_with(|| left.span().end_byte.cmp(&right.span().end_byte))
         });
         self.calls.sort_by(|left, right| {
             left.span
@@ -1647,6 +1710,7 @@ mod tests {
                 .facts
                 .dependencies
                 .iter()
+                .filter_map(DependencyReference::as_import)
                 .any(|dependency| dependency.module.as_deref() == Some("__future__"))
         );
         assert!(function.nesting_events.len() >= 2);
@@ -1877,6 +1941,7 @@ for item in items:
                 .facts
                 .dependencies
                 .iter()
+                .filter_map(DependencyReference::as_import)
                 .find(|dependency| dependency.module.as_deref() == Some(name))
                 .unwrap_or_else(|| panic!("missing dependency {name}"))
         };

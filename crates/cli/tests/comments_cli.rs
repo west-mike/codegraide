@@ -56,7 +56,7 @@ fn analyze_reports_documentation_by_default_and_can_disable_it() {
     let enabled = run(&["analyze", root, "--format", "json"]);
     let report: Value = serde_json::from_slice(&enabled.stdout).expect("analysis JSON");
     assert!(enabled.status.success());
-    assert_eq!(report["report_schema_version"], "0.6.0");
+    assert_eq!(report["report_schema_version"], "0.8.0");
     assert_eq!(report["documentation_coverage"]["status"], "complete");
     assert_eq!(report["documentation_coverage"]["counts"]["eligible"], 7);
     assert_eq!(report["documentation_coverage"]["counts"]["documented"], 4);
@@ -99,7 +99,9 @@ fn comments_reports_top_level_coverage_in_terminal_and_json() {
     let terminal = run(&["comments", root, "--top", "1"]);
     let stdout = String::from_utf8(terminal.stdout).expect("terminal UTF-8");
     assert!(terminal.status.success());
-    assert!(stdout.contains("Coverage: documented=4/7 missing=3 unavailable=0 (57.14%)"));
+    assert!(
+        stdout.contains("Coverage: documented: 4/7, missing: 3, unavailable: 0, coverage: 57.14%.")
+    );
     assert!(stdout.contains("... 2 more"));
 
     let json = run(&["comments", root, "--format", "json"]);
@@ -171,7 +173,7 @@ fn documentation_threshold_is_exact_review_only_and_cli_overrides_policy() {
     let gate_report: Value =
         serde_json::from_slice(&analyze_gate.stdout).expect("analyze gate JSON");
     assert_eq!(analyze_gate.status.code(), Some(2));
-    assert_eq!(gate_report["report_schema_version"], "0.2.0");
+    assert_eq!(gate_report["report_schema_version"], "0.3.0");
     assert_eq!(
         gate_report["top_findings"][0]["rule_id"],
         "python-documentation-coverage-below-threshold"
@@ -332,5 +334,30 @@ fn partial_documentation_evidence_cannot_pass_a_threshold() {
         String::from_utf8(invalid.stderr)
             .expect("stderr UTF-8")
             .contains("between 1 and 100")
+    );
+}
+
+#[test]
+fn cpp_documentation_coverage_is_explicitly_not_applicable() {
+    let repository = tempdir().expect("temporary repository");
+    fs::write(
+        repository.path().join("native.cpp"),
+        "int native_entry() { return 1; }\n",
+    )
+    .expect("C++ fixture");
+
+    let output = run(&[
+        "comments",
+        repository.path().to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("comments JSON");
+    assert!(output.status.success());
+    assert_eq!(report["documentation_coverage"]["status"], "not-applicable");
+    assert_eq!(report["documentation_coverage"]["applicable_files"], 0);
+    assert_eq!(
+        report["documentation_coverage"]["unsupported_selected_files"],
+        1
     );
 }

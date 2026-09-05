@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use codegraide_core::{
     CallResolutionOutcome, DependencyResolutionOutcome, DependencyTarget, ModuleId,
-    ProjectCallResolution, ProjectSymbol, ProjectSymbolId, RepositoryAnalysis, SymbolKind,
+    ProjectCallResolution, ProjectSymbol, ProjectSymbolId, ProjectSymbolLocation,
+    RepositoryAnalysis, SymbolKind, SymbolLinkStatus,
 };
 
 use crate::PythonDependencyResolution;
@@ -53,6 +54,7 @@ pub fn resolve_python_calls(
                     .or_default();
                 *ordinal += 1;
                 let project = ProjectSymbol {
+                    call_flow: None,
                     id: ProjectSymbolId {
                         language: module.language().clone(),
                         module: module.clone(),
@@ -62,6 +64,16 @@ pub fn resolve_python_calls(
                     },
                     path: file.path.clone(),
                     span: symbol.span,
+                    signature: None,
+                    declarations: Vec::new(),
+                    definition: Some(ProjectSymbolLocation {
+                        path: file.path.clone(),
+                        span: symbol.span,
+                    }),
+                    link_status: SymbolLinkStatus::DefinitionOnly,
+                    language_module: None,
+                    architecture_groups: Vec::new(),
+                    primary_architecture_group: None,
                 };
                 by_syntax_id.insert(
                     (file.path.clone(), symbol.id.as_str().to_owned()),
@@ -146,7 +158,10 @@ fn import_bindings(
 ) -> BTreeMap<PathBuf, BTreeMap<String, ImportBinding>> {
     let mut result = BTreeMap::<PathBuf, BTreeMap<String, ImportBinding>>::new();
     for resolution in &dependencies.resolutions {
-        let reference = &resolution.reference;
+        let reference = resolution
+            .reference
+            .as_import()
+            .expect("Python dependency resolution contains imports");
         let key = reference
             .alias
             .clone()

@@ -34,7 +34,9 @@ fn prints_human_readable_summary_and_selected_category_paths() {
     assert!(stdout.contains("Inventoried files: 2"));
     assert!(stdout.contains("Source files: 1"));
     assert!(stdout.contains("Source lines: 1"));
-    assert!(stdout.contains("documentation    1"));
+    assert!(stdout.contains("documentation: 1"));
+    assert!(stdout.contains("rust: 1"));
+    assert!(stdout.contains("rust: files: 1, source: 1, comment: 0, blank: 0"));
     assert!(stdout.contains("Selected files:"));
     assert!(stdout.contains("src/main.rs"));
     assert!(stdout.contains("contents of ignored directories were not enumerated"));

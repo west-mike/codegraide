@@ -43,6 +43,7 @@ fn python_stub() -> AnalyzerRegistry {
                 capabilities: [AnalyzerCapability::Parse].into_iter().collect(),
                 grammar: None,
                 queries: Vec::new(),
+                measurements: Vec::new(),
                 limitations: Vec::new(),
             },
         }))
@@ -121,8 +122,7 @@ fn a_directory_without_supported_files_is_successful_with_a_diagnostic() {
     )
     .expect("unsupported languages should not fail the repository run");
 
-    assert_eq!(analysis.analyzers.len(), 1);
-    assert_eq!(analysis.analyzers[0].counts.analyzed, 0);
+    assert!(analysis.analyzers.is_empty());
     assert_eq!(analysis.diagnostics[0].code, "no-supported-files");
     assert_eq!(
         analysis.selection.root,

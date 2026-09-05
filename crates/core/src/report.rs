@@ -7,13 +7,13 @@ use crate::lines::RepositoryLineCounts;
 use crate::review::{ReviewEvaluation, review_status_code};
 
 pub const INVENTORY_REPORT_SCHEMA_VERSION: &str = "0.2.0";
-pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.6.0";
+pub const SYNTAX_REPORT_SCHEMA_VERSION: &str = "0.8.0";
 pub const INVENTORY_REPORT_DEFINITION_VERSION: &str = "inventory-report-v1";
 pub const PHYSICAL_LINE_DEFINITION_VERSION: &str = "physical-lines-v1";
-pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v4";
-pub const REVIEW_REPORT_SCHEMA_VERSION: &str = "0.2.0";
-pub const GATE_REPORT_SCHEMA_VERSION: &str = "0.2.0";
-pub const REVIEW_ANALYSIS_DEFINITION_VERSION: &str = "review-analysis-v2";
+pub const SYNTAX_ANALYSIS_DEFINITION_VERSION: &str = "syntax-analysis-v6";
+pub const REVIEW_REPORT_SCHEMA_VERSION: &str = "0.3.0";
+pub const GATE_REPORT_SCHEMA_VERSION: &str = "0.3.0";
+pub const REVIEW_ANALYSIS_DEFINITION_VERSION: &str = "review-analysis-v3";
 pub const DOCUMENTATION_REPORT_SCHEMA_VERSION: &str = "0.1.0";
 
 #[cfg(unix)]
@@ -235,6 +235,9 @@ pub struct JsonGateFinding {
     pub rule_id: String,
     pub path: Option<String>,
     pub qualified_name: Option<String>,
+    pub language: Option<String>,
+    pub metric_id: Option<String>,
+    pub metric_definition_version: Option<String>,
     pub observed_value: Option<u64>,
     pub unit: Option<&'static str>,
     pub risk: &'static str,
@@ -273,6 +276,7 @@ pub struct JsonAnalyzerRun {
     pub capabilities: Vec<&'static str>,
     pub grammar: Option<JsonGrammar>,
     pub queries: Vec<JsonQuery>,
+    pub measurement_definitions: Vec<JsonMeasurementDefinition>,
     pub limitations: Vec<String>,
     pub counts: JsonAnalysisCounts,
     pub files: Vec<JsonFileAnalysis>,
@@ -291,6 +295,14 @@ pub struct JsonQuery {
 }
 
 #[derive(Debug, Serialize)]
+pub struct JsonMeasurementDefinition {
+    pub concept: &'static str,
+    pub id: String,
+    pub definition_version: String,
+    pub unit: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct JsonAnalysisCounts {
     pub analyzed: usize,
     pub successful: usize,
@@ -304,8 +316,13 @@ pub struct JsonFileAnalysis {
     pub status: &'static str,
     pub diagnostics: Vec<JsonAnalysisDiagnostic>,
     pub symbols: Vec<JsonSymbol>,
+    pub declarations: Vec<JsonSymbolDeclaration>,
     pub dependencies: Vec<JsonDependencyReference>,
     pub calls: Vec<JsonCallReference>,
+    pub cpp_modules: Vec<JsonLanguageModule>,
+    pub module_imports: Vec<JsonModuleImport>,
+    pub module_exports: Vec<JsonModuleExport>,
+    pub using_references: Vec<JsonUsingReference>,
     pub explicit_exports: Option<JsonExplicitExports>,
 }
 
@@ -338,10 +355,80 @@ pub struct JsonSymbol {
     pub modifiers: Vec<&'static str>,
     pub parameters: Vec<JsonParameter>,
     pub decorators: Vec<JsonDecorator>,
+    pub callable_signature: Option<JsonCallableSignature>,
     pub documentation: Option<JsonSymbolDocumentation>,
     pub nesting_events: Vec<JsonNestingEvent>,
     pub decision_events: Vec<JsonDecisionEvent>,
     pub measurements: Vec<JsonMeasurement>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonSymbolDeclaration {
+    pub parent_id: Option<String>,
+    pub kind: &'static str,
+    pub name: String,
+    pub qualified_name: String,
+    pub role: &'static str,
+    pub span: JsonSourceSpan,
+    pub name_span: Option<JsonSourceSpan>,
+    pub completeness: &'static str,
+    pub callable_signature: Option<JsonCallableSignature>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonCallableSignature {
+    pub display: String,
+    pub normalized_key: String,
+    pub return_type: Option<String>,
+    pub parameters: Vec<JsonCallableParameter>,
+    pub qualifiers: Vec<&'static str>,
+    pub template_parameter_count: usize,
+    pub virtual_dispatch: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonCallableParameter {
+    pub name: Option<String>,
+    pub type_spelling: Option<String>,
+    pub has_default: bool,
+    pub variadic: bool,
+    pub span: JsonSourceSpan,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonLanguageModule {
+    pub name: String,
+    pub partition: Option<String>,
+    pub kind: &'static str,
+    pub exported: bool,
+    pub span: JsonSourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonModuleImport {
+    pub target: String,
+    pub kind: &'static str,
+    pub exported: bool,
+    pub conditional: bool,
+    pub span: JsonSourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonModuleExport {
+    pub target: String,
+    pub span: JsonSourceSpan,
+    pub complete: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonUsingReference {
+    pub kind: &'static str,
+    pub target: String,
+    pub alias: Option<String>,
+    pub span: JsonSourceSpan,
+    pub complete: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -434,7 +521,14 @@ pub struct JsonMeasurement {
 }
 
 #[derive(Debug, Serialize)]
-pub struct JsonDependencyReference {
+#[serde(untagged)]
+pub enum JsonDependencyReference {
+    Import(JsonImportReference),
+    Include(JsonIncludeReference),
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonImportReference {
     pub kind: &'static str,
     pub module: Option<String>,
     pub imported_name: Option<String>,
@@ -451,7 +545,19 @@ pub struct JsonDependencyReference {
 }
 
 #[derive(Debug, Serialize)]
+pub struct JsonIncludeReference {
+    pub kind: &'static str,
+    pub target: String,
+    pub delimiter: &'static str,
+    pub conditional: bool,
+    pub resolution: &'static str,
+    pub enclosing_symbol: Option<String>,
+    pub span: JsonSourceSpan,
+}
+
+#[derive(Debug, Serialize)]
 pub struct JsonCallReference {
+    pub expression: String,
     pub callee: String,
     pub components: Vec<String>,
     pub enclosing_symbol: Option<String>,
@@ -459,7 +565,19 @@ pub struct JsonCallReference {
     pub keyword_arguments: Vec<String>,
     pub has_star_args: bool,
     pub has_star_kwargs: bool,
+    pub form: &'static str,
+    pub receiver: Option<String>,
+    pub receiver_type_hint: Option<String>,
+    pub arguments: Vec<JsonWrittenCallArgument>,
     pub syntax_complete: bool,
+    pub preprocessing_uncertain: bool,
+    pub span: JsonSourceSpan,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonWrittenCallArgument {
+    pub expression: String,
+    pub type_hint: Option<String>,
     pub span: JsonSourceSpan,
 }
 
@@ -526,6 +644,9 @@ pub struct JsonReviewRankingEntry {
     pub symbol_id: String,
     pub qualified_name: String,
     pub kind: &'static str,
+    pub language: String,
+    pub metric_id: String,
+    pub metric_definition_version: String,
     pub span: JsonSourceSpan,
     pub score: u64,
     pub risk: &'static str,
@@ -539,6 +660,9 @@ pub struct JsonReviewFinding {
     pub path: Option<String>,
     pub symbol_id: Option<String>,
     pub qualified_name: Option<String>,
+    pub language: Option<String>,
+    pub metric_id: Option<String>,
+    pub metric_definition_version: Option<String>,
     pub span: Option<JsonSourceSpan>,
     pub observed_value: Option<u64>,
     pub threshold: Option<u64>,
@@ -597,6 +721,17 @@ impl AnalysisJsonReport {
                         version: query.version.clone(),
                     })
                     .collect(),
+                measurement_definitions: run
+                    .descriptor
+                    .measurements
+                    .iter()
+                    .map(|measurement| JsonMeasurementDefinition {
+                        concept: measurement.concept.as_str(),
+                        id: measurement.id.clone(),
+                        definition_version: measurement.definition_version.clone(),
+                        unit: measurement.unit.clone(),
+                    })
+                    .collect(),
                 limitations: run.descriptor.limitations.clone(),
                 counts: JsonAnalysisCounts {
                     analyzed: run.counts.analyzed,
@@ -621,6 +756,12 @@ impl AnalysisJsonReport {
                             .iter()
                             .map(JsonSymbol::from_symbol)
                             .collect(),
+                        declarations: file
+                            .facts
+                            .declarations
+                            .iter()
+                            .map(JsonSymbolDeclaration::from_declaration)
+                            .collect(),
                         dependencies: file
                             .facts
                             .dependencies
@@ -632,6 +773,30 @@ impl AnalysisJsonReport {
                             .calls
                             .iter()
                             .map(JsonCallReference::from_call)
+                            .collect(),
+                        cpp_modules: file
+                            .facts
+                            .modules
+                            .iter()
+                            .map(JsonLanguageModule::from_module)
+                            .collect(),
+                        module_imports: file
+                            .facts
+                            .module_imports
+                            .iter()
+                            .map(JsonModuleImport::from_import)
+                            .collect(),
+                        module_exports: file
+                            .facts
+                            .module_exports
+                            .iter()
+                            .map(JsonModuleExport::from_export)
+                            .collect(),
+                        using_references: file
+                            .facts
+                            .using_references
+                            .iter()
+                            .map(JsonUsingReference::from_reference)
                             .collect(),
                         explicit_exports: file
                             .facts
@@ -801,6 +966,9 @@ impl GateJsonReport {
                 rule_id: finding.rule_id.clone(),
                 path: finding.path.as_deref().map(json_path),
                 qualified_name: finding.qualified_name.clone(),
+                language: finding.language.clone(),
+                metric_id: finding.metric_id.clone(),
+                metric_definition_version: finding.metric_definition_version.clone(),
                 observed_value: finding.observed_value,
                 unit: finding.unit,
                 risk: finding.risk.as_str(),
@@ -872,6 +1040,10 @@ impl JsonSymbol {
                 .iter()
                 .map(JsonDecorator::from_decorator)
                 .collect(),
+            callable_signature: symbol
+                .callable_signature
+                .as_ref()
+                .map(JsonCallableSignature::from_signature),
             documentation: symbol.documentation.as_ref().map(|documentation| {
                 JsonSymbolDocumentation {
                     status: documentation.status.as_str(),
@@ -1056,6 +1228,9 @@ impl JsonReview {
                     symbol_id: entry.symbol_id.clone(),
                     qualified_name: entry.qualified_name.clone(),
                     kind: entry.kind.as_str(),
+                    language: entry.language.clone(),
+                    metric_id: entry.metric_id.clone(),
+                    metric_definition_version: entry.metric_definition_version.clone(),
                     span: JsonSourceSpan::from_span(entry.span),
                     score: entry.score,
                     risk: entry.risk.as_str(),
@@ -1084,6 +1259,9 @@ impl JsonReviewFinding {
             path: finding.path.as_deref().map(json_path),
             symbol_id: finding.symbol_id.clone(),
             qualified_name: finding.qualified_name.clone(),
+            language: finding.language.clone(),
+            metric_id: finding.metric_id.clone(),
+            metric_definition_version: finding.metric_definition_version.clone(),
             span: finding.span.map(JsonSourceSpan::from_span),
             observed_value: finding.observed_value,
             threshold: finding.threshold,
@@ -1140,23 +1318,41 @@ impl JsonMeasurement {
 
 impl JsonDependencyReference {
     fn from_dependency(dependency: &crate::analyzer::DependencyReference) -> Self {
-        Self {
-            kind: dependency.kind.as_str(),
-            module: dependency.module.clone(),
-            imported_name: dependency.imported_name.clone(),
-            alias: dependency.alias.clone(),
-            relative_level: dependency.relative_level,
-            wildcard: dependency.wildcard,
-            resolution: dependency.resolution.as_str(),
-            enclosing_symbol: dependency
-                .enclosing_symbol
-                .as_ref()
-                .map(|id| id.as_str().to_owned()),
-            scope: dependency.context.scope.as_str(),
-            usage: dependency.context.usage.as_str(),
-            requirement: dependency.context.requirement.as_str(),
-            conditional: dependency.context.conditional,
-            span: JsonSourceSpan::from_span(dependency.span),
+        match dependency {
+            crate::analyzer::DependencyReference::Import(dependency) => {
+                Self::Import(JsonImportReference {
+                    kind: "import",
+                    module: dependency.module.clone(),
+                    imported_name: dependency.imported_name.clone(),
+                    alias: dependency.alias.clone(),
+                    relative_level: dependency.relative_level,
+                    wildcard: dependency.wildcard,
+                    resolution: dependency.resolution.as_str(),
+                    enclosing_symbol: dependency
+                        .enclosing_symbol
+                        .as_ref()
+                        .map(|id| id.as_str().to_owned()),
+                    scope: dependency.context.scope.as_str(),
+                    usage: dependency.context.usage.as_str(),
+                    requirement: dependency.context.requirement.as_str(),
+                    conditional: dependency.context.conditional,
+                    span: JsonSourceSpan::from_span(dependency.span),
+                })
+            }
+            crate::analyzer::DependencyReference::Include(dependency) => {
+                Self::Include(JsonIncludeReference {
+                    kind: "include",
+                    target: dependency.target.clone(),
+                    delimiter: dependency.delimiter.as_str(),
+                    conditional: dependency.conditional,
+                    resolution: dependency.resolution.as_str(),
+                    enclosing_symbol: dependency
+                        .enclosing_symbol
+                        .as_ref()
+                        .map(|id| id.as_str().to_owned()),
+                    span: JsonSourceSpan::from_span(dependency.span),
+                })
+            }
         }
     }
 }
@@ -1164,6 +1360,7 @@ impl JsonDependencyReference {
 impl JsonCallReference {
     fn from_call(call: &crate::analyzer::CallReference) -> Self {
         Self {
+            expression: call.expression.clone(),
             callee: call.callee.clone(),
             components: call.components.clone(),
             enclosing_symbol: call
@@ -1174,8 +1371,119 @@ impl JsonCallReference {
             keyword_arguments: call.arguments.keywords.clone(),
             has_star_args: call.arguments.has_star_args,
             has_star_kwargs: call.arguments.has_star_kwargs,
+            form: call.form.as_str(),
+            receiver: call.receiver.clone(),
+            receiver_type_hint: call.receiver_type_hint.clone(),
+            arguments: call
+                .argument_details
+                .iter()
+                .map(|argument| JsonWrittenCallArgument {
+                    expression: argument.expression.clone(),
+                    type_hint: argument.type_hint.clone(),
+                    span: JsonSourceSpan::from_span(argument.span),
+                })
+                .collect(),
             syntax_complete: call.syntax_complete,
+            preprocessing_uncertain: call.preprocessing_uncertain,
             span: JsonSourceSpan::from_span(call.span),
+        }
+    }
+}
+
+impl JsonSymbolDeclaration {
+    fn from_declaration(declaration: &crate::SymbolDeclaration) -> Self {
+        Self {
+            parent_id: declaration
+                .parent_id
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            kind: declaration.kind.as_str(),
+            name: declaration.name.clone(),
+            qualified_name: declaration.qualified_name.clone(),
+            role: declaration.role.as_str(),
+            span: JsonSourceSpan::from_span(declaration.span),
+            name_span: declaration.name_span.map(JsonSourceSpan::from_span),
+            completeness: declaration.completeness.as_str(),
+            callable_signature: declaration
+                .callable_signature
+                .as_ref()
+                .map(JsonCallableSignature::from_signature),
+        }
+    }
+}
+
+impl JsonCallableSignature {
+    fn from_signature(signature: &crate::CallableSignature) -> Self {
+        Self {
+            display: signature.display.clone(),
+            normalized_key: signature.normalized_key.clone(),
+            return_type: signature.return_type.clone(),
+            parameters: signature
+                .parameters
+                .iter()
+                .map(|parameter| JsonCallableParameter {
+                    name: parameter.name.clone(),
+                    type_spelling: parameter.type_spelling.clone(),
+                    has_default: parameter.has_default,
+                    variadic: parameter.variadic,
+                    span: JsonSourceSpan::from_span(parameter.span),
+                })
+                .collect(),
+            qualifiers: signature
+                .qualifiers
+                .iter()
+                .map(|qualifier| qualifier.as_str())
+                .collect(),
+            template_parameter_count: signature.template_parameter_count,
+            virtual_dispatch: signature.virtual_dispatch,
+        }
+    }
+}
+
+impl JsonLanguageModule {
+    fn from_module(module: &crate::LanguageModule) -> Self {
+        Self {
+            name: module.name.clone(),
+            partition: module.partition.clone(),
+            kind: module.kind.as_str(),
+            exported: module.exported,
+            span: JsonSourceSpan::from_span(module.span),
+            complete: module.complete,
+        }
+    }
+}
+
+impl JsonModuleImport {
+    fn from_import(import: &crate::ModuleImport) -> Self {
+        Self {
+            target: import.target.clone(),
+            kind: import.kind.as_str(),
+            exported: import.exported,
+            conditional: import.conditional,
+            span: JsonSourceSpan::from_span(import.span),
+            complete: import.complete,
+        }
+    }
+}
+
+impl JsonModuleExport {
+    fn from_export(export: &crate::ModuleExport) -> Self {
+        Self {
+            target: export.target.clone(),
+            span: JsonSourceSpan::from_span(export.span),
+            complete: export.complete,
+        }
+    }
+}
+
+impl JsonUsingReference {
+    fn from_reference(reference: &crate::UsingReference) -> Self {
+        Self {
+            kind: reference.kind.as_str(),
+            target: reference.target.clone(),
+            alias: reference.alias.clone(),
+            span: JsonSourceSpan::from_span(reference.span),
+            complete: reference.complete,
         }
     }
 }

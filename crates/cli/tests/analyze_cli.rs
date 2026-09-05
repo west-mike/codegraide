@@ -23,14 +23,24 @@ fn default_terminal_analysis_reports_summary_without_diagnostic_details() {
 
     assert!(output.status.success(), "{stderr}");
     assert!(stdout.contains("Analyzers:"));
-    assert!(stdout.contains("analyzed=2 successful=1 partial=1 failed=0"));
-    assert!(stdout.contains("diagnostics: bad.py (1)"));
-    assert!(
-        stdout.contains(
-            "explicit exports: complete=0 partial=0 unavailable=1 not-declared=1 names=0"
-        )
-    );
-    assert!(!stdout.contains("parser could not interpret"));
+    assert!(stdout.contains("Review status: Human review required."));
+    assert!(stdout.contains("Review coverage: Measured callables:"));
+    assert!(stdout.contains(", unavailable callables:"));
+    assert!(stdout.contains(", unsupported files: 0."));
+    assert!(stdout.contains("Documentation coverage: Partial."));
+    assert!(stdout.contains("Languages:"));
+    assert!(!stdout.contains("Inventory languages:"));
+    assert!(!stdout.contains("human-review-required"));
+    assert!(stdout.contains("analyzed: 2, successful: 1, partial: 1, failed: 0"));
+    assert!(stdout.contains("diagnostics: 1 total across 1 file"));
+    assert!(stdout.contains("error[parse-error]: 1 in 1 file"));
+    assert!(stdout.contains("files with the most diagnostics:"));
+    assert!(stdout.contains("bad.py: 1"));
+    assert!(stdout.contains("Full details: use --diagnostics [FILE]."));
+    assert!(stdout.contains(
+        "explicit exports: complete: 0, partial: 0, unavailable: 1, not declared: 1, names: 0"
+    ));
+    assert_eq!(stdout.matches("parser could not interpret").count(), 1);
     assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
 }
 
@@ -74,11 +84,11 @@ fn json_analysis_contains_provenance_spans_and_inventory_only_languages() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert_eq!(report["report_schema_version"], "0.6.0");
+    assert_eq!(report["report_schema_version"], "0.8.0");
     assert_eq!(report["analysis"]["kind"], "syntax-analysis");
     assert_eq!(
         report["analysis"]["definition_version"],
-        "syntax-analysis-v4"
+        "syntax-analysis-v6"
     );
     assert_eq!(report["inventory"]["inventory_only_languages"]["rust"], 1);
     assert_eq!(
@@ -155,7 +165,7 @@ fn include_ignored_selects_python_files_and_match_is_full_path() {
     ]);
     let with_stdout = String::from_utf8(with.stdout).expect("stdout should be UTF-8");
     assert!(with.status.success());
-    assert!(with_stdout.contains("analyzed=1 successful=1 partial=0 failed=0"));
+    assert!(with_stdout.contains("analyzed: 1, successful: 1, partial: 0, failed: 0"));
 }
 
 #[test]
@@ -219,7 +229,7 @@ fn json_review_reports_complexity_risk_and_gate_exit_codes() {
     let review_report: Value =
         serde_json::from_slice(&review.stdout).expect("review report should be JSON");
     assert!(review.status.success());
-    assert_eq!(review_report["report_schema_version"], "0.2.0");
+    assert_eq!(review_report["report_schema_version"], "0.3.0");
     assert_eq!(review_report["review"]["status"], "human-review-required");
     assert!(review_report["analyzers"].is_null());
     assert_eq!(review_report["ranking_count"], 2);
@@ -236,7 +246,7 @@ fn json_review_reports_complexity_risk_and_gate_exit_codes() {
     let gate_report: Value =
         serde_json::from_slice(&gate_report_output.stdout).expect("gate report should be JSON");
     assert_eq!(gate_report_output.status.code(), Some(2));
-    assert_eq!(gate_report["report_schema_version"], "0.2.0");
+    assert_eq!(gate_report["report_schema_version"], "0.3.0");
     assert_eq!(gate_report["status"], "human-review-required");
     assert_eq!(gate_report["exit_code"], 2);
     assert_eq!(gate_report["finding_count"], 1);
@@ -413,4 +423,182 @@ fn details_flag_prints_facts_for_only_the_requested_file() {
     assert!(stdout.contains("explicit exports [complete]"));
     assert!(stdout.contains("\"one\": 1:12-1:17"));
     assert!(!stdout.contains("two.py:"));
+}
+
+#[test]
+fn mixed_python_cpp_json_and_cpp_details_preserve_language_specific_facts() {
+    let repository = tempdir().expect("temporary repository should be created");
+    fs::write(
+        repository.path().join("main.py"),
+        "import os\ndef python_entry(value):\n    return value\n",
+    )
+    .expect("Python fixture");
+    fs::write(
+        repository.path().join("native.cpp"),
+        r#"#include <vector>
+namespace demo {
+struct Worker {
+    int run(int value) {
+        if (value && value > 1) {
+            return value;
+        }
+        return 0;
+    }
+};
+auto callback = [](int value) { return value ? value : 0; };
+}
+"#,
+    )
+    .expect("C++ fixture");
+    fs::write(
+        repository.path().join("shared.h"),
+        "inline int shared_header(int value) { return value + 1; }\n",
+    )
+    .expect("ambiguous lowercase header fixture");
+    fs::write(
+        repository.path().join("legacy.H"),
+        "inline int uppercase_header(int value) { return value - 1; }\n",
+    )
+    .expect("ambiguous uppercase header fixture");
+    fs::write(
+        repository.path().join("legacy.C"),
+        "int uppercase_source(int value) { return value; }\n",
+    )
+    .expect("ambiguous uppercase source fixture");
+    fs::write(
+        repository.path().join("classic.c"),
+        "int lowercase_c_source(int value) { return value; }\n",
+    )
+    .expect("lowercase C source fixture");
+    let root = repository.path().to_str().unwrap();
+
+    let output = run(&[
+        "analyze",
+        root,
+        "--no-documentation-coverage",
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("report should be JSON");
+    assert!(output.status.success());
+    assert_eq!(report["report_schema_version"], "0.8.0");
+    let analyzers = report["analyzers"].as_array().expect("analyzers array");
+    assert_eq!(analyzers.len(), 2);
+    let cpp = analyzers
+        .iter()
+        .find(|run| run["language"] == "cpp")
+        .expect("C++ analyzer run");
+    assert_eq!(cpp["id"], "cpp-tree-sitter");
+    assert_eq!(cpp["version"], "0.4.0");
+    assert_eq!(cpp["counts"]["analyzed"], 4);
+    assert!(report["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "ambiguous-c-cpp-extension-grammar"
+                && diagnostic["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("3 selected .C/.h/.H"))
+        })
+    }));
+    assert!(
+        cpp["limitations"]
+            .as_array()
+            .is_some_and(|limitations| limitations.iter().any(|limitation| limitation
+                .as_str()
+                .is_some_and(|text| text.contains(".C, .h, or .H"))))
+    );
+    assert!(
+        cpp["measurement_definitions"]
+            .as_array()
+            .is_some_and(|definitions| definitions.iter().any(|definition| {
+                definition["concept"] == "cyclomatic-complexity"
+                    && definition["id"] == "cpp-cyclomatic-complexity"
+                    && definition["definition_version"] == "cpp-cyclomatic-complexity-v1"
+            }))
+    );
+    let file = cpp["files"]
+        .as_array()
+        .and_then(|files| files.iter().find(|file| file["path"] == "native.cpp"))
+        .expect("native.cpp analysis");
+    for path in ["legacy.C", "legacy.H", "shared.h"] {
+        assert!(
+            cpp["files"]
+                .as_array()
+                .is_some_and(|files| files.iter().any(|file| file["path"] == path)),
+            "missing C++ grammar analysis for {path}"
+        );
+    }
+    assert!(
+        cpp["files"]
+            .as_array()
+            .is_some_and(|files| files.iter().all(|file| file["path"] != "classic.c")),
+        "lowercase .c must remain outside the C++ analyzer"
+    );
+    let symbols = file["symbols"].as_array().expect("symbols array");
+    for kind in ["namespace", "struct", "method", "lambda"] {
+        assert!(
+            symbols.iter().any(|symbol| symbol["kind"] == kind),
+            "missing {kind} symbol"
+        );
+    }
+    let include = &file["dependencies"][0];
+    assert_eq!(include["kind"], "include");
+    assert_eq!(include["target"], "vector");
+    assert_eq!(include["delimiter"], "angle");
+    assert_eq!(include["conditional"], false);
+    assert_eq!(include["resolution"], "syntactic");
+    assert!(report["inventory"]["inventory_only_languages"]["cpp"].is_null());
+    assert_eq!(report["inventory"]["inventory_only_languages"]["c"], 1);
+    assert!(
+        report["review"]["rankings"]
+            .as_array()
+            .is_some_and(|rankings| {
+                rankings.iter().any(|ranking| {
+                    ranking["language"] == "cpp"
+                        && ranking["metric_id"] == "cpp-cyclomatic-complexity"
+                        && ranking["metric_definition_version"] == "cpp-cyclomatic-complexity-v1"
+                })
+            })
+    );
+
+    let details = run(&["analyze", root, "--details", "native.cpp"]);
+    let stdout = String::from_utf8(details.stdout).expect("terminal output should be UTF-8");
+    assert!(details.status.success());
+    assert!(stdout.contains("namespaces: 1"));
+    assert!(stdout.contains("structs: 1"));
+    assert!(stdout.contains("includes: 1"));
+    assert!(stdout.contains("include vector [angle]"));
+}
+
+#[test]
+fn cpp_complexity_gate_reports_metric_provenance_and_exit_code() {
+    let repository = tempdir().expect("temporary repository should be created");
+    fs::write(
+        repository.path().join("gate.cpp"),
+        "int gate(int value) { if (value) { return value; } return 0; }\n",
+    )
+    .expect("C++ fixture");
+
+    let output = run(&[
+        "analyze",
+        repository.path().to_str().unwrap(),
+        "--no-documentation-coverage",
+        "--complexity-review-at",
+        "2",
+        "--gate",
+        "--format",
+        "gate",
+    ]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("gate report should be JSON");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(report["report_schema_version"], "0.3.0");
+    assert_eq!(report["status"], "human-review-required");
+    assert_eq!(report["top_findings"][0]["language"], "cpp");
+    assert_eq!(
+        report["top_findings"][0]["metric_id"],
+        "cpp-cyclomatic-complexity"
+    );
+    assert_eq!(
+        report["top_findings"][0]["metric_definition_version"],
+        "cpp-cyclomatic-complexity-v1"
+    );
 }

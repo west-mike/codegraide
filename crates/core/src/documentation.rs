@@ -269,7 +269,7 @@ fn is_eligible(symbol: &Symbol, symbols: &BTreeMap<SymbolId, &Symbol>) -> bool {
                     .and_then(|id| symbols.get(id))
                     .is_some_and(|parent| parent.kind == SymbolKind::Module)
         }
-        SymbolKind::Lambda => false,
+        SymbolKind::Namespace | SymbolKind::Struct | SymbolKind::Lambda => false,
     }
 }
 
@@ -416,6 +416,7 @@ mod tests {
             modifiers: BTreeSet::new(),
             parameters: Vec::new(),
             decorators: Vec::new(),
+            callable_signature: None,
             documentation: status.map(|status| SymbolDocumentation {
                 status,
                 span: (status != DocumentationStatus::Unavailable).then(|| span(line)),
@@ -438,6 +439,7 @@ mod tests {
                 capabilities: [AnalyzerCapability::Documentation].into_iter().collect(),
                 grammar: None,
                 queries: Vec::new(),
+                measurements: Vec::new(),
                 limitations: Vec::new(),
             },
             counts: LanguageAnalysisCounts {
@@ -451,6 +453,7 @@ mod tests {
                 status: file_status,
                 diagnostics: Vec::new(),
                 facts: AnalysisFacts {
+                    call_flows: Default::default(),
                     symbols: vec![
                         symbol(
                             "module",
@@ -496,8 +499,13 @@ mod tests {
                         ),
                         symbol("lambda", Some("top"), SymbolKind::Lambda, None, 7),
                     ],
+                    declarations: Vec::new(),
                     dependencies: Vec::new(),
                     calls: Vec::new(),
+                    modules: Vec::new(),
+                    module_imports: Vec::new(),
+                    module_exports: Vec::new(),
+                    using_references: Vec::new(),
                     explicit_exports: None,
                 },
             }],

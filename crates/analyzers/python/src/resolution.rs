@@ -8,13 +8,17 @@ use std::thread;
 use std::time::Duration;
 
 use codegraide_core::{
-    DependencyReference, DependencyResolutionOutcome, DependencyTarget, LanguageId, LocalModule,
-    ModuleId, ProjectDependencyResolution, RepositoryAnalysis, UnresolvedDependencyReason,
+    DependencyReference, DependencyResolutionContextCoverage, DependencyResolutionOutcome,
+    DependencyResolver, DependencyResolverDescriptor, DependencyResolverError, DependencyTarget,
+    DependencyUnitKind, ImportReference, LanguageId, LocalModule, ModuleId,
+    ProjectDependencyResolution, RepositoryAnalysis, ResolvedProjectDependencies,
+    UnresolvedDependencyReason,
 };
 use serde::Deserialize;
 use wait_timeout::ChildExt;
 
 const PROBE_SCHEMA_VERSION: &str = "codegraide-python-environment-v1";
+pub const PYTHON_IMPORT_RESOLUTION_DEFINITION_VERSION: &str = "python-import-resolution-v1";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROBE_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 const PYTHON_PROBE: &str = include_str!("environment_probe.txt");
@@ -47,6 +51,111 @@ pub struct PythonDependencyResolution {
     pub resolutions: Vec<ProjectDependencyResolution>,
     pub environment: Option<PythonEnvironmentSummary>,
     pub diagnostics: Vec<String>,
+}
+
+pub struct PythonDependencyResolver {
+    descriptor: DependencyResolverDescriptor,
+    options: PythonResolutionOptions,
+}
+
+impl PythonDependencyResolver {
+    pub fn new(options: PythonResolutionOptions) -> Self {
+        Self {
+            descriptor: DependencyResolverDescriptor {
+                id: "python-import-resolver".to_owned(),
+                language: LanguageId::new("python"),
+                version: "0.1.0".to_owned(),
+                definition_version: PYTHON_IMPORT_RESOLUTION_DEFINITION_VERSION.to_owned(),
+                local_unit_kind: DependencyUnitKind::Module,
+                hierarchy_behavior: "qualified-module-segments".to_owned(),
+                resolution_capabilities: vec![
+                    "repository-package-roots".to_owned(),
+                    "relative-imports".to_owned(),
+                    "standard-library-probe".to_owned(),
+                    "installed-distribution-probe".to_owned(),
+                ],
+                limitations: vec![
+                    "Dynamic imports, runtime import hooks, and framework re-exports are not resolved."
+                        .to_owned(),
+                ],
+            },
+            options,
+        }
+    }
+}
+
+impl DependencyResolver for PythonDependencyResolver {
+    fn descriptor(&self) -> &DependencyResolverDescriptor {
+        &self.descriptor
+    }
+
+    fn resolve(
+        &self,
+        analysis: &RepositoryAnalysis,
+    ) -> Result<ResolvedProjectDependencies, DependencyResolverError> {
+        let resolution = resolve_python_dependencies(analysis, &self.options)
+            .map_err(|error| DependencyResolverError::new(error.to_string()))?;
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "package-roots".to_owned(),
+            resolution
+                .package_roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        if let Some(environment) = &resolution.environment {
+            metadata.insert(
+                "environment-selection".to_owned(),
+                environment.selection_kind.to_owned(),
+            );
+            metadata.insert(
+                "environment-implementation".to_owned(),
+                environment.implementation.clone(),
+            );
+            metadata.insert(
+                "environment-version".to_owned(),
+                environment.version.clone(),
+            );
+            metadata.insert(
+                "environment-is-virtual".to_owned(),
+                environment.is_virtual_environment.to_string(),
+            );
+            metadata.insert(
+                "environment-distributions".to_owned(),
+                environment.distribution_count.to_string(),
+            );
+        }
+        let summary_lines = vec![
+            format!("Package roots: {}", metadata["package-roots"]),
+            match &resolution.environment {
+                Some(environment) => format!(
+                    "Python environment: {} {} ({}, packages={})",
+                    environment.implementation,
+                    environment.version,
+                    environment.selection_kind,
+                    environment.distribution_count
+                ),
+                None => "Python environment: not selected (external imports remain unresolved)"
+                    .to_owned(),
+            },
+        ];
+        Ok(ResolvedProjectDependencies {
+            local_units: resolution.local_modules,
+            resolutions: resolution.resolutions,
+            context_coverage: vec![DependencyResolutionContextCoverage {
+                kind: "python-environment".to_owned(),
+                selected: resolution.environment.is_some(),
+                total: usize::from(resolution.environment.is_some()),
+                supported: usize::from(resolution.environment.is_some()),
+                unsupported: 0,
+            }],
+            summary_lines,
+            metadata,
+            diagnostics: resolution.diagnostics,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -139,9 +248,13 @@ pub fn resolve_python_dependencies(
                 continue;
             };
             for reference in &file.facts.dependencies {
+                let Some(import) = reference.as_import() else {
+                    continue;
+                };
                 resolutions.push(resolve_reference(
                     source,
                     reference,
+                    import,
                     &by_name,
                     environment.as_ref(),
                 ));
@@ -151,9 +264,9 @@ pub fn resolve_python_dependencies(
     resolutions.sort_by(|left, right| {
         left.source_path.cmp(&right.source_path).then_with(|| {
             left.reference
-                .span
+                .span()
                 .start_byte
-                .cmp(&right.reference.span.start_byte)
+                .cmp(&right.reference.span().start_byte)
         })
     });
     Ok(PythonDependencyResolution {
@@ -351,13 +464,14 @@ fn is_python_identifier(value: &str) -> bool {
 fn resolve_reference(
     source: &LocalModule,
     reference: &DependencyReference,
+    import: &ImportReference,
     local: &BTreeMap<String, Vec<LocalModule>>,
     environment: Option<&PythonEnvironment>,
 ) -> ProjectDependencyResolution {
-    let requested = requested_module(source, reference);
+    let requested = requested_module(source, import);
     let outcome = match requested {
-        Err(reason) => DependencyResolutionOutcome::unresolved(reference_text(reference), reason),
-        Ok(requested) => resolve_requested(&requested, reference, local, environment),
+        Err(reason) => DependencyResolutionOutcome::unresolved(reference_text(import), reason),
+        Ok(requested) => resolve_requested(&requested, import, local, environment),
     };
     ProjectDependencyResolution::new(
         source.path.clone(),
@@ -369,7 +483,7 @@ fn resolve_reference(
 
 fn requested_module(
     source: &LocalModule,
-    reference: &DependencyReference,
+    reference: &ImportReference,
 ) -> Result<String, UnresolvedDependencyReason> {
     if reference.relative_level == 0 {
         return reference
@@ -405,7 +519,7 @@ fn requested_module(
 
 fn resolve_requested(
     requested: &str,
-    reference: &DependencyReference,
+    reference: &ImportReference,
     local: &BTreeMap<String, Vec<LocalModule>>,
     environment: Option<&PythonEnvironment>,
 ) -> DependencyResolutionOutcome {
@@ -462,7 +576,7 @@ fn resolve_requested(
     DependencyResolutionOutcome::unresolved(requested, UnresolvedDependencyReason::ModuleNotFound)
 }
 
-fn reference_text(reference: &DependencyReference) -> String {
+fn reference_text(reference: &ImportReference) -> String {
     let dots = ".".repeat(reference.relative_level);
     let module = reference.module.as_deref().unwrap_or_default();
     let imported = reference
@@ -668,8 +782,7 @@ mod tests {
             ModuleId::new(LanguageId::new("python"), "shop.api"),
             "src/shop/api.py",
         );
-        let reference = DependencyReference {
-            kind: codegraide_core::DependencyKind::Import,
+        let reference = codegraide_core::ImportReference {
             module: Some("outside".to_owned()),
             imported_name: None,
             alias: None,

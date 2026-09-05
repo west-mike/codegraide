@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -6,24 +6,31 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use codegraide_analyzer_cpp::{
+    CppDependencyResolver, CppResolutionOptions, apply_architecture_to_resolution,
+    resolve_cpp_calls, resolve_cpp_dependencies,
+};
 use codegraide_analyzer_python::{
-    PythonEnvironmentSelection, PythonResolutionOptions, resolve_python_calls,
-    resolve_python_dependencies,
+    PythonDependencyResolver, PythonEnvironmentSelection, PythonResolutionOptions,
+    resolve_python_calls, resolve_python_dependencies,
 };
 use codegraide_core::{
-    AnalysisJsonReport, AnalysisOptions, CallDirection, CallGraphAnalysis, CallGraphFilter,
-    CallGraphView, CallJsonReport, DependencyDirection, DependencyEnvironmentReport,
-    DependencyGraphAnalysis, DependencyGraphFilter, DependencyGraphInputExclusions,
-    DependencyGraphQuery, DependencyGraphQueryResult, DependencyGraphView, DependencyJsonReport,
-    DependencyNode, DependencyNodeKind, DependencyQueryDirection, DocumentationJsonReport,
-    FileCategory, GateJsonReport, InventoryJsonReport, InventoryOptions, RepositoryAnalysis,
-    RepositoryInventory, ReviewJsonReport, ReviewOptions, ReviewStatus, analyze_call_graph,
-    analyze_dependency_graph, analyze_repository, call_node_name, dependency_query_view,
-    explain_dependency_cycles, filter_call_graph, filter_dependency_graph,
-    inventory_repository_with_options, query_dependency_graph, render_call_dot, render_call_html,
-    render_call_html_with_source, render_call_mermaid, render_dependency_dot,
-    render_dependency_html, render_dependency_html_with_query, render_dependency_mermaid,
-    review_status_code,
+    AnalysisJsonReport, AnalysisOptions, AnalyzerCapability, CallDirection, CallGraphAnalysis,
+    CallGraphFilter, CallGraphView, CallJsonReport, DependencyBundleJsonReport,
+    DependencyDirection, DependencyEnvironmentReport, DependencyGraphAnalysis,
+    DependencyGraphFilter, DependencyGraphInputExclusions, DependencyGraphQuery,
+    DependencyGraphQueryResult, DependencyGraphView, DependencyJsonReport,
+    DependencyLanguageJsonReport, DependencyNode, DependencyNodeKind, DependencyQueryDirection,
+    DependencyRelationKind, DependencyResolver, DependencyResolverContextReport,
+    DependencyResolverRegistry, DependencyResolverReport, DocumentationJsonReport, FileCategory,
+    GateJsonReport, InventoryJsonReport, InventoryOptions, LanguageId, MeasurementConcept,
+    RepositoryAnalysis, RepositoryInventory, ReviewJsonReport, ReviewOptions, ReviewStatus,
+    UnavailableDependencyLanguage, analyze_call_graph_with_modules, analyze_dependency_graph,
+    analyze_repository, call_node_name, dependency_query_view, explain_dependency_cycles,
+    filter_call_graph, filter_dependency_graph, inventory_repository_with_options,
+    query_dependency_graph, render_call_dot, render_call_html, render_call_html_with_source,
+    render_call_mermaid, render_dependency_dot, render_dependency_html,
+    render_dependency_html_with_query, render_dependency_mermaid, review_status_code,
 };
 
 use crate::bootstrap::{BuiltinAnalyzerFeatures, build_builtin_analyzer_registry};
@@ -189,11 +196,19 @@ enum Command {
         #[arg(long, value_enum, default_value_t = CommentsOutputFormat::Terminal)]
         format: CommentsOutputFormat,
     },
-    /// Resolve Python imports and build a dependency graph
+    /// Resolve supported language dependencies and build language-pure graphs
     Dependencies {
         /// Project directory to analyze
         #[arg(value_name = "PATH", default_value = ".")]
         path: PathBuf,
+
+        /// Analyze only this dependency language; may repeat
+        #[arg(long, value_name = "LANGUAGE", action = clap::ArgAction::Append)]
+        language: Vec<String>,
+
+        /// C++ compilation database used for header search paths
+        #[arg(long, value_name = "FILE")]
+        compile_commands: Option<PathBuf>,
 
         /// Python interpreter used for standard-library and installed-package resolution
         #[arg(long, value_name = "EXECUTABLE", conflicts_with = "venv")]
@@ -203,10 +218,10 @@ enum Command {
         #[arg(long, value_name = "DIRECTORY", conflicts_with = "python")]
         venv: Option<PathBuf>,
 
-        /// Focus the view on one local module; may repeat
+        /// Focus the view on one local dependency unit; may repeat
         #[arg(
             long,
-            value_name = "MODULE",
+            value_name = "UNIT",
             action = clap::ArgAction::Append,
             conflicts_with_all = ["path_from", "path_to", "closure"]
         )]
@@ -216,23 +231,23 @@ enum Command {
         #[arg(long, value_enum, conflicts_with_all = ["path_from", "path_to"])]
         direction: Option<DependencyDirectionArgument>,
 
-        /// Traversal depth from focused modules; zero shows only the focus and its cycle
+        /// Traversal depth from focused units; zero shows only the focus and its cycle
         #[arg(long, value_name = "N", requires = "focus")]
         depth: Option<usize>,
 
-        /// Find the shortest exact local dependency path from this module
+        /// Find the shortest exact local dependency path from this unit
         #[arg(
             long,
-            value_name = "MODULE",
+            value_name = "UNIT",
             requires = "path_to",
             conflicts_with_all = ["focus", "depth", "cycles_only", "closure", "direction"]
         )]
         path_from: Option<String>,
 
-        /// Find the shortest exact local dependency path to this module
+        /// Find the shortest exact local dependency path to this unit
         #[arg(
             long,
-            value_name = "MODULE",
+            value_name = "UNIT",
             requires = "path_from",
             conflicts_with_all = ["focus", "depth", "cycles_only", "closure", "direction"]
         )]
@@ -241,7 +256,7 @@ enum Command {
         /// Show the complete exact local dependency or dependent closure
         #[arg(
             long,
-            value_name = "MODULE",
+            value_name = "UNIT",
             conflicts_with_all = ["focus", "depth", "cycles_only", "path_from", "path_to"]
         )]
         closure: Option<String>,
@@ -250,7 +265,7 @@ enum Command {
         #[arg(long)]
         exact_only: bool,
 
-        /// Show repository-local modules and exact local relations only
+        /// Show repository-local units and exact local relations only
         #[arg(long)]
         local_only: bool,
 
@@ -290,11 +305,23 @@ enum Command {
         #[arg(long)]
         open: bool,
     },
-    /// Resolve conservative Python call targets and build a symbol call graph
+    /// Explore Python or C++ symbols and conservative written-call targets
     Calls {
         /// Project directory to analyze
         #[arg(value_name = "PATH", default_value = ".")]
         path: PathBuf,
+
+        /// Analyze one call language; required when Python and C++ are both present
+        #[arg(long, value_enum)]
+        language: Option<CallLanguageArgument>,
+
+        /// C++ compilation database used only for include visibility metadata
+        #[arg(long, value_name = "FILE")]
+        compile_commands: Option<PathBuf>,
+
+        /// C++ architectural-group definition file
+        #[arg(long, value_name = "FILE")]
+        architecture: Option<PathBuf>,
 
         /// Python interpreter used for import-boundary resolution
         #[arg(long, value_name = "EXECUTABLE", conflicts_with = "venv")]
@@ -343,7 +370,26 @@ enum Command {
         /// Embed function bodies and call-site context in HTML output
         #[arg(long)]
         include_source: bool,
+
+        /// Maximum nested call-expansion depth embedded in HTML
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u8).range(1..=10))]
+        max_expansion_depth: Option<u8>,
     },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum CallLanguageArgument {
+    Python,
+    Cpp,
+}
+
+impl CallLanguageArgument {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Python => "python",
+            Self::Cpp => "cpp",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
@@ -547,6 +593,8 @@ fn main() -> ExitCode {
         }),
         Command::Dependencies {
             path,
+            language,
+            compile_commands,
             python,
             venv,
             focus,
@@ -568,6 +616,8 @@ fn main() -> ExitCode {
             open,
         } => run_dependencies(&DependencyRequest {
             path,
+            languages: language,
+            compile_commands: compile_commands.as_deref(),
             python: python.as_deref(),
             venv: venv.as_deref(),
             focus,
@@ -592,6 +642,9 @@ fn main() -> ExitCode {
         }),
         Command::Calls {
             path,
+            language,
+            compile_commands,
+            architecture,
             python,
             venv,
             focus,
@@ -604,8 +657,12 @@ fn main() -> ExitCode {
             output,
             open,
             include_source,
+            max_expansion_depth,
         } => run_calls(&CallRequest {
             path,
+            language: *language,
+            compile_commands: compile_commands.as_deref(),
+            architecture: architecture.as_deref(),
             python: python.as_deref(),
             venv: venv.as_deref(),
             focus,
@@ -618,6 +675,7 @@ fn main() -> ExitCode {
             output: output.as_deref(),
             open: *open,
             include_source: *include_source,
+            max_expansion_depth: *max_expansion_depth,
         }),
     }
 }
@@ -698,6 +756,8 @@ fn print_json(inventory: &RepositoryInventory) -> ExitCode {
 #[derive(Debug, Clone, Copy)]
 struct DependencyRequest<'a> {
     path: &'a Path,
+    languages: &'a [String],
+    compile_commands: Option<&'a Path>,
     python: Option<&'a Path>,
     venv: Option<&'a Path>,
     focus: &'a [String],
@@ -716,6 +776,17 @@ struct DependencyRequest<'a> {
     open: bool,
 }
 
+struct LanguageDependencyRun {
+    language: String,
+    resolver: DependencyResolverReport,
+    environment: Option<DependencyEnvironmentReport>,
+    summary_lines: Vec<String>,
+    graph: DependencyGraphAnalysis,
+    view: DependencyGraphView,
+    query: Option<DependencyGraphQueryResult>,
+    diagnostics: Vec<String>,
+}
+
 fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
     if request.output.is_some() && request.format != DependencyOutputFormat::Html {
         eprintln!("error: --output requires --format html");
@@ -731,6 +802,47 @@ fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
     }
     if request.closure.is_some() && request.direction == Some(DependencyDirectionArgument::Both) {
         eprintln!("error: --closure direction must be dependencies or dependents, not both");
+        return ExitCode::FAILURE;
+    }
+    let python_environment = request
+        .python
+        .map(|path| PythonEnvironmentSelection::Interpreter(path.to_path_buf()))
+        .or_else(|| {
+            request
+                .venv
+                .map(|path| PythonEnvironmentSelection::VirtualEnvironment(path.to_path_buf()))
+        });
+    let mut dependency_registry = DependencyResolverRegistry::new();
+    for resolver in [
+        Box::new(CppDependencyResolver::new(CppResolutionOptions {
+            compilation_database: request.compile_commands.map(Path::to_path_buf),
+        })) as Box<dyn DependencyResolver>,
+        Box::new(PythonDependencyResolver::new(PythonResolutionOptions {
+            environment: python_environment,
+        })) as Box<dyn DependencyResolver>,
+    ] {
+        if let Err(error) = dependency_registry.register(resolver) {
+            eprintln!("error: could not register dependency resolver: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let supported = dependency_registry
+        .languages()
+        .map(|language| language.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let requested = request
+        .languages
+        .iter()
+        .map(|language| language.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    if let Some(language) = requested
+        .iter()
+        .find(|language| !supported.contains(language.as_str()))
+    {
+        eprintln!(
+            "error: dependency resolver {language:?} is not installed; installed resolvers: {}",
+            supported.iter().cloned().collect::<Vec<_>>().join(", ")
+        );
         return ExitCode::FAILURE;
     }
     let metadata = match request.path.metadata() {
@@ -776,56 +888,138 @@ fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let environment = request
-        .python
-        .map(|path| PythonEnvironmentSelection::Interpreter(path.to_path_buf()))
-        .or_else(|| {
-            request
-                .venv
-                .map(|path| PythonEnvironmentSelection::VirtualEnvironment(path.to_path_buf()))
-        });
-    let resolution =
-        match resolve_python_dependencies(&analysis, &PythonResolutionOptions { environment }) {
-            Ok(resolution) => resolution,
-            Err(error) => {
-                eprintln!("error: could not resolve Python dependencies: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
-    let included_resolutions = resolution
-        .resolutions
+    let present = analysis
+        .analyzers
         .iter()
-        .filter(|resolution| request.exclusions.retains(&resolution.reference))
+        .filter(|run| !run.files.is_empty())
+        .map(|run| run.descriptor.language.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let selected = supported
+        .iter()
+        .filter(|language| {
+            (requested.is_empty() && present.contains(*language)) || requested.contains(*language)
+        })
         .cloned()
         .collect::<Vec<_>>();
-    let graph = match analyze_dependency_graph(&resolution.local_modules, &included_resolutions) {
-        Ok(graph) => graph,
-        Err(error) => {
-            eprintln!("error: could not build dependency graph: {error}");
-            return ExitCode::FAILURE;
+    if request.compile_commands.is_some() && !selected.iter().any(|language| language == "cpp") {
+        eprintln!("error: --compile-commands requires the C++ dependency resolver");
+        return ExitCode::FAILURE;
+    }
+    if selected.len() > 1 && selectors_need_language(request) {
+        eprintln!(
+            "error: graph selectors in a multi-language run must use language:identity, such as python:shop.api or cpp:src/main.cpp"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let mut runs = Vec::new();
+    for language in selected {
+        let language_id = LanguageId::new(&language);
+        let resolver = dependency_registry
+            .get(&language_id)
+            .expect("selected dependency resolver must be registered");
+        let result = build_dependency_run(&analysis, request, resolver);
+        match result {
+            Ok(run) => runs.push(run),
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
         }
-    };
-    let filter = DependencyGraphFilter {
-        focus_modules: request.focus.to_vec(),
-        direction: request
-            .direction
-            .map(Into::into)
-            .unwrap_or(DependencyDirection::Both),
-        depth: request.depth.unwrap_or(1),
-        exact_only: request.exact_only,
-        local_only: request.local_only,
-        cycles_only: request.cycles_only,
-    };
-    let query = request
-        .path_from
-        .zip(request.path_to)
-        .map(|(from, to)| DependencyGraphQuery::ShortestPath {
-            from: from.to_owned(),
-            to: to.to_owned(),
+    }
+    runs.sort_by(|left, right| left.language.cmp(&right.language));
+    for run in &runs {
+        for diagnostic in &run.diagnostics {
+            eprintln!("warning[{}]: {diagnostic}", run.language);
+        }
+        if matches!(
+            request.format,
+            DependencyOutputFormat::Mermaid | DependencyOutputFormat::Dot
+        ) && run.view.nodes.len() > 200
+        {
+            eprintln!(
+                "warning[{}]: graph contains {} nodes; use --language, --focus, --local-only, or --cycles-only for a more readable view",
+                run.language,
+                run.view.nodes.len()
+            );
+        }
+    }
+    let unavailable = analysis
+        .inventory_languages
+        .keys()
+        .filter(|language| !supported.contains(language.as_str()))
+        .map(|language| UnavailableDependencyLanguage {
+            language: language.as_str().to_owned(),
+            status: "resolver-not-installed",
+            installation_hint: None,
         })
-        .or_else(|| {
-            request.closure.map(|module| DependencyGraphQuery::Closure {
-                module: module.to_owned(),
+        .collect::<Vec<_>>();
+
+    match request.format {
+        DependencyOutputFormat::Terminal => {
+            print_dependency_bundle_summary(request.path, &runs, &unavailable, request);
+            ExitCode::SUCCESS
+        }
+        DependencyOutputFormat::Mermaid => {
+            print!("{}", render_dependency_mermaid_bundle(&runs));
+            ExitCode::SUCCESS
+        }
+        DependencyOutputFormat::Dot => {
+            print!("{}", render_dependency_dot_bundle(&runs));
+            ExitCode::SUCCESS
+        }
+        DependencyOutputFormat::Json => print_dependency_bundle_json(&runs, unavailable, request),
+        DependencyOutputFormat::Html => emit_dependency_html_bundle(
+            request.path,
+            &runs,
+            &unavailable,
+            request.output,
+            request.open,
+        ),
+    }
+}
+
+fn selectors_need_language(request: &DependencyRequest<'_>) -> bool {
+    request
+        .focus
+        .iter()
+        .map(String::as_str)
+        .chain(request.path_from)
+        .chain(request.path_to)
+        .chain(request.closure)
+        .any(|selector| !selector.contains(':'))
+}
+
+fn selector_for_language(selector: &str, language: &str) -> Option<String> {
+    match selector.split_once(':') {
+        Some((prefix, value)) => (prefix == language).then(|| value.to_owned()),
+        None => Some(selector.to_owned()),
+    }
+}
+
+fn graph_projection(
+    language: &str,
+    graph: &DependencyGraphAnalysis,
+    request: &DependencyRequest<'_>,
+) -> Result<(DependencyGraphView, Option<DependencyGraphQueryResult>), String> {
+    let focus_modules = request
+        .focus
+        .iter()
+        .filter_map(|selector| selector_for_language(selector, language))
+        .collect::<Vec<_>>();
+    let query = match (request.path_from, request.path_to, request.closure) {
+        (Some(from), Some(to), _) => {
+            let from = selector_for_language(from, language);
+            let to = selector_for_language(to, language);
+            match (from, to) {
+                (Some(from), Some(to)) => Some(DependencyGraphQuery::ShortestPath { from, to }),
+                (None, None) => None,
+                _ => return Err("dependency path endpoints must use the same language".to_owned()),
+            }
+        }
+        (_, _, Some(module)) => {
+            selector_for_language(module, language).map(|module| DependencyGraphQuery::Closure {
+                module,
                 direction: match request.direction {
                     Some(DependencyDirectionArgument::Dependents) => {
                         DependencyQueryDirection::Dependents
@@ -833,102 +1027,100 @@ fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
                     _ => DependencyQueryDirection::Dependencies,
                 },
             })
-        });
-    let query_result = match query
+        }
+        _ => None,
+    };
+    let query_result = query
         .as_ref()
-        .map(|query| query_dependency_graph(&graph, query))
+        .map(|query| query_dependency_graph(graph, query))
         .transpose()
-    {
-        Ok(result) => result,
-        Err(error) => {
-            eprintln!("error: could not query dependency graph: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let view = if let Some(result) = &query_result {
-        dependency_query_view(&graph, result)
+        .map_err(|error| format!("could not query {language} dependency graph: {error}"))?;
+    let mut view = if let Some(result) = &query_result {
+        dependency_query_view(graph, result)
     } else {
-        match filter_dependency_graph(&graph, &filter) {
-            Ok(view) => view,
-            Err(error) => {
-                eprintln!("error: could not filter dependency graph: {error}");
-                return ExitCode::FAILURE;
-            }
-        }
+        filter_dependency_graph(
+            graph,
+            &DependencyGraphFilter {
+                focus_modules,
+                direction: request
+                    .direction
+                    .map(Into::into)
+                    .unwrap_or(DependencyDirection::Both),
+                depth: request.depth.unwrap_or(1),
+                exact_only: request.exact_only,
+                local_only: request.local_only,
+                cycles_only: request.cycles_only,
+            },
+        )
+        .map_err(|error| format!("could not filter {language} dependency graph: {error}"))?
     };
-    for diagnostic in &resolution.diagnostics {
-        eprintln!("warning: {diagnostic}");
+    for node in &mut view.nodes {
+        node.id = format!("{language}_{}", node.id);
     }
-    if matches!(
-        request.format,
-        DependencyOutputFormat::Mermaid | DependencyOutputFormat::Dot
-    ) && view.nodes.len() > 200
-    {
-        eprintln!(
-            "warning: graph contains {} nodes; use --focus, --local-only, or --cycles-only for a more readable view",
-            view.nodes.len()
-        );
-    }
+    Ok((view, query_result))
+}
 
-    match request.format {
-        DependencyOutputFormat::Terminal => {
-            if let Some(result) = &query_result {
-                print_dependency_query(result);
-            } else {
-                print_dependency_summary(
-                    request.path,
-                    &resolution,
-                    &graph,
-                    &view,
-                    request.exclusions,
-                    request.top,
-                );
-            }
-            ExitCode::SUCCESS
-        }
-        DependencyOutputFormat::Mermaid => {
-            print!("{}", render_dependency_mermaid(&view));
-            ExitCode::SUCCESS
-        }
-        DependencyOutputFormat::Dot => {
-            print!("{}", render_dependency_dot(&view));
-            ExitCode::SUCCESS
-        }
-        DependencyOutputFormat::Json => {
-            let environment =
-                resolution
-                    .environment
-                    .as_ref()
-                    .map(|environment| DependencyEnvironmentReport {
-                        selection: environment.selection_kind,
-                        implementation: environment.implementation.clone(),
-                        python_version: environment.version.clone(),
-                        virtual_environment: environment.is_virtual_environment,
-                        distribution_count: environment.distribution_count,
-                    });
-            match serde_json::to_string_pretty(
-                &DependencyJsonReport::from_analysis_with_query_and_exclusions(
-                    &graph,
-                    &view,
-                    environment,
-                    query_result.as_ref(),
-                    request.exclusions,
-                ),
-            ) {
-                Ok(json) => {
-                    println!("{json}");
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("error: could not serialize dependency report: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        DependencyOutputFormat::Html => {
-            emit_dependency_html(&view, query_result.as_ref(), request.output, request.open)
-        }
-    }
+fn build_dependency_run(
+    analysis: &RepositoryAnalysis,
+    request: &DependencyRequest<'_>,
+    resolver: &dyn DependencyResolver,
+) -> Result<LanguageDependencyRun, String> {
+    let descriptor = resolver.descriptor();
+    let language = descriptor.language.as_str();
+    let resolution = resolver
+        .resolve(analysis)
+        .map_err(|error| format!("could not resolve {language} dependencies: {error}"))?;
+    let included = resolution
+        .resolutions
+        .iter()
+        .filter(|resolution| request.exclusions.retains(&resolution.reference))
+        .cloned()
+        .collect::<Vec<_>>();
+    let graph = analyze_dependency_graph(&resolution.local_units, &included)
+        .map_err(|error| format!("could not build {language} dependency graph: {error}"))?;
+    let (view, query) = graph_projection(language, &graph, request)?;
+    let environment_report = resolution
+        .metadata
+        .get("environment-selection")
+        .map(|selection| DependencyEnvironmentReport {
+            selection: selection.clone(),
+            implementation: resolution.metadata["environment-implementation"].clone(),
+            python_version: resolution.metadata["environment-version"].clone(),
+            virtual_environment: resolution.metadata["environment-is-virtual"] == "true",
+            distribution_count: resolution.metadata["environment-distributions"]
+                .parse()
+                .expect("resolver distribution count must be numeric"),
+        });
+    Ok(LanguageDependencyRun {
+        language: language.to_owned(),
+        resolver: DependencyResolverReport {
+            id: descriptor.id.clone(),
+            version: descriptor.version.clone(),
+            definition_version: descriptor.definition_version.clone(),
+            unit_kind: descriptor.local_unit_kind.as_str(),
+            hierarchy_behavior: descriptor.hierarchy_behavior.clone(),
+            resolution_capabilities: descriptor.resolution_capabilities.clone(),
+            status: "available",
+            context: resolution
+                .context_coverage
+                .iter()
+                .map(|context| DependencyResolverContextReport {
+                    kind: context.kind.clone(),
+                    selected: context.selected,
+                    total: context.total,
+                    supported: context.supported,
+                    unsupported: context.unsupported,
+                })
+                .collect(),
+            limitations: descriptor.limitations.clone(),
+        },
+        environment: environment_report,
+        summary_lines: resolution.summary_lines,
+        graph,
+        view,
+        query,
+        diagnostics: resolution.diagnostics,
+    })
 }
 
 fn print_dependency_query(result: &DependencyGraphQueryResult) {
@@ -958,49 +1150,334 @@ fn print_dependency_query(result: &DependencyGraphQueryResult) {
     }
 }
 
-fn emit_dependency_html(
-    view: &DependencyGraphView,
-    query: Option<&DependencyGraphQueryResult>,
+fn print_dependency_bundle_json(
+    runs: &[LanguageDependencyRun],
+    unavailable: Vec<UnavailableDependencyLanguage>,
+    request: &DependencyRequest<'_>,
+) -> ExitCode {
+    let languages = runs
+        .iter()
+        .map(|run| DependencyLanguageJsonReport {
+            language: run.language.clone(),
+            resolver: run.resolver.clone(),
+            graph: DependencyJsonReport::from_analysis_with_query_and_exclusions(
+                &run.graph,
+                &run.view,
+                run.environment.clone(),
+                run.query.as_ref(),
+                request.exclusions,
+            ),
+        })
+        .collect();
+    match serde_json::to_string_pretty(&DependencyBundleJsonReport::new(languages, unavailable)) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: could not serialize dependency report: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn render_dependency_mermaid_bundle(runs: &[LanguageDependencyRun]) -> String {
+    let mut output = String::from("flowchart LR\n");
+    for run in runs {
+        let slug = language_slug(&run.language);
+        output.push_str(&format!(
+            "  subgraph language_{slug}[\"{}\"]\n",
+            run.language
+        ));
+        let rendered = render_dependency_mermaid(&run.view)
+            .strip_prefix("flowchart LR\n")
+            .unwrap_or_default()
+            .replace("cluster_cycle_", &format!("{slug}_cycle_"));
+        for line in rendered.lines() {
+            output.push_str("    ");
+            output.push_str(line);
+            output.push('\n');
+        }
+        output.push_str("  end\n");
+    }
+    output
+}
+
+fn render_dependency_dot_bundle(runs: &[LanguageDependencyRun]) -> String {
+    let mut output = String::from(
+        "digraph dependencies {\n  rankdir=LR;\n  graph [fontname=\"Helvetica\"];\n  node [fontname=\"Helvetica\", style=filled];\n  edge [fontname=\"Helvetica\"];\n",
+    );
+    for run in runs {
+        let slug = language_slug(&run.language);
+        output.push_str(&format!(
+            "  subgraph cluster_language_{slug} {{\n    label=\"{}\";\n",
+            run.language.replace('"', "\\\"")
+        ));
+        let rendered = render_dependency_dot(&run.view);
+        let body = rendered
+            .strip_prefix("digraph dependencies {\n")
+            .and_then(|value| value.strip_suffix("}\n"))
+            .unwrap_or_default()
+            .replace("cluster_cycle_", &format!("{slug}_cycle_"));
+        for line in body.lines().skip(4) {
+            output.push_str("    ");
+            output.push_str(line);
+            output.push('\n');
+        }
+        output.push_str("  }\n");
+    }
+    output.push_str("}\n");
+    output
+}
+
+fn emit_dependency_html_bundle(
+    project: &Path,
+    runs: &[LanguageDependencyRun],
+    unavailable: &[UnavailableDependencyLanguage],
     output: Option<&Path>,
     open: bool,
 ) -> ExitCode {
-    let html = match if query.is_some() {
-        render_dependency_html_with_query(view, query)
-    } else {
-        render_dependency_html(view)
-    } {
-        Ok(html) => html,
+    let output = output.unwrap_or_else(|| Path::new("codegraide-dependencies"));
+    let mut pages = Vec::<(String, String)>::new();
+    let mut used_names = BTreeSet::new();
+    let language_pages = runs
+        .iter()
+        .map(|run| {
+            let filename = format!("{}.html", language_slug(&run.language));
+            if !used_names.insert(filename.clone()) {
+                return Err(format!(
+                    "dependency language filenames collide at {filename:?}"
+                ));
+            }
+            Ok((run.language.clone(), filename))
+        })
+        .collect::<Result<Vec<_>, String>>();
+    let language_pages = match language_pages {
+        Ok(pages) => pages,
         Err(error) => {
-            eprintln!("error: could not render interactive dependency graph: {error}");
+            eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    if output.is_none() && !open {
-        print!("{html}");
-        return ExitCode::SUCCESS;
+    for (run, (_, filename)) in runs.iter().zip(&language_pages) {
+        let rendered = if run.query.is_some() {
+            render_dependency_html_with_query(&run.view, run.query.as_ref())
+        } else {
+            render_dependency_html(&run.view)
+        };
+        let html = match rendered {
+            Ok(html) => inject_dependency_navigation(&html, &run.language, &language_pages),
+            Err(error) => {
+                eprintln!(
+                    "error: could not render {} dependency graph: {error}",
+                    run.language
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+        pages.push((filename.clone(), html));
     }
-
-    let output = output.unwrap_or_else(|| Path::new("codegraide-dependency-graph.html"));
-    if let Err(error) = fs::write(output, html) {
+    pages.push((
+        "index.html".to_owned(),
+        dependency_index_html(project, runs, unavailable, &language_pages),
+    ));
+    let generated_files = pages
+        .iter()
+        .map(|(name, _)| name.clone())
+        .chain(std::iter::once(
+            "codegraide-dependency-report.json".to_owned(),
+        ))
+        .collect::<Vec<_>>();
+    let manifest = serde_json::json!({
+        "format": "codegraide-dependency-html-bundle-v1",
+        "generated_files": generated_files,
+        "languages": language_pages.iter().map(|(language, file)| {
+            serde_json::json!({"language": language, "file": file})
+        }).collect::<Vec<_>>()
+    });
+    if let Err(error) = prepare_dependency_output_directory(output, &generated_files) {
         eprintln!(
-            "error: could not write interactive dependency graph {}: {error}",
+            "error: could not prepare dependency report directory {}: {error}",
             output.display()
         );
         return ExitCode::FAILURE;
     }
-    eprintln!("wrote interactive dependency graph to {}", output.display());
-
-    if open {
-        if let Err(error) = open_in_default_browser(output) {
+    for (filename, contents) in pages {
+        if let Err(error) = fs::write(output.join(&filename), contents) {
             eprintln!(
-                "error: could not open interactive dependency graph {}: {error}",
-                output.display()
+                "error: could not write dependency report file {}: {error}",
+                output.join(filename).display()
             );
             return ExitCode::FAILURE;
         }
-        eprintln!("opened interactive dependency graph in the default browser");
+    }
+    let manifest_path = output.join("codegraide-dependency-report.json");
+    let manifest = serde_json::to_string_pretty(&manifest).expect("manifest serialization");
+    if let Err(error) = fs::write(&manifest_path, manifest) {
+        eprintln!(
+            "error: could not write dependency report manifest {}: {error}",
+            manifest_path.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    eprintln!("wrote dependency report bundle to {}", output.display());
+    if open {
+        let index = output.join("index.html");
+        if let Err(error) = open_in_default_browser(&index) {
+            eprintln!(
+                "error: could not open dependency report {}: {error}",
+                index.display()
+            );
+            return ExitCode::FAILURE;
+        }
+        eprintln!("opened dependency report overview");
     }
     ExitCode::SUCCESS
+}
+
+fn prepare_dependency_output_directory(
+    output: &Path,
+    generated_files: &[String],
+) -> io::Result<()> {
+    if output.exists() && !output.is_dir() {
+        return Err(io::Error::other(
+            "output path exists and is not a directory",
+        ));
+    }
+    fs::create_dir_all(output)?;
+    let existing = fs::read_dir(output)?.collect::<Result<Vec<_>, _>>()?;
+    if existing.is_empty() {
+        return Ok(());
+    }
+    let manifest_path = output.join("codegraide-dependency-report.json");
+    let manifest_source = fs::read_to_string(&manifest_path).map_err(|_| {
+        io::Error::other("directory is nonempty and has no Codegraide dependency manifest")
+    })?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_source)
+        .map_err(|error| io::Error::other(format!("invalid dependency manifest: {error}")))?;
+    if manifest["format"] != "codegraide-dependency-html-bundle-v1" {
+        return Err(io::Error::other(
+            "directory does not contain a recognized Codegraide dependency bundle",
+        ));
+    }
+    let retained = generated_files.iter().collect::<BTreeSet<_>>();
+    for filename in manifest["generated_files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+    {
+        if filename.contains('/') || filename.contains('\\') || filename == "." || filename == ".."
+        {
+            return Err(io::Error::other(
+                "dependency manifest contains an unsafe filename",
+            ));
+        }
+        if !retained.contains(&filename.to_owned()) {
+            let stale = output.join(filename);
+            if stale.is_file() {
+                fs::remove_file(stale)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn language_slug(language: &str) -> String {
+    let slug = language
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if slug.is_empty() {
+        "language".to_owned()
+    } else {
+        slug
+    }
+}
+
+fn inject_dependency_navigation(html: &str, current: &str, pages: &[(String, String)]) -> String {
+    if pages.len() == 1 {
+        return html.to_owned();
+    }
+    let mut navigation = String::from(
+        "<nav class=\"language-tabs\" aria-label=\"Dependency languages\"><a href=\"index.html\">Overview</a>",
+    );
+    for (language, filename) in pages {
+        navigation.push_str(&format!(
+            "<a href=\"{}\"{}>{}</a>",
+            html_escape(filename),
+            if language == current {
+                " aria-current=\"page\""
+            } else {
+                ""
+            },
+            html_escape(language)
+        ));
+    }
+    navigation.push_str("</nav>");
+    let style = "<style>.language-tabs{display:flex;gap:.45rem;padding:.65rem 1rem;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20}.language-tabs a{color:var(--text);text-decoration:none;padding:.45rem .7rem;border:1px solid var(--border);border-radius:.45rem}.language-tabs a[aria-current=page]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}</style>";
+    html.replacen("</head>", &format!("{style}</head>"), 1)
+        .replacen("<body>", &format!("<body>{navigation}"), 1)
+}
+
+fn dependency_index_html(
+    project: &Path,
+    runs: &[LanguageDependencyRun],
+    unavailable: &[UnavailableDependencyLanguage],
+    pages: &[(String, String)],
+) -> String {
+    let mut cards = String::new();
+    for (run, (_, filename)) in runs.iter().zip(pages) {
+        cards.push_str(&format!(
+            "<a class=\"card\" href=\"{}\"><h2>{}</h2><p>{} nodes · {} relations · {} cycles</p><p>Resolution: {} exact, {} inferred, {} context-dependent, {} unresolved</p></a>",
+            html_escape(filename),
+            html_escape(&run.language),
+            run.graph.nodes.len(),
+            run.graph.relations.len(),
+            run.graph.cycles.len(),
+            run.graph.coverage.exact_references,
+            run.graph.coverage.inferred_references,
+            run.graph.coverage.context_dependent_references,
+            run.graph.coverage.unresolved_references
+        ));
+    }
+    for language in unavailable {
+        cards.push_str(&format!(
+            "<div class=\"card unavailable\"><h2>{}</h2><p>Dependency resolver not installed.</p></div>",
+            html_escape(&language.language)
+        ));
+    }
+    let repository_name = project
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("repository");
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Codegraide Dependency Report</title><style>:root{{color-scheme:light dark;font-family:system-ui,sans-serif}}body{{margin:0;background:#f6f7fb;color:#18202b}}main{{max-width:960px;margin:auto;padding:2rem}}.tabs{{display:flex;gap:.5rem;margin:1rem 0 2rem}}.tabs a{{padding:.5rem .75rem;border:1px solid #cfd6e2;border-radius:.5rem;text-decoration:none;color:inherit}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem}}.card{{display:block;padding:1rem 1.2rem;background:white;border:1px solid #d9dee7;border-radius:.8rem;color:inherit;text-decoration:none;box-shadow:0 8px 24px #18202b12}}.card h2{{text-transform:uppercase;font-size:1rem}}.unavailable{{opacity:.7}}@media(prefers-color-scheme:dark){{body{{background:#11151c;color:#edf1f7}}.card{{background:#181e27;border-color:#303947}}}}</style></head><body><main><h1>Codegraide Dependency Report</h1><p>Repository: <strong>{}</strong>. Each language graph is isolated and loads in its own page.</p><nav class=\"tabs\">{}</nav><section class=\"grid\">{cards}</section></main></body></html>",
+        html_escape(repository_name),
+        pages
+            .iter()
+            .map(|(language, file)| format!(
+                "<a href=\"{}\">{}</a>",
+                html_escape(file),
+                html_escape(language)
+            ))
+            .collect::<String>()
+    )
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn open_in_default_browser(path: &Path) -> io::Result<()> {
@@ -1028,71 +1505,96 @@ fn open_in_default_browser(path: &Path) -> io::Result<()> {
     }
 }
 
-fn print_dependency_summary(
+fn print_dependency_bundle_summary(
     path: &Path,
-    resolution: &codegraide_analyzer_python::PythonDependencyResolution,
-    graph: &DependencyGraphAnalysis,
-    view: &DependencyGraphView,
-    exclusions: DependencyGraphInputExclusions,
-    top: Option<usize>,
+    runs: &[LanguageDependencyRun],
+    unavailable: &[UnavailableDependencyLanguage],
+    request: &DependencyRequest<'_>,
 ) {
     println!("Dependency project: {}", path.display());
     println!(
-        "Package roots: {}",
-        resolution
-            .package_roots
-            .iter()
-            .map(|root| root.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
+        "Dependency languages: {}",
+        if runs.is_empty() {
+            "none".to_owned()
+        } else {
+            runs.iter()
+                .map(|run| run.language.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
     );
-    match &resolution.environment {
-        Some(environment) => println!(
-            "Python environment: {} {} ({}, packages={})\n  executable: {}",
-            environment.implementation,
-            environment.version,
-            environment.selection_kind,
-            environment.distribution_count,
-            environment.executable.display()
-        ),
-        None => println!("Python environment: not selected (external imports remain unresolved)"),
+    for language in unavailable {
+        println!(
+            "Unavailable language: {} ({})",
+            language.language, language.status
+        );
     }
+    for run in runs {
+        println!(
+            "\n{} dependencies [{} {}]:",
+            run.language.to_uppercase(),
+            run.resolver.id,
+            run.resolver.version
+        );
+        for line in &run.summary_lines {
+            println!("  {line}");
+        }
+        if let Some(result) = &run.query {
+            print_dependency_query(result);
+            continue;
+        }
+        print_dependency_language_summary(run, request.exclusions, request.top);
+    }
+}
+
+fn print_dependency_language_summary(
+    run: &LanguageDependencyRun,
+    exclusions: DependencyGraphInputExclusions,
+    top: Option<usize>,
+) {
+    let graph = &run.graph;
+    let view = &run.view;
     println!(
-        "Resolution coverage: total={} exact={} ambiguous={} unresolved={}",
+        "  Resolution coverage: total={} exact={} inferred={} ambiguous={} context-dependent={} unresolved={}",
         graph.coverage.total_references,
         graph.coverage.exact_references,
+        graph.coverage.inferred_references,
         graph.coverage.ambiguous_references,
+        graph.coverage.context_dependent_references,
         graph.coverage.unresolved_references
     );
     let contexts = graph
         .relations
         .iter()
-        .flat_map(|relation| {
-            relation
-                .evidence
-                .iter()
-                .map(|evidence| evidence.reference.context)
+        .flat_map(|relation| relation.evidence.iter())
+        .filter_map(|evidence| {
+            evidence
+                .reference
+                .as_import()
+                .map(|reference| reference.context)
         })
         .collect::<Vec<_>>();
-    println!(
-        "Import contexts: type-only={} optional={} callable-local={} conditional={}",
-        contexts
-            .iter()
-            .filter(|context| context.usage.as_str() == "type-checking-only")
-            .count(),
-        contexts
-            .iter()
-            .filter(|context| context.requirement.as_str() == "optional")
-            .count(),
-        contexts
-            .iter()
-            .filter(|context| context.scope.as_str() == "callable")
-            .count(),
-        contexts
-            .iter()
-            .filter(|context| context.conditional)
-            .count()
-    );
+    if !contexts.is_empty() {
+        println!(
+            "  Import contexts: type-only={} optional={} callable-local={} conditional={}",
+            contexts
+                .iter()
+                .filter(|context| context.usage.as_str() == "type-checking-only")
+                .count(),
+            contexts
+                .iter()
+                .filter(|context| context.requirement.as_str() == "optional")
+                .count(),
+            contexts
+                .iter()
+                .filter(|context| context.scope.as_str() == "callable")
+                .count(),
+            contexts
+                .iter()
+                .filter(|context| context.conditional)
+                .count()
+        );
+    }
     let mut excluded = Vec::new();
     if exclusions.type_only {
         excluded.push("type-only");
@@ -1107,7 +1609,7 @@ fn print_dependency_summary(
         excluded.push("conditional");
     }
     println!(
-        "Graph input exclusions: {}",
+        "  Graph input exclusions: {}",
         if excluded.is_empty() {
             "none".to_owned()
         } else {
@@ -1115,7 +1617,7 @@ fn print_dependency_summary(
         }
     );
     println!(
-        "Graph: nodes={} relations={} cycles={} | view: nodes={} relations={}",
+        "  Graph: nodes={} relations={} cycles={} | view: nodes={} relations={}",
         graph.nodes.len(),
         graph.relations.len(),
         graph.cycles.len(),
@@ -1123,8 +1625,22 @@ fn print_dependency_summary(
         view.relations.len()
     );
     let limit = top.unwrap_or(10);
-    print_dependency_ranking("Highest fan-in", view, limit, true);
-    print_dependency_ranking("Highest fan-out", view, limit, false);
+    if graph.coverage.inferred_references > 0 {
+        print_local_structural_ranking(
+            "Highest local fan-in (exact + inferred)",
+            view,
+            limit,
+            true,
+        );
+        print_local_structural_ranking(
+            "Highest local fan-out (exact + inferred)",
+            view,
+            limit,
+            false,
+        );
+    }
+    print_dependency_ranking("Highest exact fan-in", view, limit, true);
+    print_dependency_ranking("Highest exact fan-out", view, limit, false);
     println!("\nCycles:");
     let visible = view
         .nodes
@@ -1157,7 +1673,7 @@ fn print_dependency_summary(
             println!("    recommended cuts (approximate):");
             for relation in explanation.recommended_cuts {
                 println!(
-                    "      {} -> {} ({} import {})",
+                    "      {} -> {} ({} reference {})",
                     dependency_node_name(&relation.source),
                     dependency_node_name(&relation.target),
                     relation.evidence.len(),
@@ -1168,20 +1684,34 @@ fn print_dependency_summary(
                     }
                 );
                 for evidence in relation.evidence {
-                    println!(
-                        "        {}:{}:{} [{}; {}; {}{}]",
-                        evidence.source_path.display(),
-                        evidence.reference.span.start.line,
-                        evidence.reference.span.start.column,
-                        evidence.reference.context.scope.as_str(),
-                        evidence.reference.context.usage.as_str(),
-                        evidence.reference.context.requirement.as_str(),
-                        if evidence.reference.context.conditional {
-                            "; conditional"
-                        } else {
-                            ""
-                        }
-                    );
+                    match &evidence.reference {
+                        codegraide_core::DependencyReference::Import(reference) => println!(
+                            "        {}:{}:{} [{}; {}; {}{}]",
+                            evidence.source_path.display(),
+                            reference.span.start.line,
+                            reference.span.start.column,
+                            reference.context.scope.as_str(),
+                            reference.context.usage.as_str(),
+                            reference.context.requirement.as_str(),
+                            if reference.context.conditional {
+                                "; conditional"
+                            } else {
+                                ""
+                            }
+                        ),
+                        codegraide_core::DependencyReference::Include(reference) => println!(
+                            "        {}:{}:{} [{}{}]",
+                            evidence.source_path.display(),
+                            reference.span.start.line,
+                            reference.span.start.column,
+                            reference.delimiter.as_str(),
+                            if reference.conditional {
+                                "; conditional"
+                            } else {
+                                ""
+                            }
+                        ),
+                    }
                 }
             }
         }
@@ -1196,7 +1726,14 @@ fn print_dependency_summary(
         .iter()
         .filter(|node| node.node.kind() == DependencyNodeKind::Ambiguous)
         .count();
-    println!("\nInvestigation nodes: ambiguous={ambiguous} unresolved={unresolved}");
+    let context_dependent = view
+        .nodes
+        .iter()
+        .filter(|node| node.node.kind() == DependencyNodeKind::ContextDependent)
+        .count();
+    println!(
+        "\nInvestigation nodes: ambiguous={ambiguous} context-dependent={context_dependent} unresolved={unresolved}"
+    );
 }
 
 fn print_dependency_ranking(heading: &str, view: &DependencyGraphView, limit: usize, fan_in: bool) {
@@ -1204,6 +1741,7 @@ fn print_dependency_ranking(heading: &str, view: &DependencyGraphView, limit: us
         .nodes
         .iter()
         .filter(|node| node.node.kind() == DependencyNodeKind::LocalModule)
+        .filter(|node| if fan_in { node.fan_in } else { node.fan_out } > 0)
         .collect::<Vec<_>>();
     nodes.sort_by(|left, right| {
         let left_value = if fan_in { left.fan_in } else { left.fan_out };
@@ -1219,6 +1757,45 @@ fn print_dependency_ranking(heading: &str, view: &DependencyGraphView, limit: us
         for node in nodes.into_iter().take(limit) {
             let value = if fan_in { node.fan_in } else { node.fan_out };
             println!("  {value:>4}  {}", dependency_node_name(&node.node));
+        }
+    }
+}
+
+fn print_local_structural_ranking(
+    heading: &str,
+    view: &DependencyGraphView,
+    limit: usize,
+    fan_in: bool,
+) {
+    let mut counts = BTreeMap::<DependencyNode, usize>::new();
+    for relation in &view.relations {
+        if !matches!(
+            relation.kind,
+            DependencyRelationKind::Exact | DependencyRelationKind::Inferred
+        ) || relation.source.kind() != DependencyNodeKind::LocalModule
+            || relation.target.kind() != DependencyNodeKind::LocalModule
+        {
+            continue;
+        }
+        let node = if fan_in {
+            &relation.target
+        } else {
+            &relation.source
+        };
+        *counts.entry(node.clone()).or_default() += 1;
+    }
+    let mut counts = counts.into_iter().collect::<Vec<_>>();
+    counts.sort_by(|(left_node, left_count), (right_node, right_count)| {
+        right_count
+            .cmp(left_count)
+            .then_with(|| dependency_node_name(left_node).cmp(&dependency_node_name(right_node)))
+    });
+    println!("\n{heading}:");
+    if counts.is_empty() {
+        println!("  (none)");
+    } else {
+        for (node, count) in counts.into_iter().take(limit) {
+            println!("  {count:>4}  {}", dependency_node_name(&node));
         }
     }
 }
@@ -1239,14 +1816,21 @@ fn dependency_node_name(node: &DependencyNode) -> String {
                 .map(|version| format!("=={version}"))
                 .unwrap_or_default()
         ),
+        DependencyNode::SystemHeader { name, .. } | DependencyNode::ExternalHeader { name, .. } => {
+            name.clone()
+        }
         DependencyNode::Ambiguous { requested, .. }
-        | DependencyNode::Unresolved { requested, .. } => requested.clone(),
+        | DependencyNode::Unresolved { requested, .. }
+        | DependencyNode::ContextDependent { requested, .. } => requested.clone(),
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct CallRequest<'a> {
     path: &'a Path,
+    language: Option<CallLanguageArgument>,
+    compile_commands: Option<&'a Path>,
+    architecture: Option<&'a Path>,
     python: Option<&'a Path>,
     venv: Option<&'a Path>,
     focus: &'a [String],
@@ -1259,6 +1843,7 @@ struct CallRequest<'a> {
     output: Option<&'a Path>,
     open: bool,
     include_source: bool,
+    max_expansion_depth: Option<u8>,
 }
 
 fn run_calls(request: &CallRequest<'_>) -> ExitCode {
@@ -1272,6 +1857,12 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
     }
     if request.include_source && request.format != CallOutputFormat::Html {
         eprintln!("error: --include-source requires --format html");
+        return ExitCode::FAILURE;
+    }
+    if request.max_expansion_depth.is_some()
+        && (!request.include_source || request.format != CallOutputFormat::Html)
+    {
+        eprintln!("error: --max-expansion-depth requires --include-source and --format html");
         return ExitCode::FAILURE;
     }
     if !request.path.is_dir() {
@@ -1303,24 +1894,125 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let environment = request
-        .python
-        .map(|path| PythonEnvironmentSelection::Interpreter(path.to_path_buf()))
-        .or_else(|| {
-            request
-                .venv
-                .map(|path| PythonEnvironmentSelection::VirtualEnvironment(path.to_path_buf()))
-        });
-    let dependencies =
-        match resolve_python_dependencies(&analysis, &PythonResolutionOptions { environment }) {
-            Ok(resolution) => resolution,
-            Err(error) => {
-                eprintln!("error: could not resolve Python imports for call analysis: {error}");
+    let present_languages = analysis
+        .analyzers
+        .iter()
+        .filter(|run| {
+            !run.files.is_empty()
+                && run
+                    .descriptor
+                    .capabilities
+                    .contains(&AnalyzerCapability::CallReferences)
+        })
+        .map(|run| run.descriptor.language.as_str())
+        .collect::<BTreeSet<_>>();
+    let language = match request.language {
+        Some(language) if present_languages.contains(language.as_str()) => language,
+        Some(language) => {
+            eprintln!(
+                "error: no {} files with call analysis support were found",
+                language.as_str()
+            );
+            return ExitCode::FAILURE;
+        }
+        None if present_languages.len() == 1 => {
+            if present_languages.contains("cpp") {
+                CallLanguageArgument::Cpp
+            } else {
+                CallLanguageArgument::Python
+            }
+        }
+        None if present_languages.len() > 1 => {
+            eprintln!(
+                "error: call analysis found Python and C++; select --language python or --language cpp"
+            );
+            return ExitCode::FAILURE;
+        }
+        None => {
+            eprintln!("error: no files with call analysis support were found");
+            return ExitCode::FAILURE;
+        }
+    };
+    if language == CallLanguageArgument::Cpp && (request.python.is_some() || request.venv.is_some())
+    {
+        eprintln!("error: --python and --venv apply only to --language python");
+        return ExitCode::FAILURE;
+    }
+    if language == CallLanguageArgument::Python
+        && (request.compile_commands.is_some() || request.architecture.is_some())
+    {
+        eprintln!("error: --compile-commands and --architecture apply only to --language cpp");
+        return ExitCode::FAILURE;
+    }
+    let (symbols, resolutions, diagnostics, language_modules) = match language {
+        CallLanguageArgument::Python => {
+            let environment = request
+                .python
+                .map(|path| PythonEnvironmentSelection::Interpreter(path.to_path_buf()))
+                .or_else(|| {
+                    request.venv.map(|path| {
+                        PythonEnvironmentSelection::VirtualEnvironment(path.to_path_buf())
+                    })
+                });
+            let dependencies = match resolve_python_dependencies(
+                &analysis,
+                &PythonResolutionOptions { environment },
+            ) {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    eprintln!("error: could not resolve Python imports for call analysis: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let resolution = resolve_python_calls(&analysis, &dependencies);
+            let diagnostics: Vec<String> = dependencies
+                .diagnostics
+                .iter()
+                .chain(resolution.diagnostics.iter())
+                .cloned()
+                .collect();
+            (
+                resolution.symbols,
+                resolution.resolutions,
+                diagnostics,
+                Vec::new(),
+            )
+        }
+        CallLanguageArgument::Cpp => {
+            let dependencies = match resolve_cpp_dependencies(
+                &analysis,
+                &CppResolutionOptions {
+                    compilation_database: request.compile_commands.map(Path::to_path_buf),
+                },
+            ) {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    eprintln!("error: could not resolve C++ includes for call analysis: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut resolution = resolve_cpp_calls(&analysis, &dependencies);
+            if let Some(path) = request.architecture
+                && let Err(error) = apply_architecture_to_resolution(path, &mut resolution)
+            {
+                eprintln!("error: {error}");
                 return ExitCode::FAILURE;
             }
-        };
-    let resolution = resolve_python_calls(&analysis, &dependencies);
-    let graph = analyze_call_graph(&resolution.symbols, &resolution.resolutions);
+            let diagnostics: Vec<String> = dependencies
+                .diagnostics
+                .iter()
+                .chain(resolution.diagnostics.iter())
+                .cloned()
+                .collect();
+            (
+                resolution.symbols,
+                resolution.resolutions,
+                diagnostics,
+                resolution.modules,
+            )
+        }
+    };
+    let graph = analyze_call_graph_with_modules(&symbols, &resolutions, language_modules);
     let filter = CallGraphFilter {
         focus_symbols: request.focus.to_vec(),
         direction: request
@@ -1339,11 +2031,7 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    for diagnostic in dependencies
-        .diagnostics
-        .iter()
-        .chain(resolution.diagnostics.iter())
-    {
+    for diagnostic in &diagnostics {
         eprintln!("warning: {diagnostic}");
     }
     if matches!(
@@ -1362,7 +2050,11 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             ExitCode::SUCCESS
         }
         CallOutputFormat::Json => {
-            match serde_json::to_string_pretty(&CallJsonReport::from_analysis(&graph, &view)) {
+            match serde_json::to_string_pretty(&CallJsonReport::from_analysis_for_language(
+                language.as_str(),
+                &graph,
+                &view,
+            )) {
                 Ok(json) => {
                     println!("{json}");
                     ExitCode::SUCCESS
@@ -1385,6 +2077,7 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             &view,
             request.path,
             request.include_source,
+            request.max_expansion_depth.unwrap_or(3),
             request.output,
             request.open,
         ),
@@ -1394,12 +2087,14 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
 fn print_call_summary(path: &Path, graph: &CallGraphAnalysis, view: &CallGraphView) {
     println!("Call project: {}", path.display());
     println!(
-        "Resolution coverage: total={} exact={} external={} ambiguous={} unresolved={}",
+        "Resolution coverage: total={} exact={} inferred={} external={} ambiguous={} unresolved={} unavailable={}",
         graph.coverage.total_calls,
         graph.coverage.exact_calls,
+        graph.coverage.inferred_calls,
         graph.coverage.external_calls,
         graph.coverage.ambiguous_calls,
-        graph.coverage.unresolved_calls
+        graph.coverage.unresolved_calls,
+        graph.coverage.unavailable_calls
     );
     println!(
         "Graph: nodes={} calls={} recursive-groups={} | view: nodes={} calls={}",
@@ -1459,11 +2154,13 @@ fn emit_call_html(
     view: &CallGraphView,
     project_root: &Path,
     include_source: bool,
+    max_expansion_depth: u8,
     output: Option<&Path>,
     open: bool,
 ) -> ExitCode {
     let html = match include_source {
-        true => render_call_html_with_source(view, project_root).map_err(|error| error.to_string()),
+        true => render_call_html_with_source(view, project_root, max_expansion_depth)
+            .map_err(|error| error.to_string()),
         false => render_call_html(view).map_err(|error| error.to_string()),
     };
     let html = match html {
@@ -1597,13 +2294,13 @@ fn documentation_review_status(analysis: &RepositoryAnalysis) -> ReviewStatus {
 fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: usize) {
     let coverage = &analysis.documentation_coverage;
     println!("Documentation target: {}", path.display());
-    println!("Status: {}", coverage.status.as_str());
+    println!("Status: {}.", human_documentation_status(coverage.status));
     println!(
-        "Files: applicable={} skipped_tests={} unsupported={}",
+        "Files: applicable: {}, skipped tests: {}, unsupported: {}.",
         coverage.applicable_files, coverage.skipped_test_files, coverage.unsupported_selected_files
     );
     println!(
-        "Coverage: documented={}/{} missing={} unavailable={} ({})",
+        "Coverage: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}.",
         coverage.counts.documented,
         coverage.counts.measured(),
         coverage.counts.missing,
@@ -1616,7 +2313,7 @@ fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: 
     } else {
         for (kind, counts) in &coverage.by_kind {
             println!(
-                "  {}: documented={}/{} missing={} unavailable={} ({})",
+                "  {}: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}",
                 kind.as_str(),
                 counts.documented,
                 counts.measured(),
@@ -1632,7 +2329,7 @@ fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: 
     } else {
         for file in &coverage.files {
             println!(
-                "  {}: documented={}/{} missing={} unavailable={} ({})",
+                "  {}: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}",
                 file.path.display(),
                 file.counts.documented,
                 file.counts.measured(),
@@ -1915,9 +2612,12 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         "Selected files: {}",
         analysis.selection.selected_files.len()
     );
-    println!("Review status: {}", analysis.review.status.as_str());
     println!(
-        "Review coverage: measured={}/{} unavailable={} unsupported-files={}",
+        "Review status: {}",
+        human_review_status(analysis.review.status)
+    );
+    println!(
+        "Review coverage: Measured callables: {}/{}, unavailable callables: {}, unsupported files: {}.",
         analysis.review.coverage.measured_callables,
         analysis.review.coverage.eligible_callables,
         analysis.review.coverage.unavailable_callables,
@@ -1925,8 +2625,8 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
     );
     let documentation = &analysis.documentation_coverage;
     println!(
-        "Documentation coverage: status={} files={} skipped-tests={} documented={}/{} missing={} unavailable={} ({})",
-        documentation.status.as_str(),
+        "Documentation coverage: {}. Applicable files: {}, skipped test files: {}, documented: {}/{}, missing: {}, unavailable: {}, coverage: {}.",
+        human_documentation_status(documentation.status),
         documentation.applicable_files,
         documentation.skipped_test_files,
         documentation.counts.documented,
@@ -1935,7 +2635,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         documentation.counts.unavailable,
         format_documentation_percentage(documentation.counts.coverage_basis_points())
     );
-    println!("\nInventory languages:");
+    println!("\nLanguages:");
     if analysis.inventory_languages.is_empty() {
         println!("  (none)");
     } else {
@@ -1954,7 +2654,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
     }
     for run in &analysis.analyzers {
         println!(
-            "  {} [{}]: analyzed={} successful={} partial={} failed={}",
+            "  {} [{}]: analyzed: {}, successful: {}, partial: {}, failed: {}",
             run.descriptor.language.as_str(),
             run.descriptor.id,
             run.counts.analyzed,
@@ -1962,41 +2662,35 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             run.counts.partial,
             run.counts.failed
         );
-        for file in &run.files {
-            if !file.diagnostics.is_empty() {
-                println!(
-                    "    diagnostics: {} ({})",
-                    file.path.display(),
-                    file.diagnostics.len()
-                );
-            }
-        }
+        print_diagnostic_summary(run);
         let symbol_counts = run
             .files
             .iter()
             .flat_map(|file| file.facts.symbols.iter())
-            .fold([0usize; 5], |mut counts, symbol| {
-                match symbol.kind {
-                    codegraide_core::SymbolKind::Module => counts[0] += 1,
-                    codegraide_core::SymbolKind::Class => counts[1] += 1,
-                    codegraide_core::SymbolKind::Function => counts[2] += 1,
-                    codegraide_core::SymbolKind::Method => counts[3] += 1,
-                    codegraide_core::SymbolKind::Lambda => counts[4] += 1,
-                }
+            .fold(BTreeMap::<&str, usize>::new(), |mut counts, symbol| {
+                *counts.entry(symbol.kind.as_str()).or_default() += 1;
                 counts
             });
-        let import_count = run
+        let dependency_counts = run
             .files
             .iter()
-            .map(|file| file.facts.dependencies.len())
-            .sum::<usize>();
+            .flat_map(|file| file.facts.dependencies.iter())
+            .fold(BTreeMap::<&str, usize>::new(), |mut counts, dependency| {
+                *counts.entry(dependency.kind().as_str()).or_default() += 1;
+                counts
+            });
+        let facts = symbol_counts
+            .into_iter()
+            .chain(dependency_counts)
+            .map(|(kind, count)| format!("{}: {count}", fact_count_label(kind)))
+            .collect::<Vec<_>>();
         println!(
-            "    facts: modules={} classes={} functions={} methods={} lambdas={} imports={import_count}",
-            symbol_counts[0],
-            symbol_counts[1],
-            symbol_counts[2],
-            symbol_counts[3],
-            symbol_counts[4]
+            "    facts: {}",
+            if facts.is_empty() {
+                "(none)".to_owned()
+            } else {
+                facts.join(", ")
+            }
         );
         let explicit_export_counts =
             run.files
@@ -2015,7 +2709,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
                 });
         if explicit_export_counts.0.iter().sum::<usize>() > 0 {
             println!(
-                "    explicit exports: complete={} partial={} unavailable={} not-declared={} names={}",
+                "    explicit exports: complete: {}, partial: {}, unavailable: {}, not declared: {}, names: {}",
                 explicit_export_counts.0[1],
                 explicit_export_counts.0[2],
                 explicit_export_counts.0[3],
@@ -2025,13 +2719,17 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         }
         print_top_measurements(
             run,
-            "function-declaration-physical-lines",
+            MeasurementConcept::DeclarationPhysicalLines,
             "longest declarations",
         );
-        print_top_measurements(run, "python-max-control-flow-nesting", "deepest nesting");
         print_top_measurements(
             run,
-            "python-cyclomatic-complexity",
+            MeasurementConcept::MaxControlFlowNesting,
+            "deepest nesting",
+        );
+        print_top_measurements(
+            run,
+            MeasurementConcept::CyclomaticComplexity,
             "highest cyclomatic complexity",
         );
     }
@@ -2043,13 +2741,7 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "repository".to_owned());
-            println!(
-                "  {} {} {}: {}",
-                finding.risk.as_str(),
-                finding.required_action.as_str(),
-                location,
-                finding.message
-            );
+            println!("  {}", human_review_finding(finding, &location));
         }
     }
     for diagnostic in &analysis.diagnostics {
@@ -2062,7 +2754,133 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
     }
 }
 
-fn print_top_measurements(run: &codegraide_core::AnalyzerRun, metric_id: &str, label: &str) {
+fn print_diagnostic_summary(run: &codegraide_core::AnalyzerRun) {
+    let mut total = 0usize;
+    let mut file_counts = BTreeMap::<PathBuf, usize>::new();
+    let mut groups = BTreeMap::<(String, String, String), (usize, BTreeSet<PathBuf>)>::new();
+    for file in &run.files {
+        if file.diagnostics.is_empty() {
+            continue;
+        }
+        total += file.diagnostics.len();
+        file_counts.insert(file.path.clone(), file.diagnostics.len());
+        for diagnostic in &file.diagnostics {
+            let group = groups
+                .entry((
+                    diagnostic.severity.as_str().to_owned(),
+                    diagnostic.code.clone(),
+                    diagnostic.message.clone(),
+                ))
+                .or_default();
+            group.0 += 1;
+            group.1.insert(file.path.clone());
+        }
+    }
+    if total == 0 {
+        return;
+    }
+
+    println!(
+        "    diagnostics: {total} total across {} {}",
+        file_counts.len(),
+        file_word(file_counts.len())
+    );
+    let mut ranked_groups = groups.into_iter().collect::<Vec<_>>();
+    ranked_groups
+        .sort_by(|left, right| right.1.0.cmp(&left.1.0).then_with(|| left.0.cmp(&right.0)));
+    for ((severity, code, message), (count, paths)) in ranked_groups.iter().take(5) {
+        println!(
+            "      {severity}[{code}]: {count} in {} {} — {message}",
+            paths.len(),
+            file_word(paths.len())
+        );
+    }
+    if ranked_groups.len() > 5 {
+        println!(
+            "      ... {} more diagnostic groups",
+            ranked_groups.len() - 5
+        );
+    }
+
+    let mut ranked_files = file_counts.into_iter().collect::<Vec<_>>();
+    ranked_files.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    println!("      files with the most diagnostics:");
+    for (path, count) in ranked_files.iter().take(5) {
+        println!("        {}: {count}", path.display());
+    }
+    if ranked_files.len() > 5 {
+        println!("        ... {} more files", ranked_files.len() - 5);
+    }
+    println!("      Full details: use --diagnostics [FILE].");
+}
+
+fn file_word(count: usize) -> &'static str {
+    if count == 1 { "file" } else { "files" }
+}
+
+fn human_review_status(status: ReviewStatus) -> &'static str {
+    match status {
+        ReviewStatus::Pass => "Passed.",
+        ReviewStatus::HumanReviewRequired => "Human review required.",
+        ReviewStatus::Blocked => "Blocked.",
+    }
+}
+
+fn human_documentation_status(
+    status: codegraide_core::DocumentationCoverageStatus,
+) -> &'static str {
+    match status {
+        codegraide_core::DocumentationCoverageStatus::Disabled => "Disabled",
+        codegraide_core::DocumentationCoverageStatus::NotApplicable => "Not applicable",
+        codegraide_core::DocumentationCoverageStatus::Complete => "Complete",
+        codegraide_core::DocumentationCoverageStatus::Partial => "Partial",
+    }
+}
+
+fn human_review_finding(finding: &codegraide_core::ReviewFinding, location: &str) -> String {
+    let action = match finding.required_action {
+        codegraide_core::RequiredAction::None => "No action required",
+        codegraide_core::RequiredAction::HumanReview => "Human review required",
+        codegraide_core::RequiredAction::Block => "Blocked",
+    };
+    let risk = match finding.risk {
+        codegraide_core::RiskLevel::Low => "low risk",
+        codegraide_core::RiskLevel::Moderate => "moderate risk",
+        codegraide_core::RiskLevel::High => "high risk",
+        codegraide_core::RiskLevel::Critical => "critical risk",
+        codegraide_core::RiskLevel::Unknown => "unknown risk",
+    };
+    format!("{action} for {location} ({risk}): {}", finding.message)
+}
+
+fn fact_count_label(kind: &str) -> &str {
+    match kind {
+        "class" => "classes",
+        "function" => "functions",
+        "import" => "imports",
+        "include" => "includes",
+        "lambda" => "lambdas",
+        "method" => "methods",
+        "module" => "modules",
+        "namespace" => "namespaces",
+        "struct" => "structs",
+        _ => kind,
+    }
+}
+
+fn print_top_measurements(
+    run: &codegraide_core::AnalyzerRun,
+    concept: MeasurementConcept,
+    label: &str,
+) {
+    let Some(metric) = run
+        .descriptor
+        .measurements
+        .iter()
+        .find(|metric| metric.concept == concept)
+    else {
+        return;
+    };
     let mut values = run
         .files
         .iter()
@@ -2079,7 +2897,7 @@ fn print_top_measurements(run: &codegraide_core::AnalyzerRun, metric_id: &str, l
                 let value = symbol
                     .measurements
                     .iter()
-                    .find(|measurement| measurement.id == metric_id)
+                    .find(|measurement| measurement.id == metric.id)
                     .and_then(|measurement| measurement.value)?;
                 Some((value, file.path.clone(), symbol.qualified_name.clone()))
             })
@@ -2217,15 +3035,27 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
                 }
             }
             for dependency in &file.facts.dependencies {
-                println!(
-                    "    import {}{}",
-                    dependency.module.as_deref().unwrap_or("."),
-                    dependency
-                        .imported_name
-                        .as_ref()
-                        .map(|name| format!("::{name}"))
-                        .unwrap_or_default()
-                );
+                match dependency {
+                    codegraide_core::DependencyReference::Import(dependency) => println!(
+                        "    import {}{}",
+                        dependency.module.as_deref().unwrap_or("."),
+                        dependency
+                            .imported_name
+                            .as_ref()
+                            .map(|name| format!("::{name}"))
+                            .unwrap_or_default()
+                    ),
+                    codegraide_core::DependencyReference::Include(dependency) => println!(
+                        "    include {} [{}{}]",
+                        dependency.target,
+                        dependency.delimiter.as_str(),
+                        if dependency.conditional {
+                            "; conditional"
+                        } else {
+                            ""
+                        }
+                    ),
+                }
             }
             if let Some(exports) = &file.facts.explicit_exports {
                 println!("    explicit exports [{}]", exports.status.as_str());
@@ -2331,18 +3161,18 @@ fn print_summary(path: &Path, inventory: &RepositoryInventory) {
     println!("\nCategories:");
     for category in FileCategory::ALL {
         println!(
-            "  {:<16} {}",
+            "  {}: {}",
             category.as_str(),
             inventory.category_count(category)
         );
     }
 
-    println!("\nRecognized languages:");
+    println!("\nLanguages:");
     if inventory.files_by_language.is_empty() {
         println!("  (none)");
     } else {
         for (language, count) in &inventory.files_by_language {
-            println!("  {:<16} {count}", language.as_str());
+            println!("  {}: {count}", language.as_str());
         }
     }
 
@@ -2356,7 +3186,7 @@ fn print_summary(path: &Path, inventory: &RepositoryInventory) {
         println!("  By language:");
         for (language, counts) in &inventory.line_counts.by_language {
             println!(
-                "    {:<12} files={} source={} comment={} blank={}",
+                "    {}: files: {}, source: {}, comment: {}, blank: {}",
                 language.as_str(),
                 counts.files,
                 counts.source,
@@ -2371,7 +3201,7 @@ fn print_summary(path: &Path, inventory: &RepositoryInventory) {
         println!("  (none)");
     } else {
         for (extension, count) in &inventory.uncategorized_files_by_extension {
-            println!("  {:<16} {count}", extension.as_str());
+            println!("  {}: {count}", extension.as_str());
         }
     }
 
@@ -2491,5 +3321,12 @@ mod tests {
             [FileListSelection::Source, FileListSelection::Uncategorized]
         );
         assert_eq!(format, InventoryOutputFormat::Terminal);
+    }
+
+    #[test]
+    fn dependency_language_slugs_are_deterministic_and_filesystem_safe() {
+        assert_eq!(language_slug("C++"), "c--");
+        assert_eq!(language_slug("Objective C"), "objective-c");
+        assert_eq!(language_slug(""), "language");
     }
 }

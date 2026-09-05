@@ -1,0 +1,40 @@
+{
+  "architecture_schema_version": "0.1.0",
+  "groups": [
+    {
+      "id": "parsing-core",
+      "name": "Parsing Core",
+      "path_globs": [],
+      "symbol_regexes": ["^argparse::ArgumentParser::(?:parse_args_internal|parse_known_args_internal|parse_known_args)$"],
+      "module_regexes": []
+    },
+    {
+      "id": "api",
+      "name": "Public API",
+      "path_globs": ["include/argparse/**"],
+      "symbol_regexes": ["^argparse::(?:Argument|ArgumentParser)(?:::.+)?$"],
+      "module_regexes": []
+    },
+    {
+      "id": "module-facade",
+      "name": "C++20 Module Facade",
+      "path_globs": ["module/**"],
+      "symbol_regexes": [],
+      "module_regexes": ["^argparse(?::.+)?$"]
+    },
+    {
+      "id": "samples",
+      "name": "Samples",
+      "path_globs": ["samples/**"],
+      "symbol_regexes": [],
+      "module_regexes": []
+    },
+    {
+      "id": "tests",
+      "name": "Tests",
+      "path_globs": ["test/**"],
+      "symbol_regexes": [],
+      "module_regexes": []
+    }
+  ]
+}
