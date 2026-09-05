@@ -85,6 +85,7 @@ struct CallExplorerEvidence {
     line: usize,
     column: usize,
     expression: String,
+    callee: String,
     form: &'static str,
     arguments: Vec<String>,
 }
@@ -120,6 +121,7 @@ struct HtmlNode {
 #[derive(Debug, Clone, Serialize)]
 struct HtmlSource {
     start_line: usize,
+    start_column: usize,
     end_line: usize,
     lines: Vec<String>,
 }
@@ -713,6 +715,12 @@ fn call_explorer_relation(
                 line: evidence.reference.span.start.line,
                 column: evidence.reference.span.start.column,
                 expression: evidence.reference.expression.clone(),
+                callee: evidence
+                    .reference
+                    .components
+                    .last()
+                    .cloned()
+                    .unwrap_or_default(),
                 form: evidence.reference.form.as_str(),
                 arguments: evidence
                     .reference
@@ -776,6 +784,7 @@ fn source_for_span(source: &str, span: crate::SourceSpan) -> Option<HtmlSource> 
     }
     Some(HtmlSource {
         start_line: span.start.line,
+        start_column: span.start.column,
         end_line: span.start.line + lines.len() - 1,
         lines,
     })
