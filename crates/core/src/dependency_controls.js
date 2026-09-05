@@ -78,20 +78,17 @@
         element.addEventListener('pointerup',end);element.addEventListener('pointercancel',end);
       }
       function resizePanel(id,property,defaultWidth,sign){
-        const handle=field(id);let resizing=null;
+        const handle=field(id);
         function setWidth(value){const other=property==='--nav-width'?document.querySelector('.sidebar'):document.querySelector('.navigator');const max=Math.max(180,Math.min(600,workspace.clientWidth-other.getBoundingClientRect().width-360));const width=Math.max(180,Math.min(max,value));workspace.style.setProperty(property,width+'px');handle.setAttribute('aria-valuenow',width);handle.setAttribute('aria-valuemin','180');handle.setAttribute('aria-valuemax',max);fitGraph()}
-        handle.addEventListener('pointerdown',e=>{if(e.button!==0)return;resizing={x:e.clientX,width:handle.parentElement.getBoundingClientRect().width};handle.setPointerCapture(e.pointerId);e.preventDefault()});
-        handle.addEventListener('pointermove',e=>{if(resizing)setWidth(resizing.width+(e.clientX-resizing.x)*sign)});
-        handle.addEventListener('pointerup',()=>resizing=null);handle.addEventListener('pointercancel',()=>resizing=null);
-        handle.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','Home'].includes(e.key)){e.preventDefault();setWidth(e.key==='Home'?defaultWidth:handle.parentElement.getBoundingClientRect().width+(e.key==='ArrowRight'?20:-20)*sign)}});
+        ExplorerRuntime.bindResizer(handle,{read:()=>handle.parentElement.getBoundingClientRect().width,write:setWidth,initial:defaultWidth,sign,cancelInspection:()=>explorerInteractions.cancelInspection()});
       }
       field('back').onclick=()=>{const previous=state.history.pop();if(!previous)return;Object.assign(state,previous);state.selectedEdge=null;render();if(nodeById.has(state.inspected||state.selected))showNodeDetails(nodeById.get(state.inspected||state.selected));else showPlaceholder()};
       function updateTrace(){remember();state.direction=field('direction').value;state.depth=Math.max(0,Math.min(20,Number.parseInt(field('depth').value,10)||0));state.closure=field('closure').checked;if(state.selected)state.mode='neighborhood';render()}
-      field('depth-slider').oninput=e=>{field('depth').value=e.target.value;updateTrace()};field('depth').onchange=updateTrace;field('depth').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();updateTrace()}};field('direction').onchange=updateTrace;field('closure').onchange=updateTrace;
+      ExplorerRuntime.bindDepth(field('depth-slider'),field('depth'),updateTrace);field('direction').onchange=updateTrace;field('closure').onchange=updateTrace;
       field('top-down').onchange=e=>{state.topDown=e.target.checked;render()};
       field('reset-layout').onclick=()=>{state.offsets[state.topDown?'vertical':'horizontal'].clear();render()};
       field('path-form').onsubmit=e=>{e.preventDefault();const from=localNodes.find(n=>n.name===field('path-from').value),to=localNodes.find(n=>n.name===field('path-to').value);if(!from||!to){field('trace-message').textContent='Choose two exact file or module names from the suggestions.';return}remember();state.path=dependencyTools.path(data.nodes,data.relations,from.id,to.id);state.mode='path';state.selected=null;state.inspected=null;render();details.innerHTML=`<h2>Dependency path</h2><p>Exact project dependencies only. Display filters do not change this query.</p>${state.path?linkList(state.path.map(id=>nodeById.get(id))):'<p>No path found.</p>'}`;bindNodeLinks()};
-      for(const panel of ['nav','details'])field('toggle-'+panel).onclick=()=>{const hidden=workspace.classList.toggle('hide-'+panel);field('toggle-'+panel).textContent=(hidden?'Show ':'Hide ')+(panel==='nav'?'navigator':'details');field('toggle-'+panel).setAttribute('aria-pressed',String(!hidden));fitGraph()};
+      for(const panel of ['nav','details'])field('toggle-'+panel).onclick=()=>{const hidden=workspace.classList.toggle('hide-'+panel);ExplorerRuntime.paneToggle(field('toggle-'+panel),!hidden,panel==='nav'?'navigator':'details');fitGraph()};
       resizePanel('resize-nav','--nav-width',250,1);resizePanel('resize-details','--details-width',330,-1);
       document.querySelectorAll('[data-panel]').forEach(b=>b.onclick=()=>{state.navPanel=b.dataset.panel;document.querySelectorAll('[data-panel]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));for(const name of ['files','architecture','compare'])field('nav-'+name).hidden=name!==state.navPanel});
       search.addEventListener('input',()=>{fileLimit=100;refreshNavigator()});

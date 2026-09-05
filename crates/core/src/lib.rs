@@ -12,6 +12,7 @@ mod dependency_output;
 mod dependency_query;
 mod documentation;
 mod error;
+mod explorer_shell;
 mod graph;
 mod inventory;
 mod lines;
@@ -67,7 +68,8 @@ pub use dependency_hierarchy::{
     DependencyHierarchyGroup, DependencyHierarchyMember, build_dependency_hierarchy,
 };
 pub use dependency_html::{
-    CallHtmlSourceError, render_call_html, render_call_html_with_source, render_dependency_html,
+    CallHtmlSourceError, DependencyExplorerPresentation, render_call_html,
+    render_call_html_with_source, render_dependency_html, render_dependency_html_with_presentation,
     render_dependency_html_with_query,
 };
 pub use dependency_output::{

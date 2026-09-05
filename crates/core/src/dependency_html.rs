@@ -16,14 +16,11 @@ use crate::dependency_output::{DependencyGraphView, DependencyGraphViewNode};
 use crate::dependency_query::{DependencyGraphQuery, DependencyGraphQueryResult};
 use crate::graph::{DependencyNode, DependencyRelation};
 
-const VIEWER_TEMPLATE: &str = include_str!("dependency_viewer.html");
-const CALL_VIEWER_TEMPLATE: &str = include_str!("call_viewer.html");
-const GRAPH_DATA_MARKER: &str = "__CODEGRAIDE_GRAPH_DATA__";
+use crate::explorer_shell::{self, ExplorerView};
 
 #[derive(Debug, Serialize)]
 struct CallExplorerGraph {
     filtered_report: bool,
-    flow_definition: &'static str,
     max_expansion_depth: u8,
     initial_selection: Option<String>,
     nodes: Vec<CallExplorerNode>,
@@ -32,6 +29,7 @@ struct CallExplorerGraph {
 
 #[derive(Debug, Serialize)]
 struct CallExplorerNode {
+    language: String,
     call_flow: Option<crate::CallFlow>,
     id: String,
     name: String,
@@ -93,8 +91,51 @@ struct CallExplorerEvidence {
     arguments: Vec<String>,
 }
 
+/// Presentation hints supplied by a language's dependency adapter.
+/// These affect labels and default filters only, never graph truth.
+#[derive(Debug, Clone, Serialize)]
+pub struct DependencyExplorerPresentation {
+    pub language: String,
+    pub local_kind: String,
+    pub unit_label: String,
+    pub units_label: String,
+    pub group_label: String,
+    pub root_label: String,
+}
+
+impl DependencyExplorerPresentation {
+    pub fn new(language: impl Into<String>, unit_kind: &str) -> Self {
+        let (local_kind, unit, units, group, root) = match unit_kind {
+            "file" => (
+                "local-file",
+                "file",
+                "files",
+                "Directory",
+                "All directories",
+            ),
+            "module" => (
+                "local-module",
+                "module",
+                "modules",
+                "Package",
+                "All packages",
+            ),
+            _ => ("local-module", "unit", "units", "Group", "All groups"),
+        };
+        Self {
+            language: language.into(),
+            local_kind: local_kind.to_owned(),
+            unit_label: unit.to_owned(),
+            units_label: units.to_owned(),
+            group_label: group.to_owned(),
+            root_label: root.to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct HtmlGraph {
+    presentation: DependencyExplorerPresentation,
     filtered_report: bool,
     graph_kind: &'static str,
     nodes: Vec<HtmlNode>,
@@ -118,8 +159,6 @@ struct HtmlNode {
     unresolved_reason: Option<&'static str>,
     candidates: Vec<HtmlCandidate>,
     cyclic_component: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source: Option<HtmlSource>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -231,19 +270,61 @@ pub fn render_dependency_html_with_query(
     view: &DependencyGraphView,
     query: Option<&DependencyGraphQueryResult>,
 ) -> Result<String, serde_json::Error> {
+    let language = view
+        .nodes
+        .iter()
+        .find_map(|node| match &node.node {
+            DependencyNode::LocalModule(module) => Some(module.id.language().as_str()),
+            _ => None,
+        })
+        .unwrap_or("");
+    let unit_kind = match language {
+        "cpp" => "file",
+        "python" => "module",
+        _ => "unit",
+    };
+    render_dependency_html_with_presentation(
+        view,
+        query,
+        &DependencyExplorerPresentation::new(language, unit_kind),
+    )
+}
+
+/// Render one language page with explicit resolver-owned presentation hints.
+/// Keep each language in a separate file when composing a report bundle.
+pub fn render_dependency_html_with_presentation(
+    view: &DependencyGraphView,
+    query: Option<&DependencyGraphQueryResult>,
+    presentation: &DependencyExplorerPresentation,
+) -> Result<String, serde_json::Error> {
     let ids = view
         .nodes
         .iter()
         .map(|node| (node.node.clone(), node.id.clone()))
         .collect::<BTreeMap<_, _>>();
     let graph = HtmlGraph {
+        presentation: presentation.clone(),
         filtered_report: !view.filter.focus_modules.is_empty()
             || view.filter.exact_only
             || view.filter.local_only
             || view.filter.cycles_only
             || query.is_some(),
         graph_kind: "dependencies",
-        nodes: view.nodes.iter().map(html_node).collect(),
+        nodes: view
+            .nodes
+            .iter()
+            .map(|node| {
+                let mut rendered = html_node(node);
+                if matches!(node.node, DependencyNode::LocalModule(_)) {
+                    rendered.kind = if presentation.local_kind == "local-file" {
+                        "local-file"
+                    } else {
+                        "local-module"
+                    };
+                }
+                rendered
+            })
+            .collect(),
         relations: view
             .relations
             .iter()
@@ -331,7 +412,6 @@ fn render_call_html_graph(
             || view.filter.exact_only
             || view.filter.local_only
             || view.filter.cycles_only,
-        flow_definition: "cpp-structural-flow-v1",
         max_expansion_depth,
         initial_selection: view
             .filter
@@ -374,16 +454,7 @@ fn render_call_html_graph(
         .replace('&', "\\u0026")
         .replace('<', "\\u003c")
         .replace('>', "\\u003e");
-    Ok(CALL_VIEWER_TEMPLATE
-        .replace(
-            "__CODEGRAIDE_EXPLORER_CONTROLS__",
-            include_str!("explorer_controls.css"),
-        )
-        .replace(
-            "__CODEGRAIDE_EXPLORER_INTERACTIONS__",
-            include_str!("explorer_interactions.js"),
-        )
-        .replace(GRAPH_DATA_MARKER, &data))
+    Ok(explorer_shell::render(ExplorerView::Calls, &data))
 }
 
 fn call_explorer_node(
@@ -561,6 +632,10 @@ fn call_explorer_node(
         .map(|export| export.target.clone())
         .collect::<Vec<_>>();
     CallExplorerNode {
+        language: match node {
+            CallNode::LocalSymbol(symbol) => symbol.id.language.as_str().to_owned(),
+            _ => String::new(),
+        },
         call_flow: match node {
             CallNode::LocalSymbol(symbol) if source.is_some() => {
                 symbol.call_flow.as_deref().cloned()
@@ -824,24 +899,7 @@ fn render_html_graph(graph: &HtmlGraph) -> Result<String, serde_json::Error> {
         .replace('&', "\\u0026")
         .replace('<', "\\u003c")
         .replace('>', "\\u003e");
-    Ok(VIEWER_TEMPLATE
-        .replace(
-            "__CODEGRAIDE_EXPLORER_CONTROLS__",
-            include_str!("explorer_controls.css"),
-        )
-        .replace(
-            "__CODEGRAIDE_DEPENDENCY_TOOLS__",
-            include_str!("dependency_explorer.js"),
-        )
-        .replace(
-            "__CODEGRAIDE_DEPENDENCY_CONTROLS__",
-            include_str!("dependency_controls.js"),
-        )
-        .replace(
-            "__CODEGRAIDE_EXPLORER_INTERACTIONS__",
-            include_str!("explorer_interactions.js"),
-        )
-        .replace(GRAPH_DATA_MARKER, &data))
+    Ok(explorer_shell::render(ExplorerView::Dependencies, &data))
 }
 
 fn html_query(
@@ -1040,7 +1098,6 @@ fn html_node(node: &DependencyGraphViewNode) -> HtmlNode {
         unresolved_reason,
         candidates,
         cyclic_component: node.cyclic_component,
-        source: None,
     }
 }
 
@@ -1159,10 +1216,30 @@ mod tests {
         assert!(html.contains("\"short_name\":\"service\""));
         assert!(html.contains("\"name\":\"shop.deeply_nested.service\""));
         assert!(html.contains("\"qualified_name\":\"shop.deeply_nested\""));
-        assert!(!html.contains(GRAPH_DATA_MARKER));
+        assert!(!html.contains("__CODEGRAIDE_GRAPH_DATA__"));
         assert!(!html.contains("https://"));
         assert!(!html.contains("fan_in"));
         assert!(!html.contains("fan_out"));
+    }
+
+    #[test]
+    fn explicit_presentation_works_without_language_nodes() {
+        let analysis = analyze_dependency_graph(&[], &[]).expect("empty graph");
+        let view = filter_dependency_graph(&analysis, &DependencyGraphFilter::default()).unwrap();
+        let presentation = DependencyExplorerPresentation::new("future-language", "file");
+        let html = render_dependency_html_with_presentation(&view, None, &presentation).unwrap();
+        let payload = html
+            .split("<script id=\"graph-data\" type=\"application/json\">")
+            .nth(1)
+            .unwrap()
+            .split("</script>")
+            .next()
+            .unwrap();
+        let data: serde_json::Value = serde_json::from_str(payload).unwrap();
+        assert_eq!(data["presentation"]["language"], "future-language");
+        assert_eq!(data["presentation"]["local_kind"], "local-file");
+        assert_eq!(data["presentation"]["root_label"], "All directories");
+        assert!(!html.contains("function sourceHtml"));
     }
 
     #[test]

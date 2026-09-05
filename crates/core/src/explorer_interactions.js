@@ -30,5 +30,5 @@ const explorerInteractions = (() => {
       if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();if(e.key==='Enter'&&e.shiftKey)explore();else inspect()}
     });
   }
-  return {bind,close};
+  return {bind,close,cancelInspection};
 })();

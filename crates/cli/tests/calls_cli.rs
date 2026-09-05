@@ -516,10 +516,10 @@ int separate() { return 42; }
     );
     let html = String::from_utf8(output.stdout).unwrap();
     let payload = html
-        .split("const data=")
+        .split("<script id=\"graph-data\" type=\"application/json\">")
         .nth(1)
         .unwrap()
-        .split(";\n")
+        .split("</script>")
         .next()
         .unwrap();
     let report: Value = serde_json::from_str(payload).unwrap();
@@ -679,10 +679,10 @@ fn cpp_flow_keeps_occurrences_and_source_opt_in() {
         assert!(output.status.success());
         let html = String::from_utf8(output.stdout).unwrap();
         let payload = html
-            .split("const data=")
+            .split("<script id=\"graph-data\" type=\"application/json\">")
             .nth(1)
             .unwrap()
-            .split(";\n")
+            .split("</script>")
             .next()
             .unwrap();
         let data: Value = serde_json::from_str(payload).unwrap();

@@ -1,0 +1,30 @@
+<div id="resize-nav" class="resize-handle" role="separator" tabindex="0" aria-label="Resize navigator" aria-orientation="vertical"></div>
+<div class="pane-scroll">
+        <div class="pane-tabs"><button data-panel="files" aria-pressed="true">Files</button><button data-panel="architecture" aria-pressed="false">Architecture</button><button data-panel="compare" aria-pressed="false">Compare</button></div>
+        <div id="nav-files">        <div class="button-group" aria-label="Graph view">
+          <button type="button" data-view="overview" aria-pressed="true">Overview</button>
+          <button type="button" data-view="neighborhood" aria-pressed="false" disabled>Connections</button>
+          <button type="button" data-view="full" aria-pressed="false">Full graph</button>
+        </div><div class="trace-options"><label>Direction <select id="direction"><option value="dependencies">Dependencies</option><option value="dependents">Used by</option><option value="both" selected>Both</option></select></label><label><input id="closure" type="checkbox"> All reachable</label><label><input id="top-down" type="checkbox"> Top-down layout</label><details><summary>Find a dependency path</summary><form id="path-form"><input id="path-from" list="module-names" placeholder="Path from" aria-label="Path from" required><input id="path-to" list="module-names" placeholder="Path to" aria-label="Path to" required><button>Find path</button></form></details></div><div id="file-list" class="link-list"></div></div>
+        <div id="nav-architecture" hidden>
+          <button id="architecture-view">Show groups</button>
+          <div id="group-list" class="link-list"></div>
+          <h3>Group</h3>
+          <form id="group-form"><label>Name<input id="group-name" required></label><label>Path prefixes<textarea id="group-prefixes" rows="3" placeholder="services/inventory" required></textarea></label><p class="empty-list">One path per line. The longest matching prefix wins.</p><button>Save group</button><button type="button" id="group-cancel">Clear</button></form>
+          <h3>Dependency rules</h3>
+          <form id="rule-form"><select id="rule-from" aria-label="Rule source group"></select><span>must not depend on</span><select id="rule-to" aria-label="Rule target group"></select><button>Add rule</button></form>
+          <div id="rule-list"></div><button id="check-rules">Check rules</button>
+          <h3>Configuration</h3><button id="save-architecture">Save configuration</button> <button id="copy-architecture">Copy configuration</button><label class="file-label">Load configuration<input id="load-architecture" type="file" accept=".json,application/json"></label>
+          <details><summary>Paste configuration</summary><textarea id="paste-architecture" aria-label="Architecture configuration JSON" rows="4"></textarea><button id="use-pasted-architecture">Load pasted configuration</button></details>
+          <p id="architecture-message" role="status"></p>
+        </div>
+        <div id="nav-compare" hidden>
+          <label>Current revision or label<input id="snapshot-label" placeholder="e.g. commit hash or branch name"></label>
+          <button id="save-snapshot">Save snapshot</button> <button id="copy-snapshot">Copy snapshot</button>
+          <label class="file-label">Load baseline snapshot<input id="load-baseline" type="file" accept=".json,application/json"></label>
+          <p class="empty-list">Generate reports at each commit with the same options. Save a snapshot from the older report, then load it here. Revision labels are entered manually.</p>
+          <details><summary>Paste a snapshot</summary><textarea id="paste-baseline" aria-label="Baseline snapshot JSON" rows="4"></textarea><button id="use-pasted-baseline">Load pasted snapshot</button></details>
+          <p id="compare-message" role="status"></p><button id="clear-baseline" hidden>Clear comparison</button><div id="compare-results"></div>
+        </div>
+
+      </div>
