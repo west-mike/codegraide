@@ -332,7 +332,21 @@ pub fn resolve_cpp_calls(
             });
         }
     }
-    symbols.sort();
+    // Preserve the syntax-owner index through sorting instead of searching all symbols
+    // again for every definition (quadratic on large repositories).
+    let mut ordered = symbols.into_iter().enumerate().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.1.cmp(&right.1));
+    let mut remap = vec![0; ordered.len()];
+    for (new_index, (old_index, _)) in ordered.iter().enumerate() {
+        remap[*old_index] = new_index;
+    }
+    let mut symbols = ordered
+        .into_iter()
+        .map(|(_, symbol)| symbol)
+        .collect::<Vec<_>>();
+    for index in by_syntax_id.values_mut() {
+        *index = remap[*index];
+    }
 
     for (index, symbol) in symbols.iter().enumerate() {
         if symbol.id.qualified_name.starts_with("@file::") {
@@ -340,38 +354,17 @@ pub fn resolve_cpp_calls(
         }
     }
 
-    // Sorting changed indexes, so rebuild the raw-definition lookup against canonical keys.
-    by_syntax_id.clear();
     for run in analysis
         .analyzers
         .iter()
         .filter(|run| run.descriptor.language.as_str() == "cpp")
     {
         for file in &run.files {
-            for symbol in &file.facts.symbols {
-                let kind = canonical_kind(symbol.kind, &symbol.qualified_name, &class_names);
-                let signature_key = symbol
-                    .callable_signature
-                    .as_ref()
-                    .map(|signature| signature.normalized_key.as_str())
-                    .unwrap_or_default();
-                if let Some((index, _)) = symbols.iter().enumerate().find(|(_, candidate)| {
-                    candidate.path == file.path
-                        && candidate
-                            .definition
-                            .as_ref()
-                            .is_some_and(|definition| definition.span == symbol.span)
-                        && candidate.id.qualified_name == symbol.qualified_name
-                        && candidate.id.kind == kind
-                        && candidate
-                            .signature
-                            .as_ref()
-                            .map(|signature| signature.normalized_key.as_str())
-                            .unwrap_or_default()
-                            == signature_key
-                }) {
-                    by_syntax_id.insert((file.path.clone(), symbol.id.as_str().to_owned()), index);
-                    symbols[index].call_flow = file.facts.call_flows.get(&symbol.id).cloned();
+            for (syntax_id, flow) in &file.facts.call_flows {
+                if let Some(index) =
+                    by_syntax_id.get(&(file.path.clone(), syntax_id.as_str().to_owned()))
+                {
+                    symbols[*index].call_flow = Some(std::sync::Arc::new(flow.clone()));
                 }
             }
         }

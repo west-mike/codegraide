@@ -129,12 +129,12 @@ fn html_output_is_a_self_contained_interactive_graph() {
     assert!(output.stdout.is_empty());
     assert!(overview.starts_with("<!doctype html>"));
     assert!(overview.contains("href=\"python.html\""));
-    assert!(python.contains("Codegraide Dependency Explorer"));
+    assert!(python.contains("Dependency Explorer"));
     assert!(python.contains("\"name\":\"shop.service\""));
     assert!(python.contains("\"number\":1"));
     assert!(python.contains("\"witness_nodes\""));
     assert!(python.contains("\"recommended_cuts\""));
-    assert!(python.contains("href=\"index.html\""));
+    assert!(!python.contains("aria-label=\"Dependency languages\""));
     assert!(!python.contains("https://"));
     assert!(!python.contains("fan_in"));
     assert!(!python.contains("fan_out"));

@@ -1402,6 +1402,9 @@ fn language_slug(language: &str) -> String {
 }
 
 fn inject_dependency_navigation(html: &str, current: &str, pages: &[(String, String)]) -> String {
+    if pages.len() == 1 {
+        return html.to_owned();
+    }
     let mut navigation = String::from(
         "<nav class=\"language-tabs\" aria-label=\"Dependency languages\"><a href=\"index.html\">Overview</a>",
     );

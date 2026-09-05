@@ -22,6 +22,7 @@ const GRAPH_DATA_MARKER: &str = "__CODEGRAIDE_GRAPH_DATA__";
 
 #[derive(Debug, Serialize)]
 struct CallExplorerGraph {
+    filtered_report: bool,
     flow_definition: &'static str,
     max_expansion_depth: u8,
     initial_selection: Option<String>,
@@ -94,6 +95,7 @@ struct CallExplorerEvidence {
 
 #[derive(Debug, Serialize)]
 struct HtmlGraph {
+    filtered_report: bool,
     graph_kind: &'static str,
     nodes: Vec<HtmlNode>,
     relations: Vec<HtmlRelation>,
@@ -235,6 +237,11 @@ pub fn render_dependency_html_with_query(
         .map(|node| (node.node.clone(), node.id.clone()))
         .collect::<BTreeMap<_, _>>();
     let graph = HtmlGraph {
+        filtered_report: !view.filter.focus_modules.is_empty()
+            || view.filter.exact_only
+            || view.filter.local_only
+            || view.filter.cycles_only
+            || query.is_some(),
         graph_kind: "dependencies",
         nodes: view.nodes.iter().map(html_node).collect(),
         relations: view
@@ -320,6 +327,10 @@ fn render_call_html_graph(
         .map(|node| (node.node.clone(), node.id.clone()))
         .collect::<BTreeMap<_, _>>();
     let graph = CallExplorerGraph {
+        filtered_report: !view.filter.focus_symbols.is_empty()
+            || view.filter.exact_only
+            || view.filter.local_only
+            || view.filter.cycles_only,
         flow_definition: "cpp-structural-flow-v1",
         max_expansion_depth,
         initial_selection: view
@@ -363,7 +374,16 @@ fn render_call_html_graph(
         .replace('&', "\\u0026")
         .replace('<', "\\u003c")
         .replace('>', "\\u003e");
-    Ok(CALL_VIEWER_TEMPLATE.replace(GRAPH_DATA_MARKER, &data))
+    Ok(CALL_VIEWER_TEMPLATE
+        .replace(
+            "__CODEGRAIDE_EXPLORER_CONTROLS__",
+            include_str!("explorer_controls.css"),
+        )
+        .replace(
+            "__CODEGRAIDE_EXPLORER_INTERACTIONS__",
+            include_str!("explorer_interactions.js"),
+        )
+        .replace(GRAPH_DATA_MARKER, &data))
 }
 
 fn call_explorer_node(
@@ -542,7 +562,9 @@ fn call_explorer_node(
         .collect::<Vec<_>>();
     CallExplorerNode {
         call_flow: match node {
-            CallNode::LocalSymbol(symbol) if source.is_some() => symbol.call_flow.clone(),
+            CallNode::LocalSymbol(symbol) if source.is_some() => {
+                symbol.call_flow.as_deref().cloned()
+            }
             _ => None,
         },
         id: id.to_owned(),
@@ -802,7 +824,24 @@ fn render_html_graph(graph: &HtmlGraph) -> Result<String, serde_json::Error> {
         .replace('&', "\\u0026")
         .replace('<', "\\u003c")
         .replace('>', "\\u003e");
-    Ok(VIEWER_TEMPLATE.replace(GRAPH_DATA_MARKER, &data))
+    Ok(VIEWER_TEMPLATE
+        .replace(
+            "__CODEGRAIDE_EXPLORER_CONTROLS__",
+            include_str!("explorer_controls.css"),
+        )
+        .replace(
+            "__CODEGRAIDE_DEPENDENCY_TOOLS__",
+            include_str!("dependency_explorer.js"),
+        )
+        .replace(
+            "__CODEGRAIDE_DEPENDENCY_CONTROLS__",
+            include_str!("dependency_controls.js"),
+        )
+        .replace(
+            "__CODEGRAIDE_EXPLORER_INTERACTIONS__",
+            include_str!("explorer_interactions.js"),
+        )
+        .replace(GRAPH_DATA_MARKER, &data))
 }
 
 fn html_query(
@@ -1116,7 +1155,7 @@ mod tests {
         let html = render_dependency_html(&view).expect("HTML");
 
         assert!(html.starts_with("<!doctype html>"));
-        assert!(html.contains("Codegraide Dependency Explorer"));
+        assert!(html.contains("Dependency Explorer"));
         assert!(html.contains("\"short_name\":\"service\""));
         assert!(html.contains("\"name\":\"shop.deeply_nested.service\""));
         assert!(html.contains("\"qualified_name\":\"shop.deeply_nested\""));
@@ -1138,7 +1177,7 @@ mod tests {
 
         let html = render_dependency_html(&view).expect("HTML");
 
-        assert_eq!(html.matches("</script>").count(), 2);
+        assert_eq!(html.matches("</script>").count(), 3);
         assert!(!html.contains("bad</script>name"));
         assert!(html.contains("bad\\u003c/script\\u003ename"));
     }

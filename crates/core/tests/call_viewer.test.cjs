@@ -147,3 +147,9 @@ test('dragging a caller regenerates its group entry while preserving shared iden
  assert.equal(c.graphGroups.filter(g=>g.ids.includes('e')).length,1);
  assert.equal(c.groupRoutes.filter(r=>c.graphGroups[r.index].ids.includes('e')).length,2);
 });
+
+test('support filter recognizes nested C++ test and third-party directories',()=>{
+ const context={};vm.createContext(context);vm.runInContext(html.slice(html.indexOf('    function isSupport('),html.indexOf('    function readableLabel(')),context);
+ for(const path of ['modules/imgproc/perf/perf_thresh.cpp','modules/core/test/test_mat.cpp','3rdparty/zlib/zutil.c','tests/main.cpp'])assert(context.isSupport({path}));
+ for(const path of ['modules/imgproc/src/thresh.cpp','src/test_result.cpp'])assert(!context.isSupport({path}));
+});

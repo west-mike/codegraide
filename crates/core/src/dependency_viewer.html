@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Codegraide Dependency Explorer</title>
+  <title>Dependency Explorer</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -169,7 +169,8 @@
       display: flex;
       flex-wrap: wrap;
       gap: 9px 14px;
-      max-width: calc(100% - 170px);
+      max-width: calc(100% - 320px);
+      pointer-events:none;
       padding: 8px 10px;
       border: 1px solid var(--border);
       border-radius: 9px;
@@ -244,10 +245,11 @@
 
     body.call-graph .workspace { grid-template-columns: minmax(0, 1fr) minmax(390px, 34vw); }
 
-    .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; marker-end: url(#arrow); pointer-events: stroke; cursor: pointer; }
-    .edge.uncertain { stroke-dasharray: 7 5; }
+    .edge { fill: none; stroke: var(--installed); stroke-width: 1.5; marker-end: url(#arrow); pointer-events: stroke; cursor: pointer; }
+    .edge.inferred { stroke:var(--ambiguous); }
+    .edge.uncertain { stroke:var(--unresolved); stroke-dasharray:7 5; }
     .edge.is-dimmed { stroke: var(--edge-dim); opacity: 0.28; }
-    .edge.is-selected { stroke: var(--accent); stroke-width: 3; opacity: 1; }
+    .edge.is-selected { stroke-width: 3; opacity: 1; }
     .edge.is-witness { stroke: var(--cycle); stroke-width: 3; opacity: 1; }
 
     .node { cursor: pointer; }
@@ -267,7 +269,7 @@
     .node.ambiguous rect { fill: var(--ambiguous-fill); stroke: var(--ambiguous); }
     .node.unresolved rect { fill: var(--unresolved-fill); stroke: var(--unresolved); }
     .node.cycle rect { fill: var(--cycle-fill); stroke: var(--cycle); stroke-width: 2.5; }
-    .node.package rect { fill: var(--cycle-fill); stroke: var(--cycle); stroke-width: 2; }
+    .node.package rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 2; }
     .cycle-mark { fill: none; stroke: var(--cycle); stroke-width: 2; }
 
     .empty-graph { position: absolute; inset: 0; display: none; place-items: center; color: var(--muted); pointer-events: none; }
@@ -287,36 +289,115 @@
       .legend { display: none; }
       .workspace { grid-template-rows: minmax(480px, 62vh) auto; }
     }
+    [hidden] { display:none !important; }
+    body { height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+    body > nav { flex:none; }
+    .app { flex:1; height:auto; min-height:0; grid-template-rows:auto minmax(0,1fr); }
+    .workspace { --nav-width:250px; --details-width:330px; grid-template-columns:var(--nav-width) minmax(0,1fr) var(--details-width); min-height:0; }
+    .workspace.hide-nav { grid-template-columns:minmax(0,1fr) var(--details-width); }
+    .workspace.hide-details { grid-template-columns:var(--nav-width) minmax(0,1fr); }
+    .workspace.hide-nav.hide-details { grid-template-columns:minmax(0,1fr); }
+    .hide-nav .navigator,.hide-details .sidebar { display:none; }
+    .navigator,.sidebar { position:relative; min-width:0; overflow:hidden; padding:0; }
+    .pane-scroll { height:100%; overflow:auto; padding:12px; }
+    .navigator { background:var(--surface); border-right:1px solid var(--border); }
+    .navigator h3 { margin:18px 0 8px; font-size:12px; }
+    .navigator input:not([type=file]):not([type=checkbox]),.navigator textarea,.navigator select { width:100%; margin:4px 0 8px; }
+    input,textarea,select { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--border); padding:6px; border-radius:5px; }
+    .trace-controls { display:flex; align-items:center; flex-wrap:wrap; gap:8px 14px; padding:8px 12px; border-bottom:1px solid var(--border); }
+    .trace-controls label,.trace-controls form { display:flex; align-items:center; gap:6px; }
+    #depth { width:52px; text-align:right; }
+    #path-from,#path-to { width:150px; }
+    #trace-message { color:var(--muted); font-size:12px; }
+    .stage { min-height:0; container-type:inline-size; }
+    @container(max-width:560px){.legend{display:none}}
+    .pane-tabs { position:sticky; top:-12px; z-index:2; background:var(--surface); display:flex; border-bottom:1px solid var(--border); margin-bottom:12px; }
+    .pane-tabs button { border:0; border-radius:0; padding:5px 7px; font-size:12px; background:transparent; }
+    .pane-tabs button[aria-pressed=true] { color:var(--accent); border-bottom:2px solid var(--accent); }
+    .resize-handle { position:absolute; top:0; bottom:0; width:6px; z-index:3; touch-action:none; cursor:col-resize; }
+    #resize-nav { right:0; } #resize-details { left:0; }
+    .resize-handle:hover,.resize-handle:focus-visible { background:var(--accent); }
+    .file-label { display:block; margin-top:10px; font-size:12px; }
+    .file-label input { width:100%; font-size:11px; }
+    .group-row { border-bottom:1px solid var(--border); padding:6px 0; }
+    .group-row button { min-height:25px; padding:3px 6px; }
+    .change-added { border-left:3px solid var(--installed); padding:6px; overflow-wrap:anywhere; }
+    .change-removed { border-left:3px solid var(--unresolved); padding:6px; overflow-wrap:anywhere; }
+    .node.architecture rect { fill:var(--surface); stroke:var(--border-strong); }
+    .edge.rule-violation { stroke:var(--unresolved); stroke-width:3; }
+    @media(max-width:900px) { .workspace { grid-template-rows:none; } .header{padding:8px;gap:8px} .controls{gap:4px} }
+    .header{padding:8px 12px;gap:12px;min-height:57px}.header h1{font-size:16px}.header .controls{flex-wrap:nowrap}.breadcrumbs{display:none}
+    .graph-center{min-width:0;display:flex;flex-direction:column;overflow:hidden}.graph-center .stage{flex:1}
+    .graph-toolbar{height:60px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto}
+    .graph-toolbar button{height:34px;white-space:nowrap;border-radius:7px}.graph-title{min-width:80px;margin-left:4px;margin-right:auto;overflow:hidden}.graph-title strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .depth-control{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px;color:var(--muted)}.depth-control input[type=range]{width:92px;accent-color:var(--accent)}.depth-control input[type=number]{width:48px;height:34px;padding:5px 7px;text-align:right;appearance:textfield;border-radius:7px;background:var(--bg)}.depth-control input::-webkit-inner-spin-button,.depth-control input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}.icon{width:34px;padding:5px}
+    .trace-options{display:grid;gap:8px;margin:12px 0}.trace-options label{display:flex;align-items:center;gap:6px}.trace-options form{display:grid;gap:6px;margin-top:8px}#path-from,#path-to{width:100%}
+    .graph-hint{position:absolute;left:12px;bottom:10px;font-size:11px;color:var(--muted);pointer-events:none;max-width:50%;background:var(--surface)}.legend{max-width:45%}
+    .navigator input[type=checkbox]{width:auto;margin:0}.navigator .button-group{display:flex;flex-wrap:wrap;border:0;gap:0}.navigator .button-group button{border-radius:0;font-size:11px;padding:5px;min-width:0}.navigator .pane-scroll{overflow-x:hidden}.node-link{overflow-wrap:anywhere}.trace-options{font-size:12px}.trace-options label{white-space:nowrap}
+.graph-limit{position:absolute;top:12px;left:12px;right:12px;background:var(--surface);border:1px solid var(--border);padding:6px 8px;font-size:12px}.graph-limit button{margin-left:8px}
+    .header{height:57px;min-height:57px}.header h1{line-height:20px;margin:0}.summary{font-size:11px;line-height:16px}.file-row{width:100%;text-align:left}.file-row strong,.file-row small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.file-row strong{font-size:13px}.file-row small{font-size:11px;color:var(--muted)}
+__CODEGRAIDE_EXPLORER_CONTROLS__
   </style>
 </head>
 <body>
   <div class="app">
     <header class="header">
       <div class="brand">
-        <h1>Codegraide Dependency Explorer</h1>
+        <h1>Dependency Explorer</h1>
         <div class="summary" id="summary"></div>
         <nav class="breadcrumbs" id="breadcrumbs" aria-label="Dependency hierarchy"></nav>
       </div>
       <div class="controls">
+        <button id="toggle-nav" aria-pressed="true">Hide navigator</button>
+        <button id="toggle-details" aria-pressed="true">Hide details</button>
         <label class="search-wrap">
           <span class="search-icon" aria-hidden="true">⌕</span>
-          <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Find a dependency unit</span>
-          <input id="search" type="search" list="module-names" placeholder="Find a dependency unit…" autocomplete="off">
+          <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Find a file or module</span>
+          <input id="search" type="search" list="module-names" placeholder="Find a file or module" autocomplete="off">
           <datalist id="module-names"></datalist>
         </label>
-        <div class="button-group" aria-label="Graph view">
-          <button type="button" data-view="overview" aria-pressed="true">Overview</button>
-          <button type="button" data-view="neighborhood" aria-pressed="false" disabled>Neighborhood</button>
-          <button type="button" data-view="full" aria-pressed="false">Full graph</button>
-        </div>
+
       </div>
     </header>
 
     <main class="workspace">
+      <aside class="navigator">
+<div id="resize-nav" class="resize-handle" role="separator" tabindex="0" aria-label="Resize navigator" aria-orientation="vertical"></div>
+<div class="pane-scroll">
+        <div class="pane-tabs"><button data-panel="files" aria-pressed="true">Files</button><button data-panel="architecture" aria-pressed="false">Architecture</button><button data-panel="compare" aria-pressed="false">Compare</button></div>
+        <div id="nav-files">        <div class="button-group" aria-label="Graph view">
+          <button type="button" data-view="overview" aria-pressed="true">Overview</button>
+          <button type="button" data-view="neighborhood" aria-pressed="false" disabled>Connections</button>
+          <button type="button" data-view="full" aria-pressed="false">Full graph</button>
+        </div><div class="trace-options"><label>Direction <select id="direction"><option value="dependencies">Dependencies</option><option value="dependents">Used by</option><option value="both" selected>Both</option></select></label><label><input id="closure" type="checkbox"> All reachable</label><label><input id="top-down" type="checkbox"> Top-down layout</label><details><summary>Find a dependency path</summary><form id="path-form"><input id="path-from" list="module-names" placeholder="Path from" aria-label="Path from" required><input id="path-to" list="module-names" placeholder="Path to" aria-label="Path to" required><button>Find path</button></form></details></div><div id="file-list" class="link-list"></div></div>
+        <div id="nav-architecture" hidden>
+          <button id="architecture-view">Show groups</button>
+          <div id="group-list" class="link-list"></div>
+          <h3>Group</h3>
+          <form id="group-form"><label>Name<input id="group-name" required></label><label>Path prefixes<textarea id="group-prefixes" rows="3" placeholder="services/inventory" required></textarea></label><p class="empty-list">One path per line. The longest matching prefix wins.</p><button>Save group</button><button type="button" id="group-cancel">Clear</button></form>
+          <h3>Dependency rules</h3>
+          <form id="rule-form"><select id="rule-from" aria-label="Rule source group"></select><span>must not depend on</span><select id="rule-to" aria-label="Rule target group"></select><button>Add rule</button></form>
+          <div id="rule-list"></div><button id="check-rules">Check rules</button>
+          <h3>Configuration</h3><button id="save-architecture">Save configuration</button> <button id="copy-architecture">Copy configuration</button><label class="file-label">Load configuration<input id="load-architecture" type="file" accept=".json,application/json"></label>
+          <details><summary>Paste configuration</summary><textarea id="paste-architecture" aria-label="Architecture configuration JSON" rows="4"></textarea><button id="use-pasted-architecture">Load pasted configuration</button></details>
+          <p id="architecture-message" role="status"></p>
+        </div>
+        <div id="nav-compare" hidden>
+          <label>Current revision or label<input id="snapshot-label" placeholder="e.g. commit hash or branch name"></label>
+          <button id="save-snapshot">Save snapshot</button> <button id="copy-snapshot">Copy snapshot</button>
+          <label class="file-label">Load baseline snapshot<input id="load-baseline" type="file" accept=".json,application/json"></label>
+          <p class="empty-list">Generate reports at each commit with the same options. Save a snapshot from the older report, then load it here. Revision labels are entered manually.</p>
+          <details><summary>Paste a snapshot</summary><textarea id="paste-baseline" aria-label="Baseline snapshot JSON" rows="4"></textarea><button id="use-pasted-baseline">Load pasted snapshot</button></details>
+          <p id="compare-message" role="status"></p><button id="clear-baseline" hidden>Clear comparison</button><div id="compare-results"></div>
+        </div>
+
+      </div>
+</aside>
+      <div class="graph-center"><div class="graph-toolbar"><button id="back" class="icon" aria-label="Back" title="Back" hidden>←</button><div class="graph-title"><strong id="focus-title">Dependencies</strong></div><label class="depth-control"><span>Depth</span><input id="depth-slider" type="range" min="0" max="20" value="1" aria-label="Dependency depth"><input id="depth" aria-label="Dependency depth value" type="number" min="0" max="20" value="1"></label><button class="icon" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button><button class="icon" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button><button id="fit">Recenter</button><button id="reset-layout" title="Restore default node positions">Reset layout</button></div>
       <section class="stage" aria-label="Interactive dependency graph">
         <svg id="graph" role="img" aria-labelledby="graph-title graph-description">
           <title id="graph-title">Repository dependency graph</title>
-          <desc id="graph-description">Dependency units are connected by directed import or include relationships. Select a unit to inspect its dependencies and dependents.</desc>
+          <desc id="graph-description">Arrows point from a file or module to a dependency. Select an arrow to inspect its import or include.</desc>
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path>
@@ -324,46 +405,50 @@
           </defs>
           <g id="viewport"><g id="edges"></g><g id="nodes"></g></g>
         </svg>
+        <div id="graph-limit" class="graph-limit" hidden></div>
+        <div id="trace-message" class="graph-hint" role="status"></div>
         <div class="empty-graph" id="empty-graph">No nodes match the selected filters.</div>
-        <div class="stage-tools" aria-label="Graph navigation">
-          <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
-          <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
-          <button type="button" id="fit">Fit</button>
-        </div>
         <div class="legend" aria-label="Graph legend">
           <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--local)"></span>Local</span>
           <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--standard)"></span>Standard library</span>
           <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--installed)"></span>Installed</span>
           <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--unresolved)"></span>Unresolved</span>
           <span class="legend-item"><span class="legend-dot" style="--legend-color:var(--cycle)"></span>Cycle</span>
-          <span class="legend-item"><span class="legend-line"></span>Exact</span>
-          <span class="legend-item"><span class="legend-line dashed"></span>Inferred / uncertain</span>
+          <span class="legend-item"><span class="legend-line" style="border-color:var(--installed)"></span>Exact match</span>
+          <span class="legend-item"><span class="legend-line" style="border-color:var(--ambiguous)"></span>Likely match</span>
+          <span class="legend-item"><span class="legend-line dashed" style="border-color:var(--unresolved)"></span>Uncertain</span>
         </div>
-      </section>
+      </section></div>
 
       <aside class="sidebar" aria-live="polite">
+<div id="resize-details" class="resize-handle" role="separator" tabindex="0" aria-label="Resize details" aria-orientation="vertical"></div>
+<div class="pane-scroll">
+
         <div id="details"></div>
-        <h3>Visible boundaries</h3>
+        <h3>Show</h3>
         <div class="filters">
-          <label class="check"><input type="checkbox" data-kind="local-module" checked> Local</label>
-          <label class="check"><input type="checkbox" data-kind="local-file" checked> Local file</label>
+          <label class="check"><input type="checkbox" data-kind="local-module" checked> Project modules</label>
+          <label class="check"><input type="checkbox" data-kind="local-file" checked> Project files</label>
           <label class="check"><input type="checkbox" data-kind="standard-library" checked> Standard library</label>
-          <label class="check"><input type="checkbox" data-kind="installed-distribution" checked> Installed</label>
+          <label class="check"><input type="checkbox" data-kind="installed-distribution" checked> Installed packages</label>
           <label class="check"><input type="checkbox" data-kind="system-header" checked> System header</label>
           <label class="check"><input type="checkbox" data-kind="external-header" checked> External header</label>
-          <label class="check"><input type="checkbox" data-kind="context-dependent" checked> Context-dependent</label>
-          <label class="check"><input type="checkbox" data-kind="ambiguous" checked> Ambiguous</label>
+          <label class="check"><input type="checkbox" data-kind="context-dependent" checked> Build-dependent</label>
+          <label class="check"><input type="checkbox" data-kind="ambiguous" checked> Multiple matches</label>
           <label class="check"><input type="checkbox" data-kind="unresolved" checked> Unresolved</label>
-          <label class="check"><input type="checkbox" id="uncertain" checked> Uncertain edges</label>
+          <label class="check"><input type="checkbox" id="uncertain" checked> Likely and uncertain matches</label>
         </div>
-      </aside>
+      </div>
+</aside>
     </main>
   </div>
 
   <script id="graph-data" type="application/json">__CODEGRAIDE_GRAPH_DATA__</script>
+  <script>__CODEGRAIDE_DEPENDENCY_TOOLS__</script>
   <script>
     (() => {
       "use strict";
+      __CODEGRAIDE_EXPLORER_INTERACTIONS__
 
       const data = JSON.parse(document.getElementById("graph-data").textContent);
       const isCallGraph = data.graph_kind === "calls";
@@ -371,7 +456,7 @@
       const sourceAutoExpandLines = 15;
       const callContextRadius = 3;
       document.body.classList.toggle("call-graph", isCallGraph);
-      document.querySelector(".brand h1").textContent = isCallGraph ? "Codegraide Call Explorer" : "Codegraide Dependency Explorer";
+      document.querySelector(".brand h1").textContent = isCallGraph ? "Call Graph Explorer" : "Dependency Explorer";
       const svg = document.getElementById("graph");
       const viewport = document.getElementById("viewport");
       const edgeLayer = document.getElementById("edges");
@@ -398,8 +483,12 @@
 
       const state = {
         mode: "overview",
+        direction: 'both', depth: 1, closure: false, topDown: false,
+        offsets: {horizontal:new Map(), vertical:new Map()}, history: [], path: null,
+        architecture: {format:'dependency-architecture-v1',groups:[],rules:[]}, archFocus:null,
+        baseline:null, navPanel:'files',
         currentGroup: rootGroups.length === 1 ? rootGroups[0].id : null,
-        selected: null,
+        selected: null, inspected: null,
         selectedEdge: null,
         hoveredRelation: null,
         expandedSources: new Set(),
@@ -417,15 +506,18 @@
         "local-module": isCallGraph ? "Project symbol" : "Local module",
         "local-file": "Local file",
         "standard-library": "Python standard library",
-        "installed-distribution": isCallGraph ? "External call boundary" : "Installed distribution",
+        "installed-distribution": isCallGraph ? "External call boundary" : "Installed package",
         "system-header": "System header",
         "external-header": "External header",
-        "context-dependent": "Context-dependent target",
-        "ambiguous": "Ambiguous dependency",
+        "context-dependent": "Build-dependent target",
+        "ambiguous": "Multiple matches",
         "unresolved": "Unresolved dependency",
         "cycle": isCallGraph ? "Recursive call group" : "Dependency cycle",
+        "architecture": "Architecture group",
         "package": isCallGraph ? "Module or class" : (isCppGraph ? "Directory" : "Package")
       };
+
+      const matchLabels = { exact: "Exact match", inferred: "Likely match", ambiguous: "Multiple matches", unresolved: "Unresolved", "context-dependent": "Build-dependent" };
 
       const kindColors = {
         "local-module": "var(--local)",
@@ -438,7 +530,7 @@
         "ambiguous": "var(--ambiguous)",
         "unresolved": "var(--unresolved)",
         "cycle": "var(--cycle)",
-        "package": "var(--cycle)"
+        "package": "var(--border-strong)"
       };
 
       document.querySelectorAll("[data-kind]").forEach(input => {
@@ -448,6 +540,7 @@
       summary.textContent = data.query
         ? `${data.query.label} · ${data.query.found ? `${data.nodes.length} nodes` : "no path found"}`
         : `${data.nodes.length} nodes · ${data.relations.length} relationships · ${data.cycles.length} ${data.cycles.length === 1 ? "cycle" : "cycles"}`;
+      if(data.filtered_report)summary.textContent += " · filtered report";
       document.getElementById("module-names").innerHTML = data.nodes
         .filter(node => node.kind === "local-module" || node.kind === "local-file")
         .map(node => `<option value="${escapeHtml(node.name)}"></option>`)
@@ -596,7 +689,7 @@
             id: `package-${group.id}`,
             name: group.qualified_name,
             short_name: group.name,
-            subtitle: `${members.length} ${members.length === 1 ? "unit" : "units"} · open group`,
+            subtitle: `${members.length} ${isCppGraph ? (members.length === 1 ? "file" : "files") : (members.length === 1 ? "module" : "modules")}`,
             kind: "package",
             packageGroup: group.id,
             members
@@ -631,7 +724,7 @@
             id: `cycle-${cycle.number}`,
             name: `Cycle ${cycle.number}`,
             short_name: `Cycle ${cycle.number}`,
-            subtitle: `${members.length} ${members.length === 1 ? "unit" : "units"} · select to inspect`,
+            subtitle: `${members.length} ${isCppGraph ? (members.length === 1 ? "file" : "files") : (members.length === 1 ? "module" : "modules")}`,
             kind: "cycle",
             cycle: cycle.number,
             members
@@ -672,8 +765,9 @@
           button.textContent = part.name;
           button.disabled = part.id === state.currentGroup;
           button.addEventListener("click", () => {
+            remember();
             state.currentGroup = part.id;
-            state.selected = null;
+            state.selected = null;state.inspected = null;
             showPlaceholder();
             render();
           });
@@ -695,18 +789,8 @@
         const seeds = state.selected.startsWith("cycle-")
           ? (cycleByNumber.get(Number(state.selected.slice(6)))?.members || [])
           : [state.selected];
-        const ids = new Set(seeds);
         const allRelations = rawVisibleRelations();
-        allRelations.forEach(relation => {
-          if (seeds.includes(relation.source) || seeds.includes(relation.target)) {
-            ids.add(relation.source);
-            ids.add(relation.target);
-          }
-        });
-        seeds.forEach(id => {
-          const cycle = cycleByMember.get(id);
-          cycle?.members.forEach(member => ids.add(member));
-        });
+        const ids = dependencyTools.trace(data.nodes, allRelations, seeds, state.direction, state.closure ? Infinity : state.depth);
         const items = data.nodes.filter(node => ids.has(node.id) && visibleNode(node)).map(node => ({ ...node, members: [node.id] }));
         const visibleIds = new Set(items.map(item => item.id));
         const relations = allRelations
@@ -716,6 +800,11 @@
       }
 
       function graphForMode() {
+        if (state.mode === 'architecture') return architectureGraph();
+        if (state.mode === 'path') {
+          const ids=new Set(state.path || []), pairs=new Set((state.path || []).slice(1).map((id,i)=>`${state.path[i]}|${id}`));
+          return {items:data.nodes.filter(n=>ids.has(n.id)).map(n=>({...n,members:[n.id]})),relations:data.relations.filter(r=>r.kind==='exact'&&pairs.has(`${r.source}|${r.target}`))};
+        }
         if (state.mode === "full") return fullGraph();
         if (state.mode === "neighborhood") return neighborhoodGraph();
         return overviewGraph();
@@ -785,14 +874,18 @@
         [...columns.entries()].sort((a, b) => a[0] - b[0]).forEach(([columnNumber, column]) => {
           const offset = (maxRows - column.length) * 48;
           column.forEach((item, row) => {
-            positions.set(item.id, { x: 70 + columnNumber * 285, y: 60 + offset + row * 96 });
+            const base=state.topDown?{x:70+(row-(column.length-1)/2)*250,y:60+columnNumber*160}:{x:70+columnNumber*285,y:60+offset+row*96};
+            const moved=state.offsets[state.topDown?'vertical':'horizontal'].get(item.id)||{x:0,y:0};
+            positions.set(item.id,{x:base.x+moved.x,y:base.y+moved.y});
           });
         });
         return positions;
       }
 
-      function render() {
-        const graph = graphForMode();
+      function render(fit=true) {
+        const completeGraph = graphForMode();
+        const graph = dependencyTools.graphWindow(completeGraph,state.selected,graphLimit);
+        graphOmitted=graph.omitted;
         state.items = graph.items;
         state.relations = graph.relations;
         state.positions = layout(graph.items, graph.relations);
@@ -805,7 +898,10 @@
         updateSelectionStyles();
         updateViewButtons();
         updateBreadcrumbs();
-        requestAnimationFrame(fitGraph);
+        refreshNavigator();
+        refreshFeatureState();
+        if(nodeById.has(state.inspected||state.selected) && state.selectedEdge === null)showNodeDetails(nodeById.get(state.inspected||state.selected));
+        if(fit)requestAnimationFrame(fitGraph);
       }
 
       function renderEdge(relation, index) {
@@ -813,8 +909,8 @@
         const target = state.positions.get(relation.target);
         const sourceItem = state.items.find(item => item.id === relation.source);
         const targetItem = state.items.find(item => item.id === relation.target);
-        const sourceExpanded = sourceItem.kind === "cycle" || sourceItem.kind === "package";
-        const targetExpanded = targetItem.kind === "cycle" || targetItem.kind === "package";
+        const sourceExpanded = sourceItem.kind === "cycle" || sourceItem.kind === "package" || sourceItem.kind === "architecture";
+        const targetExpanded = targetItem.kind === "cycle" || targetItem.kind === "package" || targetItem.kind === "architecture";
         const sourceWidth = sourceExpanded ? 220 : 190;
         const targetWidth = targetExpanded ? 220 : 190;
         const sourceHeight = sourceExpanded ? 70 : 58;
@@ -828,18 +924,23 @@
         const c1x = forward ? sx + distance : sx - 70 - (index % 4) * 18;
         const c2x = forward ? tx - distance : tx + 70 + (index % 4) * 18;
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.setAttribute("d", `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ty}, ${tx} ${ty}`);
+        if(state.topDown){
+          const down=target.y>source.y,ax=source.x+sourceWidth/2,bx=target.x+targetWidth/2,ay=source.y+(down?sourceHeight:0),by=target.y+(down?0:targetHeight);
+          if(Math.abs(target.y-source.y)<24){const lane=Math.max(source.y+sourceHeight,target.y+targetHeight)+60+(index%4)*16;path.setAttribute('d',`M ${ax} ${source.y+sourceHeight} C ${ax} ${lane}, ${bx} ${lane}, ${bx} ${target.y+targetHeight}`)}
+          else {const bend=Math.max(40,Math.abs(by-ay)/2);path.setAttribute('d',`M ${ax} ${ay} C ${ax} ${ay+(down?bend:-bend)}, ${bx} ${by-(down?bend:-bend)}, ${bx} ${by}`)}
+        }else path.setAttribute("d", `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ty}, ${tx} ${ty}`);
         const originals = relation.originals || [relation];
         const witness = originals.some(original => witnessEdges.has(`${original.source}|${original.target}`));
-        path.setAttribute("class", `edge${relation.kind === "exact" ? "" : " uncertain"}${witness ? " is-witness" : ""}`);
+        path.setAttribute("class", `edge${relation.kind === "exact" ? "" : relation.kind === "inferred" ? " inferred" : " uncertain"}${witness ? " is-witness" : ""}`);
+        if(dependencyTools.violations(data.nodes,originals,state.architecture).some(r=>r.confirmed))path.classList.add('rule-violation');
         path.dataset.edgeIndex = String(index);
         const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-        title.textContent = `${sourceItem.name} → ${targetItem.name} (${relation.kind})`;
+        title.textContent = `${sourceItem.name} → ${targetItem.name} (${matchLabels[relation.kind] || relation.kind})`;
         path.appendChild(title);
         path.addEventListener("click", event => {
           event.stopPropagation();
           state.selectedEdge = index;
-          state.selected = null;
+          state.inspected = null;
           showEdgeDetails(relation, sourceItem, targetItem);
           updateSelectionStyles();
         });
@@ -848,7 +949,7 @@
 
       function renderNode(item) {
         const position = state.positions.get(item.id);
-        const expanded = item.kind === "cycle" || item.kind === "package";
+        const expanded = item.kind === "cycle" || item.kind === "package" || item.kind === "architecture";
         const width = expanded ? 220 : 190;
         const height = expanded ? 70 : 58;
         const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -892,39 +993,28 @@
           : `${item.name}${item.path ? `\n${item.path}` : ""}`;
         group.appendChild(tooltip);
 
-        group.addEventListener("click", event => {
-          event.stopPropagation();
-          if (item.kind === "package") {
-            state.currentGroup = item.packageGroup;
-            state.selected = null;
-            showPlaceholder();
-            render();
-            return;
-          }
-          selectItem(item.id);
-        });
-        group.addEventListener("keydown", event => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          selectItem(item.id);
-        });
+        explorerInteractions.bind(group,{inspect:()=>inspectItem(item),explore:()=>exploreItem(item),blocked:()=>suppressClick});
+        bindNodeDrag(group,item);
         return group;
       }
 
-      function selectItem(id) {
-        state.selected = id;
-        state.selectedEdge = null;
-        document.querySelector('[data-view="neighborhood"]').disabled = false;
-        const item = state.items.find(candidate => candidate.id === id);
-        if (item?.kind === "cycle") showCycleDetails(item);
-        else showNodeDetails(nodeById.get(id));
-        updateSelectionStyles();
+      function inspectItem(item){
+        state.inspected=item.id;state.selectedEdge=null;workspace.classList.remove('hide-details');field('toggle-details').textContent='Hide details';field('toggle-details').setAttribute('aria-pressed','true');
+        nodeLayer.querySelectorAll('.node').forEach(e=>e.classList.toggle('is-inspected',e.dataset.nodeId===item.id&&item.id!==state.selected));
+        if(item.kind==='cycle')showCycleDetails(item);else if(item.kind==='architecture'||item.kind==='package')showArchitectureDetails(item);else showNodeDetails(nodeById.get(item.id));
+      }
+      function exploreItem(item){
+        if(item.kind==='architecture'){remember();state.archFocus=item.archGroup;state.selected=null;state.inspected=null;render();showArchitectureDetails(item)}
+        else if(item.kind==='package'){remember();state.currentGroup=item.packageGroup;state.selected=null;state.inspected=null;showPlaceholder();render()}
+        else if(item.kind==='cycle'){remember();state.selected=item.members[0];state.inspected=state.selected;state.mode='neighborhood';render()}
+        else selectOriginalNode(item.id,true);
       }
 
       function selectOriginalNode(id, useNeighborhood = false) {
         const node = nodeById.get(id);
         if (!node) return;
-        state.selected = id;
+        remember();
+        state.selected = id;state.inspected=id;
         state.selectedEdge = null;
         if (useNeighborhood) {
           state.mode = "neighborhood";
@@ -943,26 +1033,26 @@
         const imports = outgoingRelations.map(relation => nodeById.get(relation.target));
         const dependents = incomingRelations.map(relation => nodeById.get(relation.source));
         const cycle = cycleByMember.get(node.id);
+        const shown = new Set(state.items.flatMap(item=>item.members));
+        const dependencyList = entries => linkList(entries.filter(n=>shown.has(n.id)))+(entries.some(n=>!shown.has(n.id))?`<details><summary>Outside this graph (${entries.filter(n=>!shown.has(n.id)).length})</summary>${linkList(entries.filter(n=>!shown.has(n.id)))}</details>`:'');
         details.innerHTML = `
           <h2>${escapeHtml(node.name)}</h2>
           <div class="kind-label"><span class="kind-swatch" style="--kind-color:${kindColors[node.kind]}"></span>${kindLabels[node.kind]}</div>
           ${node.path ? `<code class="path">${escapeHtml(node.path)}</code>` : ""}
           ${node.version ? `<p>Version ${escapeHtml(node.version)}</p>` : ""}
-          ${node.outgoing_dependencies_analyzed === false ? `<p>Outgoing dependencies were not analyzed for this file type.</p>` : ""}
+          ${node.outgoing_dependencies_analyzed === false ? `<p>Dependencies were not analyzed for this file type.</p>` : ""}
           ${node.unresolved_reason ? `<p>Reason: ${escapeHtml(node.unresolved_reason.replaceAll("-", " "))}</p>` : ""}
           ${cycle ? `<p>Member of <strong>Cycle ${cycle.number}</strong>.</p>` : ""}
           ${node.candidates.length ? candidateMarkup(node.candidates) : ""}
           ${isCallGraph ? sourceDefinitionMarkup(node) : ""}
-          <h3>${isCallGraph ? "Calls" : "Dependencies"}</h3>${linkList(imports)}
-          <h3>${isCallGraph ? "Called by" : "Depended on by"}</h3>${isCallGraph && hasEmbeddedSource ? callerRelationshipsMarkup(node, incomingRelations) : linkList(dependents)}
-          ${cycle ? `<button type="button" class="detail-action" id="show-cycle">Show complete cycle</button>` : ""}
+          <h3>${isCallGraph ? "Calls" : "Dependencies · in graph"}</h3>${dependencyList(imports)}
+          <h3>${isCallGraph ? "Called by" : "Used by · in graph"}</h3>${isCallGraph && hasEmbeddedSource ? callerRelationshipsMarkup(node, incomingRelations) : dependencyList(dependents)}
+          ${cycle ? `<button type="button" class="detail-action" id="show-cycle">Show cycle</button>` : ""}
         `;
         bindNodeLinks();
         bindSourceActions(node);
         document.getElementById("show-cycle")?.addEventListener("click", () => {
-          state.mode = "neighborhood";
-          render();
-          showNodeDetails(node);
+          selectOriginalNode(node.id, true);
         });
       }
 
@@ -973,10 +1063,10 @@
         details.innerHTML = `
           <h2>Cycle ${cycle.number}</h2>
           <div class="kind-label"><span class="kind-swatch" style="--kind-color:${kindColors.cycle}"></span>${isCallGraph ? "Recursive call group" : "Dependency cycle"}</div>
-          <p class="placeholder">${isCallGraph ? "These symbols call one another recursively." : "These dependency units depend on one another. They are collapsed in the overview to keep the rest of the architecture readable."}</p>
-          ${isCallGraph ? "" : `<h3>Shortest witness loop</h3><p><code>${escapeHtml(witness.join(" → "))}</code></p><h3>Recommended cuts</h3>${cycle.recommended_cuts.length ? `<ul class="evidence">${cycle.recommended_cuts.map((relation, index) => `<li><button type="button" class="node-link" data-cut="${index}">${escapeHtml(nodeById.get(relation.source)?.name || relation.source)} → ${escapeHtml(nodeById.get(relation.target)?.name || relation.target)}</button><br>${relation.evidence.length} dependency ${relation.evidence.length === 1 ? "site" : "sites"} to reconsider</li>`).join("")}</ul>` : `<p class="empty-list">No recommendation available.</p>`}<p class="placeholder">Recommendations are deterministic approximations, not guaranteed optimal architectural fixes.</p>`}
+          <p class="placeholder">${isCallGraph ? "These symbols call one another recursively." : "These files or modules form a dependency cycle. Overview shows them as one group."}</p>
+          ${isCallGraph ? "" : `<h3>Cycle path</h3><p><code>${escapeHtml(witness.join(" → "))}</code></p><h3>Dependencies to review</h3>${cycle.recommended_cuts.length ? `<ul class="evidence">${cycle.recommended_cuts.map((relation, index) => `<li><button type="button" class="node-link" data-cut="${index}">${escapeHtml(nodeById.get(relation.source)?.name || relation.source)} → ${escapeHtml(nodeById.get(relation.target)?.name || relation.target)}</button><br>${relation.evidence.length} ${relation.evidence.length === 1 ? "reference" : "references"}</li>`).join("")}</ul>` : `<p class="empty-list">No suggestions.</p>`}<p class="placeholder">Removing these dependencies would break this cycle. Review the code before making changes.</p>`}
           <h3>Members</h3>${linkList(members)}
-          <button type="button" class="detail-action" id="expand-cycle">Expand this cycle</button>
+          <button type="button" class="detail-action" id="expand-cycle">Expand cycle</button>
         `;
         bindNodeLinks();
         details.querySelectorAll("[data-cut]").forEach(button => {
@@ -986,10 +1076,7 @@
           });
         });
         document.getElementById("expand-cycle").addEventListener("click", () => {
-          state.mode = "neighborhood";
-          state.selected = cycle.members[0];
-          render();
-          showNodeDetails(nodeById.get(state.selected));
+          selectOriginalNode(cycle.members[0], true);
         });
       }
 
@@ -998,10 +1085,10 @@
         const evidence = originals.flatMap(original => original.evidence || []);
         details.innerHTML = `
           <h2>${escapeHtml(sourceItem.name)} → ${escapeHtml(targetItem.name)}</h2>
-          <div class="kind-label">${relation.kind === "exact" ? `Exact ${isCallGraph ? "call" : "dependency"}` : `${escapeHtml(relation.kind)} ${isCallGraph ? "call" : "dependency"}`}</div>
-          ${relation.inference_basis ? `<p>Basis: ${escapeHtml(relation.inference_basis)}.</p>` : ""}
-          <h3>Source evidence</h3>
-          ${evidence.length ? `<ul class="evidence">${evidence.map(item => `<li><code>${escapeHtml(item.source_path)}:${item.line}:${item.column}</code><br>${isCallGraph ? "calls" : (item.usage === "include" ? "includes" : "imports")} ${escapeHtml(item.import_name)}${isCallGraph ? "" : `<br><span class="context-badge">${escapeHtml(item.scope)}</span><span class="context-badge">${escapeHtml(item.usage)}</span><span class="context-badge">${escapeHtml(item.requirement)}</span>${item.conditional ? `<span class="context-badge">conditional</span>` : ""}`}</li>`).join("")}</ul>` : `<p class="empty-list">Collapsed relationship between graph groups.</p>`}
+          <div class="kind-label">${escapeHtml(matchLabels[relation.kind] || relation.kind)}</div>
+          ${relation.inference_basis ? `<p>Basis: ${escapeHtml(relation.inference_basis === "unique-repository-suffix" ? "One project file matches the include path" : relation.inference_basis)}.</p>` : ""}
+          <h3>References</h3>
+          ${evidence.length ? `<ul class="evidence">${evidence.map(item => `<li><code>${escapeHtml(item.source_path)}:${item.line}:${item.column}</code><br>${isCallGraph ? "calls" : (item.usage === "include" ? "includes" : "imports")} ${escapeHtml(item.import_name)}${isCallGraph ? "" : `<br><span class="empty-list">${[item.scope,item.usage,item.requirement,item.conditional?"conditional":null].filter(Boolean).map(escapeHtml).join(" · ")}</span>`}</li>`).join("")}</ul>` : `<p class="empty-list">Connection between groups.</p>`}
         `;
       }
 
@@ -1054,14 +1141,14 @@
           details.innerHTML = `
             <h2>${escapeHtml(data.query.label)}</h2>
             <div class="kind-label">Exact local ${data.query.kind === "closure" ? "reachability" : "path"} query</div>
-            ${data.query.found ? `<h3>Result</h3>${linkList(ordered)}` : `<p class="empty-list">No connecting exact local dependency path was found.</p>`}
+            ${data.query.found ? `<h3>Result</h3>${linkList(ordered)}` : `<p class="empty-list">No path found using exact project dependencies.</p>`}
           `;
           bindNodeLinks();
           return;
         }
         details.innerHTML = `
-          <h2>Explore the graph</h2>
-          <p class="placeholder">Select a node to see its full ${isCallGraph ? "symbol selector, source path, callees, and callers" : "dependency identity, source path, dependencies, and dependents"}. Use Neighborhood to isolate just the surrounding relationships.</p>
+          <h2>Details</h2>
+          <p class="placeholder">${isCallGraph ? "Select a function to see its code and calls." : "Select a file or module to see its dependencies. Select an arrow to see the import or include."}</p>
         `;
       }
 
@@ -1080,8 +1167,9 @@
           const memberNames = item.members.map(id => nodeById.get(id)?.name || "").join(" ");
           const matches = query && `${item.name} ${memberNames}`.toLowerCase().includes(query);
           element.classList.toggle("is-selected", item.id === state.selected);
+          element.classList.toggle("is-inspected", item.id === state.inspected && item.id !== state.selected);
           element.classList.toggle("is-match", Boolean(matches));
-          element.classList.toggle("is-dimmed", Boolean(selectedItem) && !related.has(item.id));
+          element.classList.toggle("is-dimmed", Boolean(selectedItem) && state.mode!=='neighborhood' && state.mode!=='path' && !related.has(item.id));
         });
         edgeLayer.querySelectorAll(".edge").forEach(element => {
           const index = Number(element.dataset.edgeIndex);
@@ -1090,7 +1178,7 @@
           const hovered = state.hoveredRelation && (relation.originals || [relation])
             .some(original => `${original.source}|${original.target}` === state.hoveredRelation);
           element.classList.toggle("is-selected", index === state.selectedEdge || Boolean(incident) || Boolean(hovered));
-          element.classList.toggle("is-dimmed", Boolean(selectedItem) && !incident);
+          element.classList.toggle("is-dimmed", Boolean(selectedItem) && state.mode!=='neighborhood' && state.mode!=='path' && !incident);
         });
       }
 
@@ -1108,7 +1196,7 @@
         if (!state.items.length) return;
         const bounds = state.items.reduce((result, item) => {
           const position = state.positions.get(item.id);
-          const expanded = item.kind === "cycle" || item.kind === "package";
+          const expanded = item.kind === "cycle" || item.kind === "package" || item.kind === "architecture";
           const width = expanded ? 220 : 190;
           const height = expanded ? 70 : 58;
           result.minX = Math.min(result.minX, position.x);
@@ -1140,6 +1228,7 @@
 
       document.querySelectorAll("[data-view]").forEach(button => {
         button.addEventListener("click", () => {
+          remember();
           state.mode = button.dataset.view;
           state.selectedEdge = null;
           render();
@@ -1151,7 +1240,7 @@
         input.addEventListener("change", () => {
           if (input.checked) state.visibleKinds.add(input.dataset.kind);
           else state.visibleKinds.delete(input.dataset.kind);
-          state.selected = null;
+          state.inspected = null;
           state.selectedEdge = null;
           showPlaceholder();
           render();
@@ -1168,7 +1257,7 @@
         state.query = search.value;
         updateSelectionStyles();
         const exact = data.nodes.find(node => node.name.toLowerCase() === state.query.trim().toLowerCase());
-        if (exact) selectOriginalNode(exact.id, false);
+        if (exact && state.selected !== exact.id) selectOriginalNode(exact.id, true);
       });
       search.addEventListener("keydown", event => {
         if (event.key !== "Enter") return;
@@ -1186,11 +1275,12 @@
       });
       svg.addEventListener("pointermove", event => {
         if (!drag) return;
+        if(Math.abs(event.clientX-drag.x)+Math.abs(event.clientY-drag.y)>3)drag.moved=true;
         state.transform.x = drag.originX + event.clientX - drag.x;
         state.transform.y = drag.originY + event.clientY - drag.y;
         applyTransform();
       });
-      svg.addEventListener("pointerup", () => { drag = null; svg.classList.remove("is-panning"); });
+      svg.addEventListener("pointerup", () => { if(drag?.moved){suppressClick=true;setTimeout(()=>suppressClick=false,0)}drag = null; svg.classList.remove("is-panning"); });
       svg.addEventListener("pointercancel", () => { drag = null; svg.classList.remove("is-panning"); });
       svg.addEventListener("wheel", event => {
         event.preventDefault();
@@ -1198,9 +1288,11 @@
         zoom(event.deltaY < 0 ? 1.12 : 0.89, event.clientX - rect.left, event.clientY - rect.top);
       }, { passive: false });
       svg.addEventListener("click", () => {
-        state.selected = null;
+        if(suppressClick)return;
+        state.inspected = null;
         state.selectedEdge = null;
         showPlaceholder();
+        nodeLayer.querySelectorAll(".is-inspected").forEach(e=>e.classList.remove("is-inspected"));
         updateSelectionStyles();
       });
 
@@ -1208,6 +1300,8 @@
       document.getElementById("zoom-out").addEventListener("click", () => zoom(0.82));
       document.getElementById("fit").addEventListener("click", fitGraph);
       window.addEventListener("resize", fitGraph);
+
+      __CODEGRAIDE_DEPENDENCY_CONTROLS__
 
       showPlaceholder();
       render();

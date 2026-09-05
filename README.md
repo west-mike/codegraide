@@ -333,6 +333,33 @@ graph to expand every module. The details panel shows full module names,
 repository-relative paths, imports, dependents, and source evidence without
 putting fan-in or fan-out counts into node labels.
 
+The dependency explorer supports **Connections** with depth 0–20, direction
+(Dependencies, Used by, or Both), and **All reachable**. These views respect the
+visible relation filters. **Find path** searches exact project dependencies,
+independently of display filters. Back restores prior navigation; both panels
+can be resized or hidden. Nodes can be dragged, with separate arrangements for
+horizontal and top-down layouts. Recenter fits the current arrangement; Reset
+layout clears the current orientation's offsets.
+
+The **Architecture** panel starts with directory groups. Edit groups using
+repository-relative path prefixes (longest prefix wins), then add directed
+“must not depend on” rules. Rule checks cover all relations in the generated
+report: exact matches are violations, other matches are review candidates.
+Group arrows retain reference evidence. Save/load the
+`dependency-architecture-v1` configuration to reuse it; edits otherwise last only
+for the current page. These are explorer checks, not CLI quality gates.
+
+The **Compare** panel saves and loads `dependency-snapshot-v1` JSON snapshots;
+copy/paste is also available for snapshots and architecture configurations.
+Generate reports at the two commits with identical analysis/filter options,
+label and save the older report's snapshot, then load it into the newer report.
+Comparison matches file/module identities rather than generated IDs and lists
+added and removed dependencies, including removed targets. A resolution-status
+change appears in both lists. Revision labels are manually entered; the browser
+does not check out commits or infer that a working tree is clean. Comparison
+covers the generated reports rather than the current display filters. No code
+preview or call-graph navigation is added to the dependency explorer.
+
 `--open` uses the operating system's default browser. To open the generated
 file specifically in Google Chrome on macOS:
 
@@ -530,6 +557,10 @@ beneath a written call. It does not pretend to inline compiled C++. Expansion
 stops at `--max-expansion-depth` (default 3), at recursion, or after 100 cards.
 Source embedding can expose private code when a report is shared, so it remains
 HTML-only and opt-in.
+
+Both explorers use the same graph toolbar. Dependency graphs and file lists load bounded batches with explicit omitted counts; the call graph can also reveal more connections per layer. Filtered call reports identify their scope, and the navigator exposes report-level call-resolution coverage. C++ macros and parser recovery can still leave missing or uncertain connections.
+
+Graph interaction in both explorers: click a node to inspect its details without changing the graph; double-click or right-click → **Explore** to navigate. Drag nodes to arrange them and drag the background to pan. With a node focused, Enter opens details and Shift+Enter explores it.
 
 ### Try both explorers on argparse
 

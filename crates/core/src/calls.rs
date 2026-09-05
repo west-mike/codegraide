@@ -70,7 +70,8 @@ pub struct ProjectSymbolLocation {
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProjectSymbol {
-    pub call_flow: Option<crate::CallFlow>,
+    // Call relations share immutable flow metadata instead of copying the whole tree.
+    pub call_flow: Option<std::sync::Arc<crate::CallFlow>>,
     pub id: ProjectSymbolId,
     pub path: PathBuf,
     pub span: SourceSpan,

@@ -909,11 +909,9 @@ impl<'a> Extraction<'a> {
         let Some(declarator) = node.child_by_field_name("declarator") else {
             return;
         };
-        let Some(name_node) = declarator_name_node(declarator) else {
+        let Some((name_node, name)) = callable_name(node, declarator, self.source) else {
             return;
         };
-        let name_node = function_name_node(name_node, self.source);
-        let name = node_text(name_node, self.source);
         let parent_kind = parent_id
             .as_ref()
             .and_then(|id| self.symbol(id))
@@ -1024,15 +1022,15 @@ impl<'a> Extraction<'a> {
     }
 
     fn process_declaration(&mut self, node: Node<'_>, parent_id: Option<SymbolId>) {
-        let Some(declarator) = find_descendant(node, "function_declarator") else {
+        let Some(declarator) = find_descendant(node, "function_declarator")
+            .or_else(|| find_descendant(node, "operator_cast"))
+        else {
             self.process_forward_declaration(node, parent_id);
             return;
         };
-        let Some(name_node) = declarator_name_node(declarator) else {
+        let Some((name_node, name)) = callable_name(node, declarator, self.source) else {
             return;
         };
-        let name_node = function_name_node(name_node, self.source);
-        let name = node_text(name_node, self.source);
         if name.is_empty() {
             return;
         }
@@ -1590,6 +1588,29 @@ fn declarator_name_node(node: Node<'_>) -> Option<Node<'_>> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .find_map(declarator_name_node)
+}
+
+// tree-sitter can read `Owner::operator Type()` as a return type `Owner::operator`
+// and a function named `Type`. Preserve the operator so it cannot match Type().
+fn callable_name<'tree>(
+    node: Node<'tree>,
+    declarator: Node<'tree>,
+    source: &[u8],
+) -> Option<(Node<'tree>, String)> {
+    if let Some(cast) = find_descendant(declarator, "operator_cast") {
+        let name_node = cast.child_by_field_name("type")?;
+        let spelling = node_text(declarator, source);
+        return Some((name_node, spelling.split('(').next()?.trim().to_owned()));
+    }
+    let name_node = function_name_node(declarator_name_node(declarator)?, source);
+    let mut name = node_text(name_node, source);
+    if let Some(kind) = node.child_by_field_name("type") {
+        let spelling = node_text(kind, source);
+        if let Some(owner) = spelling.strip_suffix("::operator") {
+            name = format!("{owner}::operator {name}");
+        }
+    }
+    Some((name_node, name))
 }
 
 fn function_name_node<'tree>(node: Node<'tree>, source: &[u8]) -> Node<'tree> {

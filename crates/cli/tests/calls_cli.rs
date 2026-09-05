@@ -190,7 +190,7 @@ fn call_renderers_and_focus_use_the_dedicated_explorer() {
     assert!(source_html_stdout.contains("max_expansion_depth\":3"));
     assert!(!source_html_stdout.contains("Who calls this, and what it calls"));
     assert!(source_html_stdout.contains("tok-keyword"));
-    assert!(source_html_stdout.contains("Showing up to"));
+    assert!(source_html_stdout.contains("connections omitted"));
     assert!(source_html_stdout.contains("Exact match"));
 
     let dot = run(&[
@@ -706,4 +706,47 @@ fn cpp_flow_keeps_occurrences_and_source_opt_in() {
             assert!(node["call_flow"].is_null());
         }
     }
+}
+
+#[test]
+fn cpp_construction_does_not_resolve_to_a_conversion_operator() {
+    let repository = tempfile::tempdir().expect("repository");
+    fs::write(
+        repository.path().join("conversion.cpp"),
+        r#"
+namespace cv {
+struct Mat {};
+struct MatExpr { operator Mat() const; };
+inline MatExpr::operator Mat() const { return Mat(); }
+void threshold() { auto m = cv::Mat(); }
+}
+"#,
+    )
+    .expect("fixture");
+    let output = run(&[
+        "calls",
+        repository.path().to_str().unwrap(),
+        "--language",
+        "cpp",
+        "--format",
+        "json",
+    ]);
+    assert!(output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("report");
+    let nodes = report["nodes"].as_array().unwrap();
+    let conversion = nodes
+        .iter()
+        .find(|n| n["selector"] == "cv::MatExpr::operator Mat")
+        .expect("conversion");
+    let threshold = nodes
+        .iter()
+        .find(|n| n["selector"] == "cv::threshold")
+        .expect("caller");
+    assert!(
+        report["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["source"] != threshold["id"] || r["target"] != conversion["id"])
+    );
 }

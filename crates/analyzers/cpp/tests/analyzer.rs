@@ -411,3 +411,36 @@ fn preserves_partial_facts_when_the_pinned_grammar_recovers_valid_syntax() {
             .any(|symbol| symbol.name == "Parser")
     );
 }
+
+#[test]
+fn conversion_operator_is_not_named_as_its_return_type() {
+    let result = analyze(
+        "conversion.cpp",
+        br#"
+namespace cv {
+struct Mat {};
+struct MatExpr { operator Mat() const; };
+inline MatExpr::operator Mat() const { return Mat(); }
+}
+"#,
+    );
+    let functions = result
+        .facts
+        .symbols
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Function | SymbolKind::Method))
+        .map(|s| s.qualified_name.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        functions.contains(&"cv::MatExpr::operator Mat"),
+        "{functions:?}"
+    );
+    assert!(!functions.contains(&"cv::Mat"), "{functions:?}");
+    assert!(
+        result
+            .facts
+            .declarations
+            .iter()
+            .any(|d| d.qualified_name == "cv::MatExpr::operator Mat")
+    );
+}
