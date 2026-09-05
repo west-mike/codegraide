@@ -626,6 +626,13 @@ fn symbol_occurrences(
     let mut result = symbol
         .declarations
         .iter()
+        // A definition is also a declaration; show one source choice at that location.
+        .filter(|location| {
+            symbol
+                .definition
+                .as_ref()
+                .is_none_or(|definition| location_label(location) != location_label(definition))
+        })
         .filter_map(|location| {
             let label = location_label(location);
             sources
@@ -761,19 +768,16 @@ fn load_call_sources(
 }
 
 fn source_for_span(source: &str, span: crate::SourceSpan) -> Option<HtmlSource> {
-    let lines = source.lines().collect::<Vec<_>>();
-    let start = span.start.line.checked_sub(1)?;
-    let end = span.end.line.min(lines.len());
-    if start >= end {
+    // Byte bounds keep a declaration preview from including adjacent code on its line.
+    let excerpt = source.get(span.start_byte..span.end_byte)?;
+    let lines = excerpt.lines().map(str::to_owned).collect::<Vec<_>>();
+    if lines.is_empty() {
         return None;
     }
     Some(HtmlSource {
         start_line: span.start.line,
-        end_line: end,
-        lines: lines[start..end]
-            .iter()
-            .map(|line| (*line).to_owned())
-            .collect(),
+        end_line: span.start.line + lines.len() - 1,
+        lines,
     })
 }
 

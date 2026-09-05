@@ -471,7 +471,7 @@ cargo run -p codegraide -- calls . --cycles-only --format dot > calls.dot
 ```
 
 Python call extraction remains `python-call-references-v1`. C++ uses
-`cpp-symbol-index-v1`, `cpp-declaration-definition-linking-v1`,
+`cpp-symbol-index-v2`, `cpp-declaration-definition-linking-v2`,
 `cpp-call-references-v1`, `cpp-call-resolution-v1`, and `cpp-modules-v1`.
 The independent call report is schema `0.2.0` with `call-graph-v2`.
 Selectors use `module::qualified.symbol`, such as

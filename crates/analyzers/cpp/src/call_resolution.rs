@@ -10,8 +10,8 @@ use codegraide_core::{
 
 use crate::CppDependencyResolution;
 
-pub const CPP_SYMBOL_INDEX_DEFINITION_VERSION: &str = "cpp-symbol-index-v1";
-pub const CPP_DECLARATION_LINK_DEFINITION_VERSION: &str = "cpp-declaration-definition-linking-v1";
+pub const CPP_SYMBOL_INDEX_DEFINITION_VERSION: &str = "cpp-symbol-index-v2";
+pub const CPP_DECLARATION_LINK_DEFINITION_VERSION: &str = "cpp-declaration-definition-linking-v2";
 pub const CPP_CALL_RESOLUTION_DEFINITION_VERSION: &str = "cpp-call-resolution-v1";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -34,6 +34,8 @@ struct DefinitionOccurrence {
     path: PathBuf,
     span: codegraide_core::SourceSpan,
     syntax_id: String,
+    signature: Option<CallableSignature>,
+    language_module: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -129,6 +131,8 @@ pub fn resolve_cpp_calls(
                     path: file.path.clone(),
                     span: symbol.span,
                     syntax_id: symbol.id.as_str().to_owned(),
+                    signature: symbol.callable_signature.clone(),
+                    language_module: entry.language_module.clone(),
                 });
                 if symbol.kind == SymbolKind::Method {
                     entry.declarations.push(ProjectSymbolLocation {
@@ -171,10 +175,67 @@ pub fn resolve_cpp_calls(
         }
     }
 
+    let declaration_visibility = build_visibility(dependencies);
+    let mut separated_entries = Vec::new();
+    for (key, mut entry) in entries {
+        entry.definitions.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then(left.span.start_byte.cmp(&right.span.start_byte))
+        });
+        if entry.definitions.len() <= 1 {
+            separated_entries.push((key, entry));
+            continue;
+        }
+        // A matching signature is not evidence that two bodies are one function.
+        // Shared visible declarations may link to multiple candidates; calls must resolve
+        // those candidates independently instead of combining their outgoing evidence.
+        let mut attached = BTreeSet::new();
+        for definition in &entry.definitions {
+            let declarations = entry
+                .declarations
+                .iter()
+                .filter(|declaration| {
+                    declaration.path == definition.path
+                        || declaration_visibility
+                            .get(&definition.path)
+                            .is_some_and(|paths| paths.contains_key(&declaration.path))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            attached.extend(declarations.iter().cloned());
+            separated_entries.push((
+                key.clone(),
+                IndexEntry {
+                    definitions: vec![definition.clone()],
+                    declarations,
+                    signature: definition.signature.clone(),
+                    language_module: definition.language_module.clone(),
+                },
+            ));
+        }
+        let declarations = entry
+            .declarations
+            .into_iter()
+            .filter(|declaration| !attached.contains(declaration))
+            .collect::<Vec<_>>();
+        if !declarations.is_empty() {
+            separated_entries.push((
+                key,
+                IndexEntry {
+                    definitions: Vec::new(),
+                    declarations,
+                    signature: entry.signature,
+                    language_module: entry.language_module,
+                },
+            ));
+        }
+    }
+
     let mut overload_counts = BTreeMap::<(String, SymbolKind), usize>::new();
     let mut symbols = Vec::new();
     let mut by_syntax_id = BTreeMap::<(PathBuf, String), usize>::new();
-    for (key, mut entry) in entries {
+    for (key, mut entry) in separated_entries {
         entry.definitions.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
@@ -293,7 +354,12 @@ pub fn resolve_cpp_calls(
                     .map(|signature| signature.normalized_key.as_str())
                     .unwrap_or_default();
                 if let Some((index, _)) = symbols.iter().enumerate().find(|(_, candidate)| {
-                    candidate.id.qualified_name == symbol.qualified_name
+                    candidate.path == file.path
+                        && candidate
+                            .definition
+                            .as_ref()
+                            .is_some_and(|definition| definition.span == symbol.span)
+                        && candidate.id.qualified_name == symbol.qualified_name
                         && candidate.id.kind == kind
                         && candidate
                             .signature

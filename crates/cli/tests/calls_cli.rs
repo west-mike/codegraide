@@ -150,7 +150,7 @@ fn call_renderers_and_focus_use_the_dedicated_explorer() {
     let html_stdout = String::from_utf8(html.stdout).expect("UTF-8 HTML");
     assert!(html.status.success());
     assert!(html_stdout.starts_with("<!doctype html>"));
-    assert!(html_stdout.contains("Codegraide Call Graph Explorer"));
+    assert!(html_stdout.contains("Call Graph Explorer"));
     assert!(html_stdout.contains("Interactive caller and callee graph"));
     assert!(html_stdout.contains("Return to the project overview"));
     assert!(html_stdout.contains("Hide navigator"));
@@ -159,17 +159,17 @@ fn call_renderers_and_focus_use_the_dedicated_explorer() {
     assert!(html_stdout.contains("function wheelZoomDelta(e)"));
     assert!(html_stdout.contains("Math.abs(e.deltaY)>=Math.abs(e.deltaX)"));
     assert!(html_stdout.contains("Clear search"));
-    assert!(html_stdout.contains("Search navigator"));
+    assert!(!html_stdout.contains("Search navigator"));
     assert!(html_stdout.contains("id=\"depthSlider\" type=\"range\" min=\"1\" max=\"10\""));
     assert!(html_stdout.contains("'FUNCTION CALLS'"));
     assert!(html_stdout.contains(".graph-node{cursor:pointer"));
-    assert!(html_stdout.contains("ringGap=255"));
+    assert!(html_stdout.contains("Reset layout"));
     assert!(html_stdout.contains("e.clientX,e.clientY"));
     assert!(!html_stdout.contains("useful matches per column"));
     assert!(html_stdout.contains("noticeTimer=setTimeout"));
     assert!(html_stdout.contains(".truncated{position:absolute;top:38px"));
-    assert!(html_stdout.contains("Show parser-level and synthetic details"));
-    assert!(html_stdout.contains("Show tests and bundled support code"));
+    assert!(html_stdout.contains("Unnamed and unparsed symbols"));
+    assert!(html_stdout.contains("Tests and vendor code"));
     assert!(html_stdout.contains("shop.helpers::Client.send"));
     assert!(!html_stdout.contains("\"source\":{"));
     assert!(!html_stdout.contains("https://"));
@@ -188,7 +188,7 @@ fn call_renderers_and_focus_use_the_dedicated_explorer() {
     assert!(source_html_stdout.contains("\"lines\":[\"def helper():\",\"    return 1\"]"));
     assert!(source_html_stdout.contains("Function code"));
     assert!(source_html_stdout.contains("max_expansion_depth\":3"));
-    assert!(source_html_stdout.contains("Who calls this, and what it calls"));
+    assert!(!source_html_stdout.contains("Who calls this, and what it calls"));
     assert!(source_html_stdout.contains("tok-keyword"));
     assert!(source_html_stdout.contains("Showing up to"));
     assert!(source_html_stdout.contains("Exact match"));
@@ -481,4 +481,176 @@ fn mixed_projects_require_a_call_language_and_expansion_depth_requires_source_ht
     ]);
     assert!(!invalid_depth.status.success());
     assert!(String::from_utf8_lossy(&invalid_depth.stderr).contains("requires --include-source"));
+}
+
+#[test]
+fn cpp_source_choices_separate_declarations_and_deduplicate_inline_definitions() {
+    let repository = tempfile::tempdir().expect("temporary repository");
+    fs::write(
+        repository.path().join("preview.hpp"),
+        "int separate(); int adjacent();
+inline int together() { return 7; }
+",
+    )
+    .unwrap();
+    fs::write(
+        repository.path().join("preview.cpp"),
+        "#include \"preview.hpp\"
+int separate() { return 42; }
+",
+    )
+    .unwrap();
+    let output = run(&[
+        "calls",
+        repository.path().to_str().unwrap(),
+        "--language",
+        "cpp",
+        "--format",
+        "html",
+        "--include-source",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = String::from_utf8(output.stdout).unwrap();
+    let payload = html
+        .split("const data=")
+        .nth(1)
+        .unwrap()
+        .split(";\n")
+        .next()
+        .unwrap();
+    let report: Value = serde_json::from_str(payload).unwrap();
+    let nodes = report["nodes"].as_array().unwrap();
+    let separate = nodes
+        .iter()
+        .find(|node| node["name"] == "separate")
+        .unwrap();
+    let choices = separate["occurrences"].as_array().unwrap();
+    assert_eq!(choices.len(), 2);
+    let declaration = choices
+        .iter()
+        .find(|choice| choice["kind"] == "declaration")
+        .unwrap();
+    let definition = choices
+        .iter()
+        .find(|choice| choice["kind"] == "definition")
+        .unwrap();
+    assert_eq!(
+        declaration["source"]["lines"],
+        serde_json::json!(["int separate();"])
+    );
+    assert_eq!(
+        definition["source"]["lines"],
+        serde_json::json!(["int separate() { return 42; }"])
+    );
+    let inline = nodes
+        .iter()
+        .find(|node| node["name"] == "together")
+        .unwrap();
+    assert_eq!(inline["occurrences"].as_array().unwrap().len(), 1);
+    assert_eq!(inline["occurrences"][0]["kind"], "definition");
+    assert_eq!(
+        inline["occurrences"][0]["source"]["lines"],
+        serde_json::json!(["inline int together() { return 7; }"])
+    );
+}
+
+#[test]
+fn cpp_duplicate_definitions_keep_file_local_call_ownership() {
+    let repository = tempfile::tempdir().expect("temporary repository");
+    fs::write(
+        repository.path().join("shared.hpp"),
+        "inline int shared() { return 1; }\nint declared();\n",
+    )
+    .unwrap();
+    for (path, value) in [("a.cpp", 11), ("b.cpp", 22)] {
+        fs::write(repository.path().join(path), format!(
+            "#include \"shared.hpp\"\nstatic int helper() {{ return {value}; }}\nint declared() {{ return {value}; }}\nint main() {{ return helper() + shared(); }}\n"
+        )).unwrap();
+    }
+    fs::write(
+        repository.path().join("consumer.cpp"),
+        "#include \"shared.hpp\"\nint entry() { return declared(); }\n",
+    )
+    .unwrap();
+    let args = [
+        "calls",
+        repository.path().to_str().unwrap(),
+        "--language",
+        "cpp",
+        "--format",
+        "json",
+    ];
+    let output = run(&args);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.stdout,
+        run(&args).stdout,
+        "identities must be deterministic"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let nodes = report["nodes"].as_array().unwrap();
+    let relations = report["relations"].as_array().unwrap();
+    let mains = nodes
+        .iter()
+        .filter(|node| {
+            node["selector"]
+                .as_str()
+                .is_some_and(|s| s == "main" || s.starts_with("main#"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(mains.len(), 2);
+    assert_ne!(mains[0]["id"], mains[1]["id"]);
+    for main in mains {
+        assert_eq!(main["definition"]["path"], main["path"]);
+        let calls = relations
+            .iter()
+            .filter(|r| r["source"] == main["id"])
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 2);
+        for relation in calls {
+            for evidence in relation["evidence"].as_array().unwrap() {
+                assert_eq!(evidence["source_path"], main["path"]);
+            }
+            let target = nodes
+                .iter()
+                .find(|n| n["id"] == relation["target"])
+                .unwrap();
+            if target["selector"].as_str().unwrap().starts_with("helper") {
+                assert_eq!(
+                    target["path"], main["path"],
+                    "a local helper must stay in its own file"
+                );
+            } else {
+                assert_eq!(target["selector"], "shared");
+                assert_eq!(target["path"], "shared.hpp");
+            }
+        }
+    }
+    assert_eq!(
+        nodes.iter().filter(|n| n["selector"] == "shared").count(),
+        1
+    );
+    let declared = nodes
+        .iter()
+        .filter(|n| n["kind"] == "local-symbol")
+        .filter(|n| {
+            n["selector"]
+                .as_str()
+                .is_some_and(|s| s == "declared" || s.starts_with("declared#"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(declared.len(), 2, "{declared:#?}");
+    assert!(declared.iter().all(|n| n["definition"].is_object()));
+    assert_eq!(
+        report["coverage"]["ambiguous_calls"], 1,
+        "a shared declaration must not pick an arbitrary definition"
+    );
 }

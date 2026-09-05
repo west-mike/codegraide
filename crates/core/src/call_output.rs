@@ -197,9 +197,9 @@ impl CallJsonReport {
                 fan_in: CALL_FAN_IN_DEFINITION_VERSION,
                 fan_out: CALL_FAN_OUT_DEFINITION_VERSION,
                 strongly_connected_components: CALL_SCC_DEFINITION_VERSION,
-                symbol_index: (language == "cpp").then_some("cpp-symbol-index-v1"),
+                symbol_index: (language == "cpp").then_some("cpp-symbol-index-v2"),
                 declaration_definition_linking: (language == "cpp")
-                    .then_some("cpp-declaration-definition-linking-v1"),
+                    .then_some("cpp-declaration-definition-linking-v2"),
                 call_references: (language == "cpp").then_some("cpp-call-references-v1"),
                 call_resolution: (language == "cpp").then_some("cpp-call-resolution-v1"),
                 modules: (language == "cpp").then_some("cpp-modules-v1"),
