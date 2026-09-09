@@ -407,6 +407,13 @@ fn render_call_html_graph(
         .iter()
         .map(|node| (node.node.clone(), node.id.clone()))
         .collect::<BTreeMap<_, _>>();
+    let id_by_symbol = ids
+        .iter()
+        .filter_map(|(node, id)| match node {
+            CallNode::LocalSymbol(symbol) => Some((&symbol.id, id)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
     let graph = CallExplorerGraph {
         filtered_report: !view.filter.focus_symbols.is_empty()
             || view.filter.exact_only
@@ -447,7 +454,7 @@ fn render_call_html_graph(
         relations: view
             .relations
             .iter()
-            .map(|relation| call_explorer_relation(relation, &ids))
+            .map(|relation| call_explorer_relation(relation, &ids, &id_by_symbol))
             .collect(),
     };
     let data = serde_json::to_string(&graph)?
@@ -559,7 +566,10 @@ fn call_explorer_node(
             None,
             Vec::new(),
             None,
-            candidates.iter().map(call_explorer_candidate).collect(),
+            candidates
+                .iter()
+                .map(|symbol| call_explorer_candidate(symbol))
+                .collect(),
             Vec::new(),
             None,
         ),
@@ -788,14 +798,8 @@ fn call_explorer_candidate(symbol: &ProjectSymbol) -> CallExplorerCandidate {
 fn call_explorer_relation(
     relation: &CallRelation,
     ids: &BTreeMap<CallNode, String>,
+    id_by_symbol: &BTreeMap<&crate::ProjectSymbolId, &String>,
 ) -> CallExplorerRelation {
-    let id_by_symbol = ids
-        .iter()
-        .filter_map(|(node, id)| match node {
-            CallNode::LocalSymbol(symbol) => Some((&symbol.id, id)),
-            _ => None,
-        })
-        .collect::<BTreeMap<_, _>>();
     let alternative = |symbol: &ProjectSymbol| CallExplorerCandidate {
         id: id_by_symbol.get(&symbol.id).map(|id| (*id).clone()),
         name: symbol.id.ordinal_selector(),
@@ -810,7 +814,11 @@ fn call_explorer_relation(
         target: ids[&relation.target].clone(),
         status: relation.kind.as_str(),
         reason: relation.reason.clone(),
-        alternatives: relation.alternatives.iter().map(alternative).collect(),
+        alternatives: relation
+            .alternatives
+            .iter()
+            .map(|symbol| alternative(symbol))
+            .collect(),
         evidence: relation
             .evidence
             .iter()

@@ -266,6 +266,7 @@ pub fn resolve_cpp_calls(
         let project = ProjectSymbol {
             call_flow: None,
             id: ProjectSymbolId {
+                qualification: codegraide_core::SymbolQualification::Project,
                 language: LanguageId::new("cpp"),
                 module: ModuleId::new(LanguageId::new("cpp"), "<project>"),
                 qualified_name: key.qualified_name,
@@ -311,6 +312,7 @@ pub fn resolve_cpp_calls(
             symbols.push(ProjectSymbol {
                 call_flow: None,
                 id: ProjectSymbolId {
+                    qualification: codegraide_core::SymbolQualification::Project,
                     language: LanguageId::new("cpp"),
                     module: ModuleId::new(LanguageId::new("cpp"), "<project>"),
                     qualified_name,
@@ -725,12 +727,14 @@ fn qualification_rank(
 ) -> Option<u8> {
     let candidate_name = &candidate.id.qualified_name;
     let normalized_callee = call.callee.replace("->", "::").replace('.', "::");
-    if call.form == CallForm::Constructor
-        && let Some((owner, constructor)) = candidate_name.rsplit_once("::")
-        && terminal_name(owner) == terminal_name(&normalized_callee)
-        && constructor == terminal_name(owner)
-    {
-        return Some(u8::from(!owner.ends_with(&normalized_callee)));
+    if call.form == CallForm::Constructor {
+        if let Some((owner, constructor)) = candidate_name.rsplit_once("::") {
+            if terminal_name(owner) == terminal_name(&normalized_callee)
+                && constructor == terminal_name(owner)
+            {
+                return Some(u8::from(!owner.ends_with(&normalized_callee)));
+            }
+        }
     }
     if normalized_callee.contains("::")
         && (candidate_name == &normalized_callee
@@ -773,21 +777,21 @@ fn qualification_rank(
         CallForm::Member | CallForm::PointerMember | CallForm::Functor
     ) {
         let owner = candidate_name.rsplit_once("::").map(|(owner, _)| owner);
-        if let Some(receiver_type) = call.receiver_type_hint.as_deref()
-            && owner.is_some_and(|owner| {
+        if let Some(receiver_type) = call.receiver_type_hint.as_deref() {
+            if owner.is_some_and(|owner| {
                 owner == receiver_type || terminal_name(owner) == terminal_name(receiver_type)
-            })
-        {
-            return Some(0);
+            }) {
+                return Some(0);
+            }
         }
-        if let Some(receiver_type) = call.receiver_type_hint.as_deref()
-            && active_using.iter().any(|reference| {
+        if let Some(receiver_type) = call.receiver_type_hint.as_deref() {
+            if active_using.iter().any(|reference| {
                 reference.kind == UsingReferenceKind::Alias
                     && reference.alias.as_deref() == Some(receiver_type)
                     && owner.is_some_and(|owner| owner == reference.target)
-            })
-        {
-            return Some(0);
+            }) {
+                return Some(0);
+            }
         }
         if call.receiver.as_deref() == Some("this")
             && source

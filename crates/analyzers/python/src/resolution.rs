@@ -1,11 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use codegraide_core::{
     DependencyReference, DependencyResolutionContextCoverage, DependencyResolutionOutcome,
@@ -15,7 +14,6 @@ use codegraide_core::{
     UnresolvedDependencyReason,
 };
 use serde::Deserialize;
-use wait_timeout::ChildExt;
 
 const PROBE_SCHEMA_VERSION: &str = "codegraide-python-environment-v1";
 pub const PYTHON_IMPORT_RESOLUTION_DEFINITION_VERSION: &str = "python-import-resolution-v1";
@@ -237,6 +235,36 @@ pub fn resolve_python_dependencies(
         .as_ref()
         .map(probe_environment)
         .transpose()?;
+    Ok(resolve_with_context(analysis, package_roots, environment))
+}
+
+/// Resolve only committed package metadata; never inspect the working directory.
+pub fn resolve_python_snapshot_dependencies(
+    analysis: &RepositoryAnalysis,
+    git: &codegraide_core::git_snapshot::GitSnapshot,
+) -> Result<PythonDependencyResolution, PythonResolutionError> {
+    let metadata = git.files.get(Path::new("pyproject.toml"));
+    if metadata.is_none() && git.entries.contains_key("pyproject.toml") {
+        return Err(PythonResolutionError::InvalidProject(
+            "committed pyproject.toml is unreadable".into(),
+        ));
+    }
+    let roots = package_roots(metadata.map(|file| file.source.as_str()), |path| {
+        path == Path::new(".")
+            || git.entries.keys().any(|entry| {
+                Path::new(entry)
+                    .strip_prefix(path)
+                    .is_ok_and(|suffix| !suffix.as_os_str().is_empty())
+            })
+    })?;
+    Ok(resolve_with_context(analysis, roots, None))
+}
+
+fn resolve_with_context(
+    analysis: &RepositoryAnalysis,
+    package_roots: Vec<PathBuf>,
+    environment: Option<PythonEnvironment>,
+) -> PythonDependencyResolution {
     let (local_modules, by_name, diagnostics) = build_module_catalog(analysis, &package_roots);
     let mut resolutions = Vec::new();
     for run in &analysis.analyzers {
@@ -269,29 +297,38 @@ pub fn resolve_python_dependencies(
                 .cmp(&right.reference.span().start_byte)
         })
     });
-    Ok(PythonDependencyResolution {
+    PythonDependencyResolution {
         package_roots,
         local_modules,
         resolutions,
         environment: environment.map(|value| value.summary),
         diagnostics,
-    })
+    }
 }
 
 fn discover_package_roots(root: &Path) -> Result<Vec<PathBuf>, PythonResolutionError> {
     let pyproject = root.join("pyproject.toml");
-    let mut roots = BTreeSet::new();
-    if pyproject.is_file() {
-        let source =
+    let source = if pyproject.is_file() {
+        Some(
             fs::read_to_string(&pyproject).map_err(|source| PythonResolutionError::Io {
                 context: format!("cannot read {}", pyproject.display()),
                 source,
-            })?;
+            })?,
+        )
+    } else {
+        None
+    };
+    package_roots(source.as_deref(), |path| root.join(path).is_dir())
+}
+
+fn package_roots(
+    source: Option<&str>,
+    is_dir: impl Fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>, PythonResolutionError> {
+    let mut roots = BTreeSet::new();
+    if let Some(source) = source {
         let document = source.parse::<toml::Value>().map_err(|error| {
-            PythonResolutionError::InvalidProject(format!(
-                "cannot parse {}: {error}",
-                pyproject.display()
-            ))
+            PythonResolutionError::InvalidProject(format!("cannot parse pyproject.toml: {error}"))
         })?;
         if let Some(value) = document
             .get("tool")
@@ -331,13 +368,13 @@ fn discover_package_roots(root: &Path) -> Result<Vec<PathBuf>, PythonResolutionE
         }
     }
     if roots.is_empty() {
-        if root.join("src").is_dir() {
+        if is_dir(Path::new("src")) {
             roots.insert(PathBuf::from("src"));
         } else {
             roots.insert(PathBuf::from("."));
         }
     }
-    roots.retain(|candidate| root.join(candidate).is_dir());
+    roots.retain(|candidate| is_dir(candidate));
     if roots.is_empty() {
         return Err(PythonResolutionError::InvalidProject(
             "configured Python package roots do not exist".to_owned(),
@@ -673,79 +710,34 @@ fn run_probe_with_timeout(
     executable: &Path,
     timeout: Duration,
 ) -> Result<Vec<u8>, PythonResolutionError> {
-    let mut child = Command::new(executable)
-        .args(["-I", "-c", PYTHON_PROBE])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|source| PythonResolutionError::Io {
-            context: format!("cannot start Python interpreter {}", executable.display()),
-            source,
-        })?;
-    let stdout = child.stdout.take().expect("piped stdout is available");
-    let stderr = child.stderr.take().expect("piped stderr is available");
-    let stdout_reader = thread::spawn(move || read_bounded(stdout));
-    let stderr_reader = thread::spawn(move || read_bounded(stderr));
-    let status = match child
-        .wait_timeout(timeout)
-        .map_err(|source| PythonResolutionError::Io {
-            context: "cannot wait for Python environment probe".to_owned(),
-            source,
-        })? {
-        Some(status) => status,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(PythonResolutionError::Probe(format!(
+    let output = codegraide_core::process::run(
+        Command::new(executable)
+            .args(["-I", "-c", PYTHON_PROBE])
+            .stdin(Stdio::null()),
+        Instant::now() + timeout,
+        PROBE_OUTPUT_LIMIT,
+    )
+    .map_err(|source| {
+        if source.kind() == io::ErrorKind::TimedOut {
+            PythonResolutionError::Probe(format!(
                 "timed out after {} seconds",
                 timeout.as_secs_f64()
-            )));
+            ))
+        } else {
+            PythonResolutionError::Io {
+                context: format!("cannot probe Python interpreter {}", executable.display()),
+                source,
+            }
         }
-    };
-    let (stdout, stdout_exceeded) = stdout_reader
-        .join()
-        .map_err(|_| PythonResolutionError::Probe("stdout reader panicked".to_owned()))?
-        .map_err(|source| PythonResolutionError::Io {
-            context: "cannot read Python probe stdout".to_owned(),
-            source,
-        })?;
-    let (stderr, stderr_exceeded) = stderr_reader
-        .join()
-        .map_err(|_| PythonResolutionError::Probe("stderr reader panicked".to_owned()))?
-        .map_err(|source| PythonResolutionError::Io {
-            context: "cannot read Python probe stderr".to_owned(),
-            source,
-        })?;
-    if stdout_exceeded || stderr_exceeded {
-        return Err(PythonResolutionError::Probe(
-            "output exceeded the 8 MiB safety limit".to_owned(),
-        ));
-    }
-    if !status.success() {
-        let stderr = String::from_utf8_lossy(&stderr);
+    })?;
+    if !output.status.success() {
         return Err(PythonResolutionError::Probe(format!(
-            "interpreter exited with {status}: {}",
-            stderr.trim()
+            "interpreter exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    Ok(stdout)
-}
-
-fn read_bounded(mut reader: impl Read) -> io::Result<(Vec<u8>, bool)> {
-    let mut output = Vec::new();
-    let mut buffer = [0_u8; 8192];
-    let mut exceeded = false;
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        let remaining = PROBE_OUTPUT_LIMIT.saturating_sub(output.len());
-        output.extend_from_slice(&buffer[..read.min(remaining)]);
-        exceeded |= read > remaining;
-    }
-    Ok((output, exceeded))
+    Ok(output.stdout)
 }
 
 #[cfg(test)]
@@ -803,14 +795,6 @@ mod tests {
             requested_module(&source, &reference),
             Err(UnresolvedDependencyReason::RelativeImportBeyondRoot)
         );
-    }
-
-    #[test]
-    fn bounded_reader_reports_oversized_streams() {
-        let input = vec![b'x'; PROBE_OUTPUT_LIMIT + 1];
-        let (output, exceeded) = read_bounded(input.as_slice()).expect("reader succeeds");
-        assert_eq!(output.len(), PROBE_OUTPUT_LIMIT);
-        assert!(exceeded);
     }
 
     #[cfg(unix)]

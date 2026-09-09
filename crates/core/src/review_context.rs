@@ -104,6 +104,7 @@ pub struct OtherSnapshot {
 }
 #[derive(Debug, Serialize)]
 pub struct ContextSymbol {
+    pub language: String,
     #[serde(flatten)]
     pub source: SourceRecord,
     pub name: String,
@@ -155,6 +156,7 @@ pub struct ChangedFile {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AnalyzerProvenance {
+    pub language: String,
     pub id: String,
     pub version: String,
     pub grammar: Option<String>,
@@ -164,6 +166,7 @@ pub struct AnalyzerProvenance {
 impl From<&crate::AnalyzerDescriptor> for AnalyzerProvenance {
     fn from(d: &crate::AnalyzerDescriptor) -> Self {
         Self {
+            language: d.language.as_str().into(),
             id: d.id.clone(),
             version: d.version.clone(),
             grammar: d.grammar.as_ref().map(|g| g.name.clone()),
@@ -182,7 +185,7 @@ pub struct ContextReport {
     pub schema_version: &'static str,
     pub base: Option<String>,
     pub head: String,
-    pub language: &'static str,
+    pub language: String,
     pub analyzers: Vec<AnalyzerProvenance>,
     pub files: Vec<ChangedFile>,
     pub changes: Vec<Change>,
@@ -195,6 +198,7 @@ pub struct ContextReport {
 }
 
 pub struct ContextSnapshot {
+    pub matching_names: BTreeMap<ProjectSymbolId, String>,
     pub git: GitSnapshot,
     pub symbols: BTreeMap<String, ProjectSymbol>,
     pub relations: Vec<ContextEdge>,
@@ -206,19 +210,45 @@ impl ContextSnapshot {
         git: GitSnapshot,
         symbols: Vec<ProjectSymbol>,
         calls: Vec<ProjectCallResolution>,
-        diagnostics: Vec<String>,
+        matching_names: BTreeMap<ProjectSymbolId, String>,
+        mut diagnostics: Vec<String>,
         analyzers: Vec<crate::AnalyzerDescriptor>,
     ) -> Self {
-        let ids: BTreeMap<ProjectSymbolId, String> = symbols
-            .iter()
-            .filter_map(|s| reference(&git, &s.path, s.span).map(|r| (s.id.clone(), r)))
-            .collect();
+        let mut ids = BTreeMap::new();
+        let mut duplicates = BTreeSet::new();
+        for symbol in &symbols {
+            match reference(&git, &symbol.path, symbol.span) {
+                Some(reference) => {
+                    if ids.insert(symbol.id.clone(), reference).is_some() {
+                        duplicates.insert(symbol.id.clone());
+                    }
+                }
+                None => diagnostics.push(format!(
+                    "invalid-symbol-location: {} in {} (bytes {}..{}); symbol omitted",
+                    symbol.id.ordinal_selector(),
+                    symbol.path.display(),
+                    symbol.span.start_byte,
+                    symbol.span.end_byte
+                )),
+            }
+        }
+        for id in duplicates {
+            ids.remove(&id);
+            diagnostics.push(format!(
+                "duplicate-symbol-identity: {}; all occurrences omitted",
+                id.ordinal_selector()
+            ));
+        }
         let mut relations = Vec::new();
         for call in calls {
             let Some(from) = ids.get(&call.source.id) else {
+                diagnostics.push(format!(
+                    "missing-call-source: {}; relationship omitted",
+                    call.source.id.ordinal_selector()
+                ));
                 continue;
             };
-            let (resolution, target, candidates, reason) = match &call.outcome {
+            let (mut resolution, target, candidates, mut reason) = match &call.outcome {
                 CallResolutionOutcome::Exact(s) => ("exact", Some(s), Vec::new(), None),
                 CallResolutionOutcome::Inferred {
                     target,
@@ -243,6 +273,25 @@ impl ContextSnapshot {
                     ("unavailable", None, Vec::new(), Some(reason.clone()))
                 }
             };
+            if let Some(target) = target {
+                if !ids.contains_key(&target.id) {
+                    let message = format!(
+                        "missing-call-target: {}; local target unavailable",
+                        target.id.ordinal_selector()
+                    );
+                    diagnostics.push(message.clone());
+                    resolution = "unavailable";
+                    reason = Some(message);
+                }
+            }
+            for candidate in &candidates {
+                if !ids.contains_key(&candidate.id) {
+                    diagnostics.push(format!(
+                        "missing-call-candidate: {}; candidate omitted",
+                        candidate.id.ordinal_selector()
+                    ));
+                }
+            }
             relations.push(ContextEdge {
                 snapshot: git.commit.clone(),
                 from: from.clone(),
@@ -266,7 +315,10 @@ impl ContextSnapshot {
             (&a.from, &a.path, a.line, a.column, &a.to)
                 .cmp(&(&b.from, &b.path, b.line, b.column, &b.to))
         });
+        diagnostics.sort();
+        diagnostics.dedup();
         Self {
+            matching_names,
             symbols: symbols
                 .into_iter()
                 .filter_map(|s| ids.get(&s.id).cloned().map(|id| (id, s)))
@@ -276,6 +328,12 @@ impl ContextSnapshot {
             diagnostics,
             analyzers: analyzers.iter().map(AnalyzerProvenance::from).collect(),
         }
+    }
+    fn matching_name<'a>(&'a self, symbol: &'a ProjectSymbol) -> &'a str {
+        self.matching_names
+            .get(&symbol.id)
+            .map(String::as_str)
+            .unwrap_or(&symbol.id.qualified_name)
     }
     fn code(&self, symbol: &ProjectSymbol) -> Option<&str> {
         self.git
@@ -350,14 +408,15 @@ fn changes(
     head: &ContextSnapshot,
     renames: &BTreeMap<PathBuf, PathBuf>,
 ) -> Vec<Change> {
-    type Key = (PathBuf, String, SymbolKind);
+    type Key = (PathBuf, String, String, SymbolKind);
     let mut groups: BTreeMap<Key, (Vec<&String>, Vec<&String>)> = BTreeMap::new();
     for (id, s) in &base.symbols {
         if callable(s) {
             groups
                 .entry((
                     renames.get(&s.path).unwrap_or(&s.path).clone(),
-                    s.id.qualified_name.clone(),
+                    s.id.language.as_str().into(),
+                    base.matching_name(s).to_owned(),
                     s.id.kind,
                 ))
                 .or_default()
@@ -368,7 +427,12 @@ fn changes(
     for (id, s) in &head.symbols {
         if callable(s) {
             groups
-                .entry((s.path.clone(), s.id.qualified_name.clone(), s.id.kind))
+                .entry((
+                    s.path.clone(),
+                    s.id.language.as_str().into(),
+                    head.matching_name(s).to_owned(),
+                    s.id.kind,
+                ))
                 .or_default()
                 .1
                 .push(id);
@@ -377,6 +441,36 @@ fn changes(
     let mut result = Vec::new();
     for (mut before, mut after) in groups.into_values() {
         let mut pairs = Vec::new();
+        // An identical committed blob preserves occurrence identity even when
+        // signatures repeat (e.g. mutually exclusive preprocessor definitions).
+        // Pair by location, never by an arbitrary duplicate ordinal.
+        for b in before.clone() {
+            let bs = &base.symbols[b];
+            let target_path = renames.get(&bs.path).unwrap_or(&bs.path);
+            let same_blob = base
+                .git
+                .files
+                .get(&bs.path)
+                .zip(head.git.files.get(target_path))
+                .is_some_and(|(left, right)| left.object == right.object);
+            if !same_blob {
+                continue;
+            }
+            let candidates = after
+                .iter()
+                .copied()
+                .filter(|h| {
+                    let hs = &head.symbols[*h];
+                    hs.path == *target_path && hs.span == bs.span && signature(bs) == signature(hs)
+                })
+                .collect::<Vec<_>>();
+            if candidates.len() == 1 {
+                let h = candidates[0];
+                pairs.push((b, h, "unchanged-blob-location"));
+                before.retain(|id| *id != b);
+                after.retain(|id| *id != h);
+            }
+        }
         let signatures: BTreeSet<_> = before
             .iter()
             .map(|id| signature(&base.symbols[*id]).to_owned())
@@ -470,7 +564,9 @@ fn changed_files(
             .map(|p| (head, p))
             .unwrap_or((base, before.unwrap_or_default()));
         let analysis = if snapshot.git.files.contains_key(&PathBuf::from(path)) {
-            "cpp".into()
+            crate::detect_language(std::path::Path::new(path))
+                .map(|language| language.as_str().to_owned())
+                .unwrap_or_else(|| "package-metadata".into())
         } else {
             snapshot
                 .git
@@ -580,11 +676,12 @@ fn push_relation(report: &mut ContextReport, edge: ContextEdge, seeds: &BTreeSet
 }
 
 type ContextGroup = (String, Selection, Vec<(String, Selection)>);
-type Identity = (PathBuf, String, SymbolKind, String);
-fn identity(symbol: &ProjectSymbol) -> Identity {
+type Identity = (PathBuf, String, String, SymbolKind, String);
+fn identity(snapshot: &ContextSnapshot, symbol: &ProjectSymbol) -> Identity {
     (
         symbol.path.clone(),
-        symbol.id.qualified_name.clone(),
+        symbol.id.language.as_str().into(),
+        snapshot.matching_name(symbol).to_owned(),
         symbol.id.kind,
         signature(symbol).into(),
     )
@@ -603,7 +700,7 @@ fn group_context(
         *counts
             .entry((
                 snapshot.git.commit.as_str(),
-                identity(&snapshot.symbols[*id]),
+                identity(snapshot, &snapshot.symbols[*id]),
             ))
             .or_insert(0usize) += 1;
     }
@@ -613,7 +710,7 @@ fn group_context(
             continue;
         };
         let symbol = &snapshot.symbols[id];
-        let key = identity(symbol);
+        let key = identity(snapshot, symbol);
         if !changed.contains(id)
             && !matches!(symbol.link_status.as_str(), "ambiguous" | "unavailable")
             && counts.get(&(snapshot.git.commit.as_str(), key.clone())) == Some(&1)
@@ -693,12 +790,29 @@ pub fn assemble_context(
     let files = base
         .map(|b| changed_files(b, head, renames, &all_changes))
         .unwrap_or_default();
+    let mut analyzers = base
+        .into_iter()
+        .flat_map(|b| &b.analyzers)
+        .chain(&head.analyzers)
+        .cloned()
+        .collect::<Vec<_>>();
+    analyzers.sort_by(|a, b| (&a.id, &a.version).cmp(&(&b.id, &b.version)));
+    analyzers.dedup_by(|a, b| a.id == b.id && a.version == b.version);
+    let languages = analyzers
+        .iter()
+        .map(|a| a.language.as_str())
+        .collect::<BTreeSet<_>>();
+    let language = match languages.len() {
+        0 => "none".into(),
+        1 => languages.iter().next().unwrap().to_string(),
+        _ => "mixed".into(),
+    };
     let mut report = ContextReport {
         schema_version: SCHEMA_VERSION,
         base: base.map(|b| b.git.commit.clone()),
         head: head.git.commit.clone(),
-        language: "cpp",
-        analyzers: head.analyzers.clone(),
+        language,
+        analyzers,
         files,
         changes: Vec::new(),
         symbols: Vec::new(),
@@ -708,6 +822,7 @@ pub fn assemble_context(
         limitations: vec![
             "written-calls-only; macro, conditional, template and dynamic targets may be missing".into(),
             "C++ snapshots use tracked includes only; compilation databases and untracked generated files are not consulted".into(),
+            "Python snapshots use committed pyproject.toml and package paths only; environments, dynamic imports and runtime dispatch are not evaluated".into(),
             "supporting types are signature-name candidates, not semantic type resolution; aliases and member-type closure are not expanded".into(),
             "cross-revision matching uses path/rename, name and unique signatures; ambiguous changes remain unpaired".into(),
             "changed files without changed functions may contain type, global, include, comment, or unsupported changes; no semantic impact inference is performed".into(),
@@ -857,10 +972,17 @@ pub fn assemble_context(
         let mut candidates = BTreeMap::<String, Vec<String>>::new();
         for (tid, t) in &snapshot.symbols {
             if type_symbol(t)
-                && tokens.contains(t.id.qualified_name.rsplit("::").next().unwrap_or(""))
+                && t.id.language == s.id.language
+                && tokens.contains(t.id.qualified_name.rsplit([':', '.']).next().unwrap_or(""))
             {
                 candidates
-                    .entry(t.id.qualified_name.rsplit("::").next().unwrap_or("").into())
+                    .entry(
+                        t.id.qualified_name
+                            .rsplit([':', '.'])
+                            .next()
+                            .unwrap_or("")
+                            .into(),
+                    )
                     .or_default()
                     .push(tid.clone());
             }
@@ -1007,6 +1129,7 @@ pub fn assemble_context(
             declarations.push(item);
         }
         report.symbols.push(ContextSymbol {
+            language: s.id.language.as_str().into(),
             source,
             name: s.id.qualified_name.clone(),
             kind: s.id.kind.as_str().into(),
@@ -1089,210 +1212,5 @@ fn source_record(
         end_line: span.end.line,
         changed: Some(changed),
         code: Code::from_source(text, include, budget),
-    }
-}
-
-pub fn render_context(report: &ContextReport) -> String {
-    let mut out = String::new();
-    let symbols: BTreeMap<_, _> = report
-        .symbols
-        .iter()
-        .flat_map(|s| {
-            std::iter::once((s.source.reference.as_str(), s)).chain(
-                s.other_snapshots
-                    .iter()
-                    .map(move |alias| (alias.source.reference.as_str(), s)),
-            )
-        })
-        .collect();
-    let mut rendered = BTreeSet::new();
-    for change in &report.changes {
-        let name = change
-            .after
-            .as_deref()
-            .or(change.before.as_deref())
-            .and_then(|id| symbols.get(id))
-            .map(|s| s.name.as_str())
-            .unwrap_or("function");
-        let reason = change
-            .reason
-            .map(|reason| format!("; {reason}"))
-            .unwrap_or_default();
-        out.push_str(&format!("{name} [{}{reason}]\n", change.status));
-        for (label, id) in [("BEFORE", &change.before), ("AFTER", &change.after)] {
-            if let Some(id) = id {
-                if let Some(s) = symbols.get(id.as_str()) {
-                    out.push_str(&format!("{label} "));
-                    write_source(&mut out, &s.source);
-                    for d in &s.declarations {
-                        out.push_str("declaration ");
-                        write_source(&mut out, d);
-                    }
-                    rendered.insert(id.as_str());
-                }
-            } else {
-                out.push_str(&format!("{label} [absent]\n"));
-            }
-        }
-        out.push('\n');
-    }
-    for s in &report.symbols {
-        if rendered.contains(s.source.reference.as_str()) {
-            continue;
-        }
-        out.push_str(&format!(
-            "{} [{}; {}]\n",
-            s.name,
-            change_label(s.source.changed),
-            s.roles.iter().cloned().collect::<Vec<_>>().join(",")
-        ));
-        write_source(&mut out, &s.source);
-        write_origin(
-            &mut out,
-            &s.source.reference,
-            s.origin.as_ref(),
-            report,
-            &symbols,
-        );
-        for other in &s.other_snapshots {
-            out.push_str(&format!(
-                "same source @{} {}:{}-{}\n",
-                &other.source.commit[..12],
-                other.source.path,
-                other.source.start_line,
-                other.source.end_line
-            ));
-            write_origin(
-                &mut out,
-                &other.source.reference,
-                other.origin.as_ref(),
-                report,
-                &symbols,
-            );
-            for declaration in &other.declarations {
-                out.push_str(&format!(
-                    "same declaration @{} {}:{}-{}\n",
-                    &declaration.commit[..12],
-                    declaration.path,
-                    declaration.start_line,
-                    declaration.end_line
-                ));
-            }
-        }
-        if s.source.code.state != "included" {
-            if let Some(sig) = &s.signature {
-                out.push_str(&format!("  {sig}\n"));
-            }
-        }
-        for d in &s.declarations {
-            out.push_str("declaration ");
-            write_source(&mut out, d);
-        }
-        out.push('\n');
-    }
-    if !report.relations.is_empty() {
-        out.push_str("Relations\n");
-    }
-    for e in &report.relations {
-        out.push_str(&format!(
-            "  {} -> {} [{}; {}] {}:{} @{}\n",
-            e.from_name,
-            e.to_name.as_deref().unwrap_or(&e.expression),
-            e.relation,
-            e.resolution,
-            e.path,
-            e.line,
-            &e.snapshot[..12]
-        ));
-    }
-    for file in report.files.iter().filter(|f| f.changed_functions == 0) {
-        out.push_str(&format!(
-            "file {} [{}; {}; no changed function body]\n",
-            file.after
-                .as_deref()
-                .or(file.before.as_deref())
-                .unwrap_or(""),
-            file.status,
-            file.analysis
-        ));
-    }
-    for (kind, count) in &report.omissions {
-        if *count > 0 {
-            let option = if kind == "context-relations" {
-                " (--all-relations)"
-            } else {
-                ""
-            };
-            out.push_str(&format!("omitted {kind}={count}{option}\n"));
-        }
-    }
-    for diagnostic in &report.diagnostics {
-        out.push_str(&format!("! {diagnostic}\n"));
-    }
-    out
-}
-fn write_origin(
-    out: &mut String,
-    reference: &str,
-    origin: Option<&ContextOrigin>,
-    report: &ContextReport,
-    symbols: &BTreeMap<&str, &ContextSymbol>,
-) {
-    let Some(origin) = origin else {
-        return;
-    };
-    let visible = report
-        .relations
-        .iter()
-        .any(|edge| match origin.role.as_str() {
-            "caller" => edge.from == reference && edge.to.as_deref() == Some(origin.from.as_str()),
-            _ => {
-                edge.from == origin.from
-                    && (edge.to.as_deref() == Some(reference)
-                        || edge.candidates.iter().any(|id| id == reference))
-            }
-        });
-    if !visible {
-        if let Some(parent) = symbols.get(origin.from.as_str()) {
-            // The reference itself identifies the original snapshot, including aliases.
-            let commit = origin.from.split(':').nth(1).unwrap_or("");
-            out.push_str(&format!(
-                "via {} [{}; {}] @{}\n",
-                parent.name,
-                origin.role,
-                origin.resolution,
-                &commit[..commit.len().min(12)]
-            ));
-        }
-    }
-}
-
-fn write_source(out: &mut String, s: &SourceRecord) {
-    out.push_str(&format!(
-        "{}:{}-{} [{}] @{}\n",
-        s.path,
-        s.start_line,
-        s.end_line,
-        change_label(s.changed),
-        &s.commit[..12]
-    ));
-    if let Some(text) = &s.code.text {
-        for (i, line) in text.lines().enumerate() {
-            out.push_str(&format!("{:>4}  {line}\n", s.start_line + i));
-        }
-    } else {
-        out.push_str(&format!(
-            "code [{}: {}]\n",
-            s.code.state,
-            s.code.reason.unwrap_or("unspecified")
-        ));
-    }
-}
-
-fn change_label(changed: Option<bool>) -> &'static str {
-    match changed {
-        Some(true) => "changed",
-        Some(false) => "unchanged",
-        None => "context",
     }
 }

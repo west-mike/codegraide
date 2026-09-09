@@ -138,7 +138,7 @@ fn descriptor_declares_exact_provenance_and_capabilities() {
     let descriptor = analyzer.descriptor();
     assert_eq!(descriptor.id, "cpp-tree-sitter");
     assert_eq!(descriptor.language.as_str(), "cpp");
-    assert_eq!(descriptor.version, "0.4.0");
+    assert_eq!(descriptor.version, "0.5.0");
     assert_eq!(descriptor.grammar.as_ref().unwrap().version, "0.23.4");
     assert!(
         descriptor
@@ -442,5 +442,57 @@ inline MatExpr::operator Mat() const { return Mat(); }
             .declarations
             .iter()
             .any(|d| d.qualified_name == "cv::MatExpr::operator Mat")
+    );
+}
+
+#[test]
+fn conditional_alternative_braces_preserve_namespace_ownership() {
+    let source = br#"
+namespace Catch {
+namespace {
+void prepare() {
+#if PLATFORM
+  if (first()) {
+#else
+  if (second()) {
+#endif
+    fail();
+  }
+}
+}
+int Session::run() { return runInternal(); }
+}
+namespace Other { int Session::run() { return 2; } }
+int outside() { return 3; }
+"#;
+    let result = analyze("recovery.cpp", source);
+    for name in ["Catch::Session::run", "Other::Session::run", "outside"] {
+        assert_eq!(
+            result
+                .facts
+                .symbols
+                .iter()
+                .filter(|s| s.qualified_name == name)
+                .count(),
+            1,
+            "{name}"
+        );
+    }
+    let run = result
+        .facts
+        .symbols
+        .iter()
+        .find(|s| s.qualified_name == "Catch::Session::run")
+        .unwrap();
+    assert_eq!(
+        &source[run.span.start_byte..run.span.end_byte],
+        b"int Session::run() { return runInternal(); }"
+    );
+    assert!(
+        result
+            .facts
+            .calls
+            .iter()
+            .any(|call| call.enclosing_symbol.as_ref() == Some(&run.id))
     );
 }

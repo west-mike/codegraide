@@ -1,8 +1,9 @@
 use crate::bootstrap::{BuiltinAnalyzerFeatures, build_builtin_analyzer_registry};
+use crate::review_context_render::render_context;
 use clap::{Args, ValueEnum};
 use codegraide_core::git_snapshot::{GitRepository, SnapshotError};
 use codegraide_core::review_context::{
-    ContextLimits, ContextReport, ContextSnapshot, assemble_context, render_context,
+    ContextLimits, ContextReport, ContextSnapshot, assemble_context,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -51,7 +52,7 @@ pub struct ReviewContextArgs {
     /// Source-code byte budget; bodies are omitted whole when it is exhausted
     #[arg(long,default_value="1048576",value_parser=clap::value_parser!(u32).range(1..))]
     max_code_bytes: u32,
-    /// Maximum total C++ source bytes read per snapshot; exceeding it is an error
+    /// Maximum total supported source and package metadata bytes read per snapshot; exceeding it is an error
     #[arg(long,default_value="67108864",value_parser=clap::value_parser!(u32).range(1..))]
     max_input_bytes: u32,
     #[arg(long, value_enum, default_value = "terminal")]
@@ -62,11 +63,11 @@ fn snapshot(
     commit: &str,
     max_bytes: usize,
 ) -> Result<ContextSnapshot, SnapshotError> {
-    let git = repo.snapshot(commit, max_bytes)?;
+    let git = repo.snapshot(commit, max_bytes, crate::bootstrap::snapshot_input)?;
     let mut registry = build_builtin_analyzer_registry(BuiltinAnalyzerFeatures {
         documentation: false,
     })
-    .map_err(|e| SnapshotError(e.to_string()))?;
+    .map_err(|e| SnapshotError::Analysis(Box::new(e)))?;
     let analysis = codegraide_core::analyze_source_files(
         git.files
             .iter()
@@ -74,9 +75,7 @@ fn snapshot(
             .collect(),
         &mut registry,
     );
-    let dependencies = codegraide_analyzer_cpp::resolve_cpp_snapshot_dependencies(&analysis)
-        .map_err(|e| SnapshotError(e.to_string()))?;
-    let mut resolution = codegraide_analyzer_cpp::resolve_cpp_calls(&analysis, &dependencies);
+    let mut resolution = crate::bootstrap::resolve_snapshot(&analysis, &git)?;
     // Resolution may use a declaration's default arguments. Display the actual
     // definition signature so hidden declarations cannot leak through metadata.
     let definition_signatures = analysis
@@ -118,12 +117,13 @@ fn snapshot(
     Ok(ContextSnapshot::new(
         git,
         resolution.symbols,
-        resolution.resolutions,
+        resolution.calls,
+        resolution.matching_names,
         diagnostics,
         analysis
             .analyzers
             .iter()
-            .filter(|run| run.descriptor.language.as_str() == "cpp")
+            .filter(|run| !run.files.is_empty())
             .map(|run| run.descriptor.clone())
             .collect(),
     ))
@@ -134,7 +134,7 @@ fn execute(args: &ReviewContextArgs) -> Result<String, SnapshotError> {
         let (r, source) = repo.retrieve(reference, args.max_input_bytes as usize)?;
         let text = source
             .get(r.start..r.end)
-            .ok_or_else(|| SnapshotError("invalid source range".into()))?;
+            .ok_or_else(|| SnapshotError::Invalid("invalid source range".into()))?;
         let start_line = source[..r.start].bytes().filter(|b| *b == b'\n').count() + 1;
         let end_line = start_line + text.bytes().filter(|b| *b == b'\n').count();
         let code = codegraide_core::review_context::Code::from_source(
@@ -143,7 +143,7 @@ fn execute(args: &ReviewContextArgs) -> Result<String, SnapshotError> {
             &mut (args.max_code_bytes as usize),
         );
         return match args.format {
-            Format::Json=>serde_json::to_string_pretty(&serde_json::json!({"schema_version":codegraide_core::review_context::SCHEMA_VERSION,"commit":r.commit,"reference":reference,"path":r.path,"start_line":start_line,"end_line":end_line,"code":code})).map_err(|e|SnapshotError(e.to_string())),
+            Format::Json=>serde_json::to_string_pretty(&serde_json::json!({"schema_version":codegraide_core::review_context::SCHEMA_VERSION,"commit":r.commit,"reference":reference,"path":r.path,"start_line":start_line,"end_line":end_line,"code":code})).map_err(|e|SnapshotError::Analysis(Box::new(e))),
             Format::Terminal=>Ok(format!("{}:{}-{} @{}\n{}",r.path,start_line,end_line,r.commit,
                 code.text.as_deref().unwrap_or("code [omitted: code-byte-limit]"))),
         };
@@ -161,14 +161,14 @@ fn execute(args: &ReviewContextArgs) -> Result<String, SnapshotError> {
         let (r, _) = repo.retrieve(reference, args.max_input_bytes as usize)?;
         let head = snapshot(&repo, &r.commit, args.max_input_bytes as usize)?;
         if !head.symbols.contains_key(reference) {
-            return Err(SnapshotError("reference is not a symbol boundary in this snapshot; use --body for source retrieval".into()));
+            return Err(SnapshotError::Invalid("reference is not a symbol boundary in this snapshot; use --body for source retrieval".into()));
         }
         assemble_context(None, &head, &Default::default(), Some(reference), limits)
     } else {
         let base_commit = repo.resolve(
             args.base
                 .as_deref()
-                .ok_or_else(|| SnapshotError("--base is required".into()))?,
+                .ok_or_else(|| SnapshotError::Invalid("--base is required".into()))?,
         )?;
         let head_commit = repo.resolve(args.head.as_deref().unwrap_or("HEAD"))?;
         let base = snapshot(&repo, &base_commit, args.max_input_bytes as usize)?;
@@ -178,15 +178,15 @@ fn execute(args: &ReviewContextArgs) -> Result<String, SnapshotError> {
     };
     match args.format {
         Format::Json => {
-            serde_json::to_string_pretty(&report).map_err(|e| SnapshotError(e.to_string()))
+            serde_json::to_string_pretty(&report).map_err(|e| SnapshotError::Analysis(Box::new(e)))
         }
         Format::Terminal => Ok(render_context(&report)),
     }
 }
-pub fn run(args: &ReviewContextArgs) -> ExitCode {
+pub fn run(terminal: &mut crate::output::Terminal<'_>, args: &ReviewContextArgs) -> ExitCode {
     match execute(args) {
         Ok(text) => {
-            println!("{text}");
+            terminal.line(format_args!("{text}"));
             ExitCode::SUCCESS
         }
         Err(error) => {

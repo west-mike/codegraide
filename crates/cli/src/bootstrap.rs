@@ -85,6 +85,72 @@ where
         .map_err(|source| BuiltinAnalyzerBootstrapError::Registration { analyzer, source })
 }
 
+/// The CLI composes snapshot capabilities; core only reads the selected blobs.
+pub(crate) fn snapshot_input(path: &std::path::Path) -> bool {
+    path == std::path::Path::new("pyproject.toml")
+        || codegraide_core::detect_language(path)
+            .is_some_and(|language| matches!(language.as_str(), "cpp" | "python"))
+}
+
+pub(crate) struct SnapshotResolution {
+    pub matching_names: std::collections::BTreeMap<codegraide_core::ProjectSymbolId, String>,
+    pub symbols: Vec<codegraide_core::ProjectSymbol>,
+    pub calls: Vec<codegraide_core::ProjectCallResolution>,
+    pub diagnostics: Vec<String>,
+}
+
+pub(crate) fn resolve_snapshot(
+    analysis: &codegraide_core::RepositoryAnalysis,
+    git: &codegraide_core::git_snapshot::GitSnapshot,
+) -> Result<SnapshotResolution, codegraide_core::git_snapshot::SnapshotError> {
+    use codegraide_core::git_snapshot::SnapshotError;
+    let mut result = SnapshotResolution {
+        matching_names: Default::default(),
+        symbols: Vec::new(),
+        calls: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    for run in &analysis.analyzers {
+        if run.files.is_empty() {
+            continue;
+        }
+        match run.descriptor.language.as_str() {
+            "cpp" => {
+                let dependencies =
+                    codegraide_analyzer_cpp::resolve_cpp_snapshot_dependencies(analysis)
+                        .map_err(|e| SnapshotError::Analysis(Box::new(e)))?;
+                let resolution =
+                    codegraide_analyzer_cpp::resolve_cpp_calls(analysis, &dependencies);
+                result
+                    .matching_names
+                    .extend(resolution.symbols.iter().map(|symbol| {
+                        (
+                            symbol.id.clone(),
+                            codegraide_analyzer_cpp::cpp_review_identity(symbol),
+                        )
+                    }));
+                result.symbols.extend(resolution.symbols);
+                result.calls.extend(resolution.resolutions);
+                result.diagnostics.extend(dependencies.diagnostics);
+                result.diagnostics.extend(resolution.diagnostics);
+            }
+            "python" => {
+                let dependencies =
+                    codegraide_analyzer_python::resolve_python_snapshot_dependencies(analysis, git)
+                        .map_err(|e| SnapshotError::Analysis(Box::new(e)))?;
+                let resolution =
+                    codegraide_analyzer_python::resolve_python_calls(analysis, &dependencies);
+                result.symbols.extend(resolution.symbols);
+                result.calls.extend(resolution.resolutions);
+                result.diagnostics.extend(dependencies.diagnostics);
+                result.diagnostics.extend(resolution.diagnostics);
+            }
+            _ => {}
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +178,7 @@ mod tests {
         fn new(language: &str) -> Self {
             Self {
                 descriptor: AnalyzerDescriptor {
+                    documentation: None,
                     id: format!("stub-{language}"),
                     language: LanguageId::new(language),
                     version: "0.1.0".to_owned(),

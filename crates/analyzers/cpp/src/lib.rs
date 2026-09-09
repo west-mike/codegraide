@@ -1,4 +1,7 @@
 mod call_flow;
+mod namespace_recovery;
+mod review_identity;
+pub use review_identity::cpp_review_identity;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
@@ -41,7 +44,7 @@ pub const CPP_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION: &str = "cpp-cyclomatic-c
 pub const CPP_MAX_CONTROL_FLOW_NESTING: &str = "cpp-max-control-flow-nesting";
 pub const CPP_MAX_CONTROL_FLOW_NESTING_DEFINITION_VERSION: &str = "cpp-max-control-flow-nesting-v1";
 
-const ANALYZER_VERSION: &str = "0.4.0";
+const ANALYZER_VERSION: &str = "0.5.0";
 const GRAMMAR_VERSION: &str = "0.23.4";
 
 pub struct CppAnalyzer {
@@ -90,6 +93,7 @@ impl CppAnalyzer {
 
         Ok(Self {
             descriptor: AnalyzerDescriptor {
+                documentation: None,
                 id: "cpp-tree-sitter".to_owned(),
                 language: LanguageId::new("cpp"),
                 version: ANALYZER_VERSION.to_owned(),
@@ -223,8 +227,23 @@ impl LanguageAnalyzer for CppAnalyzer {
         diagnostics.sort_by(diagnostic_order);
 
         let mut extraction = Extraction::new(input.path, input.source);
+        if tree.root_node().has_error() {
+            let recovery =
+                namespace_recovery::owners(tree.root_node(), input.source).unwrap_or_default();
+            extraction.namespace_owners = recovery.owners;
+            extraction.namespace_ends = recovery.ends;
+        }
         extraction.visit_node(tree.root_node(), None, None, 0);
         extraction.finish_measurements();
+        for span in &extraction.recovered_namespace_spans {
+            diagnostics.push(AnalysisDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "namespace-ownership-recovered".into(),
+                message: "Namespace extent recovered from written braces with agreement across conditional alternatives; no build configuration or macro expansion was inferred".into(),
+                span: Some(*span),
+            });
+        }
+        diagnostics.sort_by(diagnostic_order);
         let (modules, module_imports, module_exports) = scan_cpp_modules(input.source);
 
         FileAnalysis {
@@ -236,6 +255,7 @@ impl LanguageAnalyzer for CppAnalyzer {
             },
             diagnostics,
             facts: AnalysisFacts {
+                documentation_eligibility: None,
                 symbols: extraction.symbols,
                 declarations: extraction.declarations,
                 dependencies: extraction.includes,
@@ -562,21 +582,21 @@ fn scan_cpp_modules(source: &[u8]) -> (Vec<LanguageModule>, Vec<ModuleImport>, V
                 });
             }
         } else if let Some(rest) = trimmed.strip_prefix("module ") {
-            if !rest.starts_with(':')
-                && let Some((name, partition)) = parse_module_name(rest)
-            {
-                modules.push(LanguageModule {
-                    name,
-                    kind: if partition.is_some() {
-                        LanguageModuleKind::ImplementationPartition
-                    } else {
-                        LanguageModuleKind::Implementation
-                    },
-                    partition,
-                    exported: false,
-                    span,
-                    complete: conditional_depth == 0,
-                });
+            if !rest.starts_with(':') {
+                if let Some((name, partition)) = parse_module_name(rest) {
+                    modules.push(LanguageModule {
+                        name,
+                        kind: if partition.is_some() {
+                            LanguageModuleKind::ImplementationPartition
+                        } else {
+                            LanguageModuleKind::Implementation
+                        },
+                        partition,
+                        exported: false,
+                        span,
+                        complete: conditional_depth == 0,
+                    });
+                }
             }
         }
 
@@ -723,6 +743,10 @@ fn span_for_offsets(source: &[u8], start: usize, end: usize) -> SourceSpan {
 }
 
 struct Extraction<'a> {
+    namespace_owners: BTreeMap<usize, Option<usize>>,
+    namespace_ids: BTreeMap<usize, SymbolId>,
+    namespace_ends: BTreeMap<usize, usize>,
+    recovered_namespace_spans: Vec<SourceSpan>,
     path: &'a Path,
     source: &'a [u8],
     symbols: Vec<Symbol>,
@@ -738,6 +762,10 @@ struct Extraction<'a> {
 impl<'a> Extraction<'a> {
     fn new(path: &'a Path, source: &'a [u8]) -> Self {
         Self {
+            namespace_owners: BTreeMap::new(),
+            namespace_ids: BTreeMap::new(),
+            namespace_ends: BTreeMap::new(),
+            recovered_namespace_spans: Vec::new(),
             path,
             source,
             symbols: Vec::new(),
@@ -758,6 +786,22 @@ impl<'a> Extraction<'a> {
         callable_id: Option<SymbolId>,
         depth: usize,
     ) {
+        let parent_id = if callable_id.is_none()
+            && parent_id
+                .as_ref()
+                .and_then(|id| self.symbol(id))
+                .is_none_or(|symbol| {
+                    symbol.kind == SymbolKind::Namespace
+                        && self.namespace_ids.values().any(|id| id == &symbol.id)
+                }) {
+            self.namespace_owners
+                .range(..=node.start_byte())
+                .next_back()
+                .map(|(_, owner)| owner.and_then(|byte| self.namespace_ids.get(&byte).cloned()))
+                .unwrap_or(parent_id)
+        } else {
+            parent_id
+        };
         match node.kind() {
             "namespace_definition" => {
                 self.process_container(node, parent_id, callable_id, depth, SymbolKind::Namespace);
@@ -820,26 +864,26 @@ impl<'a> Extraction<'a> {
             _ => {}
         }
 
-        if is_conditional_preprocessor(node.kind())
-            && let Some(callable_id) = callable_id.as_ref()
-        {
-            self.preprocessor_uncertain.insert(callable_id.clone());
+        if is_conditional_preprocessor(node.kind()) {
+            if let Some(callable_id) = callable_id.as_ref() {
+                self.preprocessor_uncertain.insert(callable_id.clone());
+            }
         }
 
-        if let Some(callable_id) = callable_id.as_ref()
-            && let Some(kind) = decision_kind(node, self.source)
-        {
-            self.push_decision(callable_id, kind, source_span(node));
+        if let Some(callable_id) = callable_id.as_ref() {
+            if let Some(kind) = decision_kind(node, self.source) {
+                self.push_decision(callable_id, kind, source_span(node));
+            }
         }
 
         let mut child_depth = depth;
-        if let Some(callable_id) = callable_id.as_ref()
-            && let Some(kind) = nesting_kind(node.kind())
-        {
-            let same_level = is_else_if(node) || node.kind() == "catch_clause";
-            let event_depth = if same_level { depth.max(1) } else { depth + 1 };
-            self.push_nesting(callable_id, kind, event_depth, source_span(node));
-            child_depth = event_depth;
+        if let Some(callable_id) = callable_id.as_ref() {
+            if let Some(kind) = nesting_kind(node.kind()) {
+                let same_level = is_else_if(node) || node.kind() == "catch_clause";
+                let event_depth = if same_level { depth.max(1) } else { depth + 1 };
+                self.push_nesting(callable_id, kind, event_depth, source_span(node));
+                child_depth = event_depth;
+            }
         }
 
         let mut cursor = node.walk();
@@ -871,8 +915,20 @@ impl<'a> Extraction<'a> {
         );
         let qualified_name = self.qualified_name(parent_id.as_ref(), &name);
         let id = self.symbol_id(kind, &qualified_name);
-        let span = source_span(node);
+        if kind == SymbolKind::Namespace {
+            self.namespace_ids.insert(node.start_byte(), id.clone());
+        }
         let body = node.child_by_field_name("body");
+        let recovered_end = (kind == SymbolKind::Namespace)
+            .then(|| self.namespace_ends.get(&node.start_byte()).copied())
+            .flatten();
+        let span = recovered_end.map_or_else(
+            || source_span(node),
+            |end| span_for_offsets(self.source, node.start_byte(), end),
+        );
+        if span != source_span(node) {
+            self.recovered_namespace_spans.push(span);
+        }
         self.symbols.push(Symbol {
             id: id.clone(),
             parent_id: parent_id.clone(),
@@ -881,7 +937,12 @@ impl<'a> Extraction<'a> {
             name,
             qualified_name,
             span,
-            body_span: body.map(source_span),
+            body_span: body.map(|body| {
+                recovered_end.map_or_else(
+                    || source_span(body),
+                    |end| span_for_offsets(self.source, body.start_byte(), end),
+                )
+            }),
             name_span: name_node.map(source_span),
             completeness: completeness(node),
             modifiers: BTreeSet::new(),
@@ -1105,17 +1166,18 @@ impl<'a> Extraction<'a> {
         let mut receiver_type_hint = receiver.as_deref().and_then(|receiver| {
             self.infer_receiver_type(receiver, node, enclosing_symbol.as_ref())
         });
-        if form == CallForm::Free
-            && let Some(variable_type) =
+        if form == CallForm::Free {
+            if let Some(variable_type) =
                 self.infer_receiver_type(&callee, node, enclosing_symbol.as_ref())
-        {
-            form = if variable_type.contains("(*") {
-                CallForm::Unknown
-            } else {
-                CallForm::Functor
-            };
-            receiver = Some(callee.clone());
-            receiver_type_hint = Some(variable_type);
+            {
+                form = if variable_type.contains("(*") {
+                    CallForm::Unknown
+                } else {
+                    CallForm::Functor
+                };
+                receiver = Some(callee.clone());
+                receiver_type_hint = Some(variable_type);
+            }
         }
         let arguments = node.child_by_field_name("arguments");
         let argument_details = arguments
@@ -1375,17 +1437,17 @@ impl<'a> Extraction<'a> {
         } else {
             None
         };
-        if let Some((kind, target, alias)) = parsed
-            && !target.is_empty()
-        {
-            self.using_references.push(UsingReference {
-                kind,
-                target: target.to_owned(),
-                alias: alias.map(str::to_owned),
-                span: source_span(node),
-                complete: completeness(node) == SymbolCompleteness::Complete
-                    && !has_conditional_preprocessor_ancestor(node),
-            });
+        if let Some((kind, target, alias)) = parsed {
+            if !target.is_empty() {
+                self.using_references.push(UsingReference {
+                    kind,
+                    target: target.to_owned(),
+                    alias: alias.map(str::to_owned),
+                    span: source_span(node),
+                    complete: completeness(node) == SymbolCompleteness::Complete
+                        && !has_conditional_preprocessor_ancestor(node),
+                });
+            }
         }
     }
 
