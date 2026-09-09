@@ -1,3 +1,4 @@
+mod documentation;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
@@ -23,9 +24,10 @@ pub use resolution::{
     PYTHON_IMPORT_RESOLUTION_DEFINITION_VERSION, PythonDependencyResolution,
     PythonDependencyResolver, PythonEnvironmentSelection, PythonEnvironmentSummary,
     PythonResolutionError, PythonResolutionOptions, resolve_python_dependencies,
+    resolve_python_snapshot_dependencies,
 };
 
-const ANALYZER_VERSION: &str = "0.3.0";
+const ANALYZER_VERSION: &str = "0.4.0";
 const GRAMMAR_VERSION: &str = "0.25.0";
 pub const PYTHON_CYCLOMATIC_COMPLEXITY: &str = "python-cyclomatic-complexity";
 pub const PYTHON_CYCLOMATIC_COMPLEXITY_DEFINITION_VERSION: &str = "python-cyclomatic-complexity-v1";
@@ -166,6 +168,7 @@ impl PythonAnalyzer {
 
         Ok(Self {
             descriptor: AnalyzerDescriptor {
+                documentation: Some(documentation::DEFINITION),
                 id: "python-tree-sitter".to_owned(),
                 language: LanguageId::new("python"),
                 version: ANALYZER_VERSION.to_owned(),
@@ -266,6 +269,9 @@ impl LanguageAnalyzer for PythonAnalyzer {
             },
             diagnostics,
             facts: AnalysisFacts {
+                documentation_eligibility: self
+                    .documentation_enabled
+                    .then(|| documentation::eligibility(input.path, &extraction.symbols)),
                 call_flows: Default::default(),
                 symbols: extraction.symbols,
                 declarations: Vec::new(),
@@ -521,6 +527,7 @@ impl<'a> Extraction<'a> {
                 |body| documentation_for_body(body, complete, self.source),
             )
         });
+        let callable_signature = python_signature(node, self.source, &parameters);
         self.symbols.push(Symbol {
             id: id.clone(),
             parent_id: parent_id.clone(),
@@ -539,7 +546,7 @@ impl<'a> Extraction<'a> {
             modifiers,
             parameters,
             decorators,
-            callable_signature: None,
+            callable_signature,
             documentation,
             nesting_events: Vec::new(),
             decision_events: Vec::new(),
@@ -1296,6 +1303,56 @@ fn is_conditionally_executed(node: Node<'_>) -> bool {
         parent = ancestor.parent();
     }
     false
+}
+
+// Keep the written signature separate from decorator-inclusive definition spans.
+fn python_signature(
+    node: Node<'_>,
+    source: &[u8],
+    parameters: &[Parameter],
+) -> Option<codegraide_core::CallableSignature> {
+    if node.kind() == "function_definition" {
+        let mut cursor = node.walk();
+        node.children(&mut cursor)
+            .find(|child| child.kind() == ":")
+            .map(|colon| {
+                let display =
+                    node_text_bytes(&source[node.start_byte()..colon.start_byte()]).to_owned();
+                codegraide_core::CallableSignature {
+                    normalized_key: display.clone(),
+                    display,
+                    return_type: node
+                        .child_by_field_name("return_type")
+                        .map(|n| node_text(n, source)),
+                    parameters: parameters
+                        .iter()
+                        .map(|parameter| codegraide_core::CallableParameter {
+                            name: Some(parameter.name.clone()),
+                            type_spelling: node
+                                .named_descendant_for_byte_range(
+                                    parameter.span.start_byte,
+                                    parameter.span.end_byte,
+                                )
+                                .and_then(|parameter_node| {
+                                    parameter_node.child_by_field_name("type")
+                                })
+                                .map(|annotation| node_text(annotation, source)),
+                            has_default: parameter.has_default,
+                            variadic: matches!(
+                                parameter.kind,
+                                ParameterKind::VariadicPositional | ParameterKind::VariadicKeyword
+                            ),
+                            span: parameter.span,
+                        })
+                        .collect(),
+                    qualifiers: BTreeSet::new(),
+                    template_parameter_count: 0,
+                    virtual_dispatch: false,
+                }
+            })
+    } else {
+        None
+    }
 }
 
 fn parse_parameters(node: Node<'_>, source: &[u8]) -> Vec<Parameter> {

@@ -36,6 +36,7 @@ fn python_stub() -> AnalyzerRegistry {
     registry
         .register(Box::new(StubAnalyzer {
             descriptor: AnalyzerDescriptor {
+                documentation: None,
                 id: "test-python".to_owned(),
                 language: LanguageId::new("python"),
                 version: "0.1.0".to_owned(),

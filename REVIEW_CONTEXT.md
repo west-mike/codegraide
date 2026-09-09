@@ -1,6 +1,6 @@
 # Git review context
 
-`review-context` assembles source evidence for a C++ commit comparison. It does
+`review-context` assembles source evidence for a Python/C++ commit comparison, including mixed projects. It does
 not predict bugs, recommend tests, or run the inspected repository.
 
 ```sh
@@ -55,8 +55,14 @@ caller/callee/type role and resolution, so deeper context remains explainable
 when incidental relationships are hidden. Origins describe traversal, not new
 semantic proof. `--all-relations` does not change context selection or origins.
 
-Function matching first uses repository path (including Git-detected renames),
-qualified name, kind and unique normalized signature. If exactly one unmatched
+Function matching preserves language identity and first uses repository path (including Git-detected renames),
+qualified name, kind and unique normalized signature. Occurrences in identical committed blobs can also
+match by unchanged source location (`unchanged-blob-location`), including repeated
+signatures in conditional alternatives. C++ supplies matching-only identities
+for anonymous namespace position labels and file-initialization owners, so line
+shifts and Git-detected file renames do not create false replacements. Display
+names and call-resolution identities retain their original evidence; ambiguous
+normalized groups still require unique matching evidence. If exactly one unmatched
 function remains on each side of that group, a changed signature can pair by
 name. Multiple unmatched overloads remain additions/removals. Function renaming
 across qualified names and moves not detected by Git are not guessed. Changes to
@@ -90,7 +96,7 @@ fail explicitly. References require UTF-8 paths and source.
 
 JSON schema: `review-context-v1`. No timestamps or absolute repository paths are
 added. Analyzer/grammar/query provenance is recorded. Call status semantics are
-those of the C++ call resolver; source text may itself contain arbitrary paths.
+those of each language’s call resolver; source text may itself contain arbitrary paths.
 
 All code uses the same object:
 
@@ -146,23 +152,53 @@ the comparison, not an assertion of semantic impact.
 | `--max-code-bytes` | 1 MiB | Total emitted source, including opt-in declarations |
 | `--show-declarations` | off | Include declaration source in both output formats |
 | `--all-relations` | off | Include incidental relationships from expanded context |
-| `--max-input-bytes` | 64 MiB | Total candidate C++ source per snapshot |
+| `--max-input-bytes` | 64 MiB | Total supported source and package metadata per snapshot |
 
 Exceeding the input limit fails rather than analyzing an arbitrary subset.
 `--body` applies the input limit to its blob and the code limit to its range.
 Changed bodies receive the output budget before callers and other context.
 A before/after change is selected as a pair, so a symbol limit of one can omit
 a modified function entirely. `omissions` reports these exclusions explicitly.
-Limits on symbols/edges do not bound file metadata or the parser's execution
-time. This command is intended for bounded repository snapshots, not streaming
-very large monorepos. Included source is plain text, not instructions to an agent.
+Git ingestion separately limits each metadata response to 16 MiB and each
+snapshot to 100,000 tracked entries. Git commands share a 120-second deadline
+from repository opening, and selected blobs are read in a batch. These defaults
+are also available to library callers through `GitLimits`.
 
-C++ is the only language supported by this command initially. Macro expansion,
+These bounds do not interrupt parser execution. A fast subprocess can transiently
+write past its output limit between checks; retained output is bounded. This
+command is intended for bounded snapshots, not streaming very large monorepos.
+Included source is plain text, not instructions to an agent.
+
+Invalid analyzer source locations and missing call endpoints produce explicit
+diagnostics. A missing local target is marked unavailable instead of retaining
+an exact relationship without a usable reference.
+
+Python and C++ are supported automatically, including mixed snapshots. The JSON
+`language` field is `python`, `cpp`, `mixed`, or `none`; symbols and analyzer
+provenance also include their own `language`. Provenance includes analyzers used
+in either revision, including a language deleted in the head. Calls and lexical
+supporting types remain within their language.
+
+Python package roots use committed `pyproject.toml` setuptools/Poetry settings,
+with `src/` or repository-root fallback matching the dependency command. The
+metadata counts toward the input-byte limit. An unreadable or invalid committed
+manifest fails explicitly; dirty metadata, local interpreters and installed
+packages are never consulted. Import aliases, relative imports and direct local
+calls reuse the Python resolver. Function signatures retain their written source,
+including defaults and annotations. Supporting annotation types remain lexical
+candidates; dynamic imports, arbitrary instance dispatch and runtime behavior
+are not inferred.
+
+C++ macro expansion,
 conditional compilation, template instantiation and runtime dispatch are not
 modeled. Tracked generated files are included if they have a supported C++
-extension; untracked files, symlinks and submodules are not followed. `.h`, `.H`
+or Python extension; untracked files, symlinks and submodules are not followed. `.h`, `.H`
 and `.C` use the C++ grammar even though these extensions can also represent C.
-Parse recovery diagnostics and unsupported-file counts are preserved. A report
+Parser recovery diagnostics and unsupported-file counts are preserved. C++
+namespace extents can be recovered from written braces only when conditional
+alternatives agree on the enclosing scopes. Conflicting or unbalanced scopes
+are not repaired. Recovery remains explicitly diagnosed and does not establish
+an active build configuration. A report
 with no changed function records does not establish that the comparison is safe.
 
 Exit status is 0 for a generated report (including explicit omissions or parser

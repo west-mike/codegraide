@@ -81,13 +81,13 @@ fn shortest_witness(
                     path
                 })
             };
-            if let Some(candidate) = candidate
-                && best.as_ref().is_none_or(|current| {
+            if let Some(candidate) = candidate {
+                if best.as_ref().is_none_or(|current| {
                     candidate.len() < current.len()
                         || (candidate.len() == current.len() && candidate < *current)
-                })
-            {
-                best = Some(candidate);
+                }) {
+                    best = Some(candidate);
+                }
             }
         }
     }

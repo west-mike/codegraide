@@ -1,0 +1,30 @@
+name: Verify
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [stable, msrv]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: matrix.check == 'stable'
+        with:
+          node-version: '22'
+      - name: Run shared verification
+        shell: bash
+        run: |
+          if [ '${{ matrix.check }}' = msrv ]; then
+            rustup toolchain install "$(scripts/verify.sh --print-msrv)" --profile minimal
+            scripts/verify.sh --msrv
+          else
+            rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+            rustup default stable
+            scripts/verify.sh
+          fi

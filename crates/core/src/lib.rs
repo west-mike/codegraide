@@ -45,12 +45,12 @@ pub use call_output::CallJsonReport;
 pub use calls::{
     CALL_FAN_IN_DEFINITION_VERSION, CALL_FAN_OUT_DEFINITION_VERSION, CALL_GRAPH_DEFINITION_VERSION,
     CALL_REPORT_SCHEMA_VERSION, CALL_SCC_DEFINITION_VERSION, CallDirection, CallEvidence,
-    CallGraphAnalysis, CallGraphCoverage, CallGraphFilter, CallGraphFilterError, CallGraphView,
-    CallGraphViewNode, CallNode, CallNodeMetrics, CallRelation, CallRelationKind,
+    CallGraphAnalysis, CallGraphCoverage, CallGraphError, CallGraphFilter, CallGraphFilterError,
+    CallGraphView, CallGraphViewNode, CallNode, CallNodeMetrics, CallRelation, CallRelationKind,
     CallResolutionOutcome, CallScc, ProjectCallResolution, ProjectLanguageModule, ProjectSymbol,
-    ProjectSymbolId, ProjectSymbolLocation, SymbolLinkStatus, analyze_call_graph,
-    analyze_call_graph_with_modules, call_closure, call_node_name, filter_call_graph,
-    render_call_dot, render_call_mermaid, shortest_call_path,
+    ProjectSymbolId, ProjectSymbolLocation, SymbolLinkStatus, SymbolQualification,
+    analyze_call_graph, analyze_call_graph_with_modules, call_closure, call_node_name,
+    filter_call_graph, render_call_dot, render_call_mermaid, shortest_call_path,
 };
 pub use dependencies::{
     DEPENDENCY_CYCLE_DEFINITION_VERSION, DEPENDENCY_FAN_IN_DEFINITION_VERSION,
@@ -87,9 +87,9 @@ pub use dependency_query::{
     DependencyQueryDirection, dependency_query_view, query_dependency_graph,
 };
 pub use documentation::{
-    DocumentationCounts, DocumentationCoverage, DocumentationCoverageStatus,
-    DocumentationFileCoverage, DocumentationSymbol,
-    PYTHON_DOCUMENTATION_COVERAGE_DEFINITION_VERSION, evaluate_documentation_coverage,
+    DOCUMENTATION_COVERAGE_DEFINITION_VERSION, DocumentationCounts, DocumentationCoverage,
+    DocumentationCoverageStatus, DocumentationDefinition, DocumentationEligibility,
+    DocumentationFileCoverage, DocumentationSymbol, evaluate_documentation_coverage,
 };
 pub use error::InventoryError;
 pub use graph::{
@@ -112,3 +112,5 @@ pub use review::{
     ReviewPolicyError, ReviewRankingEntry, ReviewStatus, RiskBands, RiskLevel, evaluate_review,
     review_status_code,
 };
+
+pub mod process;

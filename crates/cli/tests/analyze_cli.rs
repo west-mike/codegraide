@@ -489,7 +489,7 @@ auto callback = [](int value) { return value ? value : 0; };
         .find(|run| run["language"] == "cpp")
         .expect("C++ analyzer run");
     assert_eq!(cpp["id"], "cpp-tree-sitter");
-    assert_eq!(cpp["version"], "0.4.0");
+    assert_eq!(cpp["version"], "0.5.0");
     assert_eq!(cpp["counts"]["analyzed"], 4);
     assert!(report["diagnostics"].as_array().is_some_and(|diagnostics| {
         diagnostics.iter().any(|diagnostic| {
@@ -601,4 +601,30 @@ fn cpp_complexity_gate_reports_metric_provenance_and_exit_code() {
         report["top_findings"][0]["metric_definition_version"],
         "cpp-cyclomatic-complexity-v1"
     );
+}
+
+#[test]
+fn a_closed_stdout_pipe_is_not_a_panic() {
+    use std::process::Stdio;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("a.py"), "pass\n").unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_codegraide"))
+        .args([
+            "inventory",
+            root.path().to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let result = child.wait_with_output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&result.stderr).contains("panicked"));
 }

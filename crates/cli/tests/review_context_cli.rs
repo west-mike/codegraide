@@ -358,7 +358,7 @@ fn line_moves_type_only_changes_and_unsupported_files_are_reported_honestly() {
         "body.cpp",
         "// shift the unchanged function\n\nint value() { return 1; }\n",
     );
-    put(root, "script.py", "def new_function():\n    return 1\n");
+    put(root, "script.rs", "fn new_function() -> i32 { 1 }\n");
     let head = commit(root);
     let report = json(root, &["--base", &base, "--head", &head]);
     assert!(report["changes"].as_array().unwrap().is_empty());
@@ -368,7 +368,7 @@ fn line_moves_type_only_changes_and_unsupported_files_are_reported_honestly() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|f| f["after"] == "script.py" && f["analysis"] == "unsupported-file")
+            .any(|f| f["after"] == "script.rs" && f["analysis"] == "unsupported-file")
     );
     assert!(
         report["files"]
@@ -753,4 +753,352 @@ fn incident_relation_default_does_not_prune_recursive_context() {
     assert!(text.contains("(--all-relations)"));
     let help = String::from_utf8(run(root, &["--help"]).stdout).unwrap();
     assert!(help.contains("--all-relations"));
+}
+
+#[test]
+fn python_snapshots_resolve_committed_packages_and_preserve_retrieval() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["checkout", "-qb", "codex/fixture"]);
+    put(
+        root,
+        "pyproject.toml",
+        "[tool.setuptools.package-dir]\n\"\" = \"lib\"\n",
+    );
+    put(root, "lib/shop/__init__.py", "");
+    put(
+        root,
+        "lib/shop/service.py",
+        "def save(value: int = 1) -> int:\n    return value\n\ndef reserve(value):\n    return save(value)\n",
+    );
+    put(
+        root,
+        "lib/shop/client.py",
+        "from .service import reserve\n\ndef checkout(value):\n    return reserve(value)\n",
+    );
+    let base = commit(root);
+    put(
+        root,
+        "lib/shop/service.py",
+        "def save(value: int = 1) -> int:\n    return value\n\ndef reserve(value):\n    return save(value + 1)\n",
+    );
+    let head = commit(root);
+    let report = json(root, &["--base", &base, "--head", &head]);
+    assert_eq!(report["language"], "python");
+    assert_eq!(report["changes"].as_array().unwrap().len(), 1);
+    let symbols = report["symbols"].as_array().unwrap();
+    let caller = symbols.iter().find(|s| s["name"] == "checkout").unwrap();
+    assert_eq!(caller["language"], "python");
+    assert!(
+        caller["code"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("return reserve(value)")
+    );
+    assert_eq!(caller["other_snapshots"].as_array().unwrap().len(), 1);
+    let callee = symbols.iter().find(|s| s["name"] == "save").unwrap();
+    assert_eq!(callee["signature"], "def save(value: int = 1) -> int");
+    assert_eq!(callee["code"]["reason"], "callee-body-policy");
+    assert!(
+        report["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["from_name"] == "checkout"
+                && e["to_name"] == "reserve"
+                && e["resolution"] == "exact")
+    );
+    for reference in [
+        caller["reference"].as_str().unwrap(),
+        caller["other_snapshots"][0]["reference"].as_str().unwrap(),
+    ] {
+        assert_eq!(
+            json(root, &["--body", reference])["code"]["text"],
+            caller["code"]["text"]
+        );
+        assert!(
+            json(root, &["--symbol", reference, "--include-callees"])["symbols"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["name"] == "reserve")
+        );
+    }
+    put(root, "pyproject.toml", "invalid worktree metadata");
+    put(root, "lib/shop/service.py", "invalid worktree source");
+    put(root, "lib/shop/untracked.py", "def reserve(x): return x\n");
+    assert_eq!(report, json(root, &["--base", &base, "--head", &head]));
+    let bounded = json(root, &["--base", &base, "--max-code-bytes", "1"]);
+    assert!(
+        bounded["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["code"]["text"].is_null())
+    );
+    assert!(
+        !run(root, &["--base", &base, "--max-input-bytes", "1"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn mixed_snapshots_track_python_renames_additions_deletions_and_partial_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["checkout", "-qb", "codex/fixture"]);
+    put(
+        root,
+        "service.py",
+        "def keep(value):\n    return value\n\ndef gone():\n    return 2\n",
+    );
+    put(
+        root,
+        "old.py",
+        "def moved(value):\n    # Preserve a sufficient amount of identical content for Git rename detection.\n    return value + 1\n",
+    );
+    put(root, "native.cpp", "int keep() { return 1; }\n");
+    let base = commit(root);
+    git(root, &["mv", "old.py", "new.py"]);
+    put(
+        root,
+        "service.py",
+        "def keep(value):\n    return value + 1\n\ndef added():\n    return 3\n",
+    );
+    put(root, "native.cpp", "int keep() { return 2; }\n");
+    put(root, "broken.py", "def broken(:\n");
+    let head = commit(root);
+    let report = json(root, &["--base", &base, "--head", &head]);
+    assert_eq!(report["language"], "mixed");
+    assert_eq!(report["analyzers"].as_array().unwrap().len(), 2);
+    let changes = report["changes"].as_array().unwrap();
+    let symbols = report["symbols"].as_array().unwrap();
+    for (name, status) in [("gone", "removed"), ("added", "added")] {
+        assert!(changes.iter().any(|c| c["status"] == status
+            && symbols.iter().any(|s| s["name"] == name
+                && (s["reference"] == c["before"] || s["reference"] == c["after"]))));
+    }
+    assert!(
+        report["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["before"] == "old.py"
+                && f["after"] == "new.py"
+                && f["changed_functions"] == 1)
+    );
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d.as_str().unwrap().contains("broken.py: parse-"))
+    );
+    for language in ["cpp", "python"] {
+        assert_eq!(
+            symbols
+                .iter()
+                .filter(|s| s["name"] == "keep"
+                    && s["language"] == language
+                    && s["changed"] == true)
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn recovered_cpp_namespace_links_review_callers_without_conflating_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["checkout", "-qb", "codex/fixture"]);
+    let source = "namespace Catch {\nnamespace {\nvoid prepare() {\n#if PLATFORM\nif (first()) {\n#else\nif (second()) {\n#endif\nfail();\n}\n}\n}\nint run() { return 1; }\nint caller() { return run(); }\n}\nnamespace Other { int run() { return 3; } }\n";
+    put(root, "recovery.cpp", source);
+    let base = commit(root);
+    put(
+        root,
+        "recovery.cpp",
+        &source.replace("return 1;", "return 2;"),
+    );
+    commit(root);
+    let report = json(root, &["--base", &base]);
+    assert_eq!(report["changes"].as_array().unwrap().len(), 1);
+    assert!(
+        report["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "Catch::caller")
+    );
+    assert!(
+        report["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["name"] != "Other::run")
+    );
+    assert!(
+        report["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["from_name"] == "Catch::caller" && e["to_name"] == "Catch::run")
+    );
+}
+
+#[test]
+fn unchanged_duplicate_definitions_do_not_exhaust_the_change_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["checkout", "-qb", "codex/fixture"]);
+    put(
+        root,
+        "duplicates.cpp",
+        "#if A\nint repeated() { return 1; }\n#else\nint repeated() { return 2; }\n#endif\n",
+    );
+    put(
+        root,
+        "duplicates.py",
+        "if flag:\n    def repeated(): return 1\nelse:\n    def repeated(): return 2\n",
+    );
+    put(root, "changed.cpp", "int changed() { return 1; }\n");
+    let base = commit(root);
+    put(root, "changed.cpp", "int changed() { return 2; }\n");
+    let head = commit(root);
+    let report = json(
+        root,
+        &["--base", &base, "--head", &head, "--max-symbols", "2"],
+    );
+    assert_eq!(report["changes"].as_array().unwrap().len(), 1);
+    assert!(
+        report["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["name"] == "changed")
+    );
+    assert!(
+        json(root, &["--base", &head, "--head", &head])["changes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn python_src_layout_types_recursion_and_language_removal_are_explicit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["checkout", "-qb", "codex/fixture"]);
+    put(root, "src/shop/__init__.py", "");
+    let source = "class Item:\n    pass\n\ndef recursive(item: Item, depth=1):\n    if depth:\n        return recursive(item, depth - 1)\n    return item\n";
+    put(root, "src/shop/service.py", source);
+    put(
+        root,
+        "src/shop/client.py",
+        "from shop.service import recursive\n\ndef caller(item):\n    return recursive(item)\n",
+    );
+    put(root, "native.cpp", "struct Item { int count; };\n");
+    let base = commit(root);
+    put(
+        root,
+        "src/shop/service.py",
+        &source.replace("depth=1", "depth=2"),
+    );
+    let head = commit(root);
+    let report = json(root, &["--base", &base, "--head", &head, "--depth", "2"]);
+    let symbols = report["symbols"].as_array().unwrap();
+    assert!(symbols.iter().any(|s| s["name"] == "caller"));
+    assert!(
+        symbols
+            .iter()
+            .any(|s| s["name"] == "Item" && s["language"] == "python")
+    );
+    assert!(symbols.iter().all(|s| s["language"] == "python"));
+    assert!(
+        report["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["from_name"] == "recursive"
+                && r["to_name"] == "recursive"
+                && r["resolution"] == "exact")
+    );
+    assert_eq!(
+        symbols.iter().filter(|s| s["name"] == "recursive").count(),
+        2
+    );
+    git(root, &["rm", "-r", "src"]);
+    let removed = commit(root);
+    let report = json(root, &["--base", &head, "--head", &removed]);
+    assert_eq!(report["language"], "mixed");
+    assert!(
+        report["analyzers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["language"] == "python")
+    );
+    assert!(
+        report["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["status"] == "removed")
+    );
+}
+
+#[test]
+fn invalid_committed_python_metadata_fails_even_with_valid_worktree_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["checkout", "-qb", "codex/fixture"]);
+    put(root, "app.py", "def run(): return 1\n");
+    put(root, "pyproject.toml", "[invalid\n");
+    let base = commit(root);
+    put(
+        root,
+        "pyproject.toml",
+        "[tool.setuptools.package-dir]\n\"\" = \".\"\n",
+    );
+    let output = run(root, &["--base", &base]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot parse pyproject.toml"));
+}
+
+#[test]
+fn line_shifts_in_anonymous_cpp_namespaces_are_not_function_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["checkout", "-qb", "codex/fixture"]);
+    let source = "namespace demo { namespace { int internal() { return 1; } } int caller() { return internal(); } }\n";
+    put(root, "anonymous.cpp", source);
+    let base = commit(root);
+    put(root, "anonymous.cpp", &format!("// line shift\n\n{source}"));
+    let head = commit(root);
+    assert!(
+        json(root, &["--base", &base, "--head", &head])["changes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    put(
+        root,
+        "anonymous.cpp",
+        &format!(
+            "// line shift\n\n{}",
+            source.replace("return 1;", "return 2;")
+        ),
+    );
+    commit(root);
+    let changed = json(root, &["--base", &head]);
+    assert_eq!(changed["changes"].as_array().unwrap().len(), 1);
 }

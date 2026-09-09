@@ -7,9 +7,7 @@ use serde::Deserialize;
 
 use crate::analysis::AnalyzerRun;
 use crate::analyzer::{FileAnalysisStatus, MeasurementConcept, SourceSpan, SymbolKind};
-use crate::documentation::{
-    DocumentationCoverage, PYTHON_DOCUMENTATION_COVERAGE_DEFINITION_VERSION,
-};
+use crate::documentation::DocumentationCoverage;
 use crate::inventory::detect_language;
 
 pub const REVIEW_POLICY_VERSION: &str = "0.2.0";
@@ -703,6 +701,14 @@ pub fn evaluate_review(
         });
     }
 
+    let documentation_metric = documentation
+        .definition
+        .map_or("documentation-coverage", |definition| definition.metric_id);
+    let documentation_name = documentation
+        .definition
+        .map_or("Documentation coverage", |definition| {
+            definition.display_name
+        });
     if let Some(threshold) = policy.documentation_review_below {
         match documentation.threshold_is_met(threshold) {
             Some(true) => {}
@@ -712,16 +718,16 @@ pub fn evaluate_review(
                     .coverage_basis_points()
                     .expect("measured documentation coverage has a percentage");
                 findings.push(ReviewFinding {
-                    rule_id: "python-documentation-coverage-below-threshold".to_owned(),
+                    rule_id: format!("{documentation_metric}-below-threshold"),
                     risk: RiskLevel::Unknown,
                     required_action: RequiredAction::HumanReview,
                     path: None,
                     symbol_id: None,
                     qualified_name: None,
-                    language: Some("python".to_owned()),
-                    metric_id: Some("python-documentation-coverage".to_owned()),
+                    language: documentation.language.as_ref().map(|language| language.as_str().to_owned()),
+                    metric_id: Some(documentation_metric.to_owned()),
                     metric_definition_version: Some(
-                        PYTHON_DOCUMENTATION_COVERAGE_DEFINITION_VERSION.to_owned(),
+                        documentation.definition_version.to_owned(),
                     ),
                     span: None,
                     observed_value: Some(u64::from(basis_points)),
@@ -729,7 +735,7 @@ pub fn evaluate_review(
                     unit: Some("basis-points"),
                     acknowledged: false,
                     message: format!(
-                        "Python documentation coverage is {}.{:02}% ({}/{}) and is below the {}% review threshold",
+                        "{documentation_name} is {}.{:02}% ({}/{}) and is below the {}% review threshold",
                         basis_points / 100,
                         basis_points % 100,
                         documentation.counts.documented,
@@ -739,16 +745,16 @@ pub fn evaluate_review(
                 });
             }
             None => findings.push(ReviewFinding {
-                rule_id: "python-documentation-coverage-unavailable".to_owned(),
+                rule_id: format!("{documentation_metric}-unavailable"),
                 risk: RiskLevel::Unknown,
                 required_action: RequiredAction::HumanReview,
                 path: None,
                 symbol_id: None,
                 qualified_name: None,
-                language: Some("python".to_owned()),
-                metric_id: Some("python-documentation-coverage".to_owned()),
+                language: documentation.language.as_ref().map(|language| language.as_str().to_owned()),
+                metric_id: Some(documentation_metric.to_owned()),
                 metric_definition_version: Some(
-                    PYTHON_DOCUMENTATION_COVERAGE_DEFINITION_VERSION.to_owned(),
+                    documentation.definition_version.to_owned(),
                 ),
                 span: None,
                 observed_value: documentation
@@ -759,7 +765,7 @@ pub fn evaluate_review(
                 unit: Some("basis-points"),
                 acknowledged: false,
                 message: format!(
-                    "Python documentation coverage cannot be evaluated against the {threshold}% review threshold because analysis is {}",
+                    "{documentation_name} cannot be evaluated against the {threshold}% review threshold because analysis is {}",
                     documentation.status.as_str()
                 ),
             }),

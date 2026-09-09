@@ -56,6 +56,7 @@ pub fn resolve_python_calls(
                 let project = ProjectSymbol {
                     call_flow: None,
                     id: ProjectSymbolId {
+                        qualification: codegraide_core::SymbolQualification::Module,
                         language: module.language().clone(),
                         module: module.clone(),
                         qualified_name,
@@ -64,7 +65,7 @@ pub fn resolve_python_calls(
                     },
                     path: file.path.clone(),
                     span: symbol.span,
-                    signature: None,
+                    signature: symbol.callable_signature.clone(),
                     declarations: Vec::new(),
                     definition: Some(ProjectSymbolLocation {
                         path: file.path.clone(),

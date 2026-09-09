@@ -35,3 +35,17 @@ Environment and output:
   codegraide-dependencies, containing index.html and one offline page per language.
   Regeneration replaces a codegraide-owned bundle; unrelated nonempty directories
   are refused. Other formats write to stdout; redirect them to a file as above.
+
+Regenerating HTML:
+  The output directory must contain only files owned by its dependency manifest.
+  Symlinks, subdirectories, and unrelated files cause an error before replacement.
+  A complete replacement is staged beside the destination. If installation fails,
+  the previous bundle is restored; a failed restore reports its recovery path.
+  Use one writer per output directory. Directory replacement is not a guarantee
+  of crash-durable publication across the two rename operations.
+
+Process and pipe behavior:
+  Python probes have a ten-second deadline and an 8 MiB output limit per stream.
+  Output collection ends when the selected process exits. Unix descendants in
+  its private process group are cleaned up; other platforms terminate the direct
+  child. Closing a stdout pipe early preserves the command's normal status, including gate failures.

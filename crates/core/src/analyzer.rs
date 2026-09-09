@@ -95,6 +95,7 @@ pub struct MeasurementDescriptor {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AnalyzerDescriptor {
+    pub documentation: Option<crate::DocumentationDefinition>,
     pub id: String,
     pub language: LanguageId,
     pub version: String,
@@ -797,6 +798,7 @@ pub struct Symbol {
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct AnalysisFacts {
+    pub documentation_eligibility: Option<crate::DocumentationEligibility>,
     pub call_flows: std::collections::BTreeMap<SymbolId, crate::CallFlow>,
     pub symbols: Vec<Symbol>,
     pub declarations: Vec<SymbolDeclaration>,
@@ -985,6 +987,7 @@ mod tests {
     fn stub(language: &str) -> Box<dyn LanguageAnalyzer> {
         Box::new(StubAnalyzer {
             descriptor: AnalyzerDescriptor {
+                documentation: None,
                 id: format!("stub-{language}"),
                 language: LanguageId::new(language),
                 version: "0.1.0".to_owned(),

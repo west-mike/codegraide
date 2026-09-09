@@ -35,7 +35,10 @@ use codegraide_core::{
 use crate::bootstrap::{BuiltinAnalyzerFeatures, build_builtin_analyzer_registry};
 
 mod bootstrap;
+mod output;
+mod report_bundle;
 mod review_context;
+mod review_context_render;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -51,7 +54,7 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Compare committed C++ functions and retrieve bounded review context
+    /// Compare committed Python/C++ functions and retrieve bounded review context
     #[command(after_help = "Use --help for examples and reference retrieval details.", after_long_help = include_str!("help/review-context.txt"))]
     ReviewContext(review_context::ReviewContextArgs),
     /// Inventory the files and languages found in a repository
@@ -523,7 +526,7 @@ fn parse_percentage(value: &str) -> Result<u8, String> {
     Ok(parsed)
 }
 
-fn main() -> ExitCode {
+fn execute(terminal: &mut output::Terminal<'_>) -> ExitCode {
     let args = Args::parse();
 
     match &args.command {
@@ -536,11 +539,14 @@ fn main() -> ExitCode {
             list_files,
             format,
         } => run_inventory(
+            terminal,
             path,
-            include_ignored,
-            config.as_deref(),
-            *audit_ignored,
-            *no_warnings,
+            &InventoryOptions {
+                include_ignored: include_ignored.clone(),
+                config_path: config.clone(),
+                audit_ignored: *audit_ignored,
+                emit_warnings: !no_warnings,
+            },
             list_files,
             *format,
         ),
@@ -561,24 +567,27 @@ fn main() -> ExitCode {
             profile,
             top,
             format,
-        } => run_analyze(&AnalyzeRequest {
-            path,
-            match_patterns,
-            include_ignored,
-            diagnostics,
-            details,
-            policy: policy.as_deref(),
-            complexity_review_at: *complexity_review_at,
-            complexity_block_at: *complexity_block_at,
-            no_complexity_block: *no_complexity_block,
-            no_documentation_coverage: *no_documentation_coverage,
-            include_tests: *include_tests,
-            documentation_review_below: *documentation_review_below,
-            gate: *gate,
-            profile: *profile,
-            top: *top,
-            format: *format,
-        }),
+        } => run_analyze(
+            terminal,
+            &AnalyzeRequest {
+                path,
+                match_patterns,
+                include_ignored,
+                diagnostics,
+                details,
+                policy: policy.as_deref(),
+                complexity_review_at: *complexity_review_at,
+                complexity_block_at: *complexity_block_at,
+                no_complexity_block: *no_complexity_block,
+                no_documentation_coverage: *no_documentation_coverage,
+                include_tests: *include_tests,
+                documentation_review_below: *documentation_review_below,
+                gate: *gate,
+                profile: *profile,
+                top: *top,
+                format: *format,
+            },
+        ),
         Command::Comments {
             path,
             match_patterns,
@@ -589,17 +598,20 @@ fn main() -> ExitCode {
             top,
             gate,
             format,
-        } => run_comments(&CommentsRequest {
-            path,
-            match_patterns,
-            include_ignored,
-            policy: policy.as_deref(),
-            documentation_review_below: *documentation_review_below,
-            include_tests: *include_tests,
-            top: *top,
-            gate: *gate,
-            format: *format,
-        }),
+        } => run_comments(
+            terminal,
+            &CommentsRequest {
+                path,
+                match_patterns,
+                include_ignored,
+                policy: policy.as_deref(),
+                documentation_review_below: *documentation_review_below,
+                include_tests: *include_tests,
+                top: *top,
+                gate: *gate,
+                format: *format,
+            },
+        ),
         Command::Dependencies {
             path,
             language,
@@ -623,33 +635,36 @@ fn main() -> ExitCode {
             format,
             output,
             open,
-        } => run_dependencies(&DependencyRequest {
-            path,
-            languages: language,
-            compile_commands: compile_commands.as_deref(),
-            python: python.as_deref(),
-            venv: venv.as_deref(),
-            focus,
-            direction: *direction,
-            depth: *depth,
-            path_from: path_from.as_deref(),
-            path_to: path_to.as_deref(),
-            closure: closure.as_deref(),
-            exact_only: *exact_only,
-            local_only: *local_only,
-            cycles_only: *cycles_only,
-            exclusions: DependencyGraphInputExclusions {
-                type_only: *exclude_type_only,
-                optional: *exclude_optional,
-                callable_local: *exclude_callable_local,
-                conditional: *exclude_conditional,
+        } => run_dependencies(
+            terminal,
+            &DependencyRequest {
+                path,
+                languages: language,
+                compile_commands: compile_commands.as_deref(),
+                python: python.as_deref(),
+                venv: venv.as_deref(),
+                focus,
+                direction: *direction,
+                depth: *depth,
+                path_from: path_from.as_deref(),
+                path_to: path_to.as_deref(),
+                closure: closure.as_deref(),
+                exact_only: *exact_only,
+                local_only: *local_only,
+                cycles_only: *cycles_only,
+                exclusions: DependencyGraphInputExclusions {
+                    type_only: *exclude_type_only,
+                    optional: *exclude_optional,
+                    callable_local: *exclude_callable_local,
+                    conditional: *exclude_conditional,
+                },
+                top: *top,
+                format: *format,
+                output: output.as_deref(),
+                open: *open,
             },
-            top: *top,
-            format: *format,
-            output: output.as_deref(),
-            open: *open,
-        }),
-        Command::ReviewContext(args) => review_context::run(args),
+        ),
+        Command::ReviewContext(args) => review_context::run(terminal, args),
         Command::Calls {
             path,
             language,
@@ -668,34 +683,35 @@ fn main() -> ExitCode {
             open,
             include_source,
             max_expansion_depth,
-        } => run_calls(&CallRequest {
-            path,
-            language: *language,
-            compile_commands: compile_commands.as_deref(),
-            architecture: architecture.as_deref(),
-            python: python.as_deref(),
-            venv: venv.as_deref(),
-            focus,
-            direction: *direction,
-            depth: *depth,
-            exact_only: *exact_only,
-            local_only: *local_only,
-            cycles_only: *cycles_only,
-            format: *format,
-            output: output.as_deref(),
-            open: *open,
-            include_source: *include_source,
-            max_expansion_depth: *max_expansion_depth,
-        }),
+        } => run_calls(
+            terminal,
+            &CallRequest {
+                path,
+                language: *language,
+                compile_commands: compile_commands.as_deref(),
+                architecture: architecture.as_deref(),
+                python: python.as_deref(),
+                venv: venv.as_deref(),
+                focus,
+                direction: *direction,
+                depth: *depth,
+                exact_only: *exact_only,
+                local_only: *local_only,
+                cycles_only: *cycles_only,
+                format: *format,
+                output: output.as_deref(),
+                open: *open,
+                include_source: *include_source,
+                max_expansion_depth: *max_expansion_depth,
+            },
+        ),
     }
 }
 
 fn run_inventory(
+    terminal: &mut output::Terminal<'_>,
     path: &Path,
-    include_ignored: &[String],
-    config_path: Option<&Path>,
-    audit_ignored: bool,
-    no_warnings: bool,
+    options: &InventoryOptions,
     list_files: &[FileListSelection],
     format: InventoryOutputFormat,
 ) -> ExitCode {
@@ -717,13 +733,7 @@ fn run_inventory(
         return ExitCode::FAILURE;
     }
 
-    let options = InventoryOptions {
-        include_ignored: include_ignored.to_vec(),
-        config_path: config_path.map(Path::to_path_buf),
-        audit_ignored,
-        emit_warnings: !no_warnings,
-    };
-    let inventory = match inventory_repository_with_options(path, &options) {
+    let inventory = match inventory_repository_with_options(path, options) {
         Ok(inventory) => inventory,
         Err(error) => {
             eprintln!("error: failed to inventory {}: {error}", path.display());
@@ -732,28 +742,28 @@ fn run_inventory(
     };
 
     if format == InventoryOutputFormat::Json {
-        return print_json(&inventory);
+        return print_json(terminal, &inventory);
     }
 
     for diagnostic in &inventory.diagnostics {
         eprintln!("warning[{}]: {}", diagnostic.code, diagnostic.message);
     }
 
-    print_summary(path, &inventory);
-    print_requested_files(&inventory, list_files);
+    print_summary(terminal, path, &inventory);
+    print_requested_files(terminal, &inventory, list_files);
 
-    if audit_ignored {
-        print_ignored_paths(&inventory);
+    if options.audit_ignored {
+        print_ignored_paths(terminal, &inventory);
     }
 
     ExitCode::SUCCESS
 }
 
-fn print_json(inventory: &RepositoryInventory) -> ExitCode {
+fn print_json(terminal: &mut output::Terminal<'_>, inventory: &RepositoryInventory) -> ExitCode {
     let report = InventoryJsonReport::from_inventory(inventory);
     match serde_json::to_string_pretty(&report) {
         Ok(json) => {
-            println!("{json}");
+            terminal.line(format_args!("{json}"));
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -797,7 +807,10 @@ struct LanguageDependencyRun {
     diagnostics: Vec<String>,
 }
 
-fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
+fn run_dependencies(
+    terminal: &mut output::Terminal<'_>,
+    request: &DependencyRequest<'_>,
+) -> ExitCode {
     if request.output.is_some() && request.format != DependencyOutputFormat::Html {
         eprintln!("error: --output requires --format html");
         return ExitCode::FAILURE;
@@ -967,18 +980,20 @@ fn run_dependencies(request: &DependencyRequest<'_>) -> ExitCode {
 
     match request.format {
         DependencyOutputFormat::Terminal => {
-            print_dependency_bundle_summary(request.path, &runs, &unavailable, request);
+            print_dependency_bundle_summary(terminal, request.path, &runs, &unavailable, request);
             ExitCode::SUCCESS
         }
         DependencyOutputFormat::Mermaid => {
-            print!("{}", render_dependency_mermaid_bundle(&runs));
+            terminal.write(format_args!("{}", render_dependency_mermaid_bundle(&runs)));
             ExitCode::SUCCESS
         }
         DependencyOutputFormat::Dot => {
-            print!("{}", render_dependency_dot_bundle(&runs));
+            terminal.write(format_args!("{}", render_dependency_dot_bundle(&runs)));
             ExitCode::SUCCESS
         }
-        DependencyOutputFormat::Json => print_dependency_bundle_json(&runs, unavailable, request),
+        DependencyOutputFormat::Json => {
+            print_dependency_bundle_json(terminal, &runs, unavailable, request)
+        }
         DependencyOutputFormat::Html => emit_dependency_html_bundle(
             request.path,
             &runs,
@@ -1133,12 +1148,15 @@ fn build_dependency_run(
     })
 }
 
-fn print_dependency_query(result: &DependencyGraphQueryResult) {
+fn print_dependency_query(
+    terminal: &mut output::Terminal<'_>,
+    result: &DependencyGraphQueryResult,
+) {
     match &result.query {
         DependencyGraphQuery::ShortestPath { from, to } => {
             if result.found {
-                println!("Shortest dependency path ({from} -> {to}):");
-                println!(
+                terminal.line(format_args!("Shortest dependency path ({from} -> {to}):"));
+                terminal.line(format_args!(
                     "  {}",
                     result
                         .nodes
@@ -1146,21 +1164,24 @@ fn print_dependency_query(result: &DependencyGraphQueryResult) {
                         .map(dependency_node_name)
                         .collect::<Vec<_>>()
                         .join(" -> ")
-                );
+                ));
             } else {
-                println!("No exact local dependency path found from {from} to {to}.");
+                terminal.line(format_args!(
+                    "No exact local dependency path found from {from} to {to}."
+                ));
             }
         }
         DependencyGraphQuery::Closure { module, direction } => {
-            println!("{} closure for {module}:", direction.as_str());
+            terminal.line(format_args!("{} closure for {module}:", direction.as_str()));
             for node in &result.nodes {
-                println!("  {}", dependency_node_name(node));
+                terminal.line(format_args!("  {}", dependency_node_name(node)));
             }
         }
     }
 }
 
 fn print_dependency_bundle_json(
+    terminal: &mut output::Terminal<'_>,
     runs: &[LanguageDependencyRun],
     unavailable: Vec<UnavailableDependencyLanguage>,
     request: &DependencyRequest<'_>,
@@ -1181,7 +1202,7 @@ fn print_dependency_bundle_json(
         .collect();
     match serde_json::to_string_pretty(&DependencyBundleJsonReport::new(languages, unavailable)) {
         Ok(json) => {
-            println!("{json}");
+            terminal.line(format_args!("{json}"));
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -1309,28 +1330,14 @@ fn emit_dependency_html_bundle(
             serde_json::json!({"language": language, "file": file})
         }).collect::<Vec<_>>()
     });
-    if let Err(error) = prepare_dependency_output_directory(output, &generated_files) {
+    pages.push((
+        "codegraide-dependency-report.json".to_owned(),
+        serde_json::to_string_pretty(&manifest).expect("manifest serialization"),
+    ));
+    if let Err(error) = report_bundle::publish(output, &pages) {
         eprintln!(
-            "error: could not prepare dependency report directory {}: {error}",
+            "error: could not publish dependency report {}: {error}",
             output.display()
-        );
-        return ExitCode::FAILURE;
-    }
-    for (filename, contents) in pages {
-        if let Err(error) = fs::write(output.join(&filename), contents) {
-            eprintln!(
-                "error: could not write dependency report file {}: {error}",
-                output.join(filename).display()
-            );
-            return ExitCode::FAILURE;
-        }
-    }
-    let manifest_path = output.join("codegraide-dependency-report.json");
-    let manifest = serde_json::to_string_pretty(&manifest).expect("manifest serialization");
-    if let Err(error) = fs::write(&manifest_path, manifest) {
-        eprintln!(
-            "error: could not write dependency report manifest {}: {error}",
-            manifest_path.display()
         );
         return ExitCode::FAILURE;
     }
@@ -1347,54 +1354,6 @@ fn emit_dependency_html_bundle(
         eprintln!("opened dependency report overview");
     }
     ExitCode::SUCCESS
-}
-
-fn prepare_dependency_output_directory(
-    output: &Path,
-    generated_files: &[String],
-) -> io::Result<()> {
-    if output.exists() && !output.is_dir() {
-        return Err(io::Error::other(
-            "output path exists and is not a directory",
-        ));
-    }
-    fs::create_dir_all(output)?;
-    let existing = fs::read_dir(output)?.collect::<Result<Vec<_>, _>>()?;
-    if existing.is_empty() {
-        return Ok(());
-    }
-    let manifest_path = output.join("codegraide-dependency-report.json");
-    let manifest_source = fs::read_to_string(&manifest_path).map_err(|_| {
-        io::Error::other("directory is nonempty and has no Codegraide dependency manifest")
-    })?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_source)
-        .map_err(|error| io::Error::other(format!("invalid dependency manifest: {error}")))?;
-    if manifest["format"] != "codegraide-dependency-html-bundle-v1" {
-        return Err(io::Error::other(
-            "directory does not contain a recognized Codegraide dependency bundle",
-        ));
-    }
-    let retained = generated_files.iter().collect::<BTreeSet<_>>();
-    for filename in manifest["generated_files"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-    {
-        if filename.contains('/') || filename.contains('\\') || filename == "." || filename == ".."
-        {
-            return Err(io::Error::other(
-                "dependency manifest contains an unsafe filename",
-            ));
-        }
-        if !retained.contains(&filename.to_owned()) {
-            let stale = output.join(filename);
-            if stale.is_file() {
-                fs::remove_file(stale)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 fn language_slug(language: &str) -> String {
@@ -1520,13 +1479,14 @@ fn open_in_default_browser(path: &Path) -> io::Result<()> {
 }
 
 fn print_dependency_bundle_summary(
+    terminal: &mut output::Terminal<'_>,
     path: &Path,
     runs: &[LanguageDependencyRun],
     unavailable: &[UnavailableDependencyLanguage],
     request: &DependencyRequest<'_>,
 ) {
-    println!("Dependency project: {}", path.display());
-    println!(
+    terminal.line(format_args!("Dependency project: {}", path.display()));
+    terminal.line(format_args!(
         "Dependency languages: {}",
         if runs.is_empty() {
             "none".to_owned()
@@ -1536,39 +1496,40 @@ fn print_dependency_bundle_summary(
                 .collect::<Vec<_>>()
                 .join(", ")
         }
-    );
+    ));
     for language in unavailable {
-        println!(
+        terminal.line(format_args!(
             "Unavailable language: {} ({})",
             language.language, language.status
-        );
+        ));
     }
     for run in runs {
-        println!(
+        terminal.line(format_args!(
             "\n{} dependencies [{} {}]:",
             run.language.to_uppercase(),
             run.resolver.id,
             run.resolver.version
-        );
+        ));
         for line in &run.summary_lines {
-            println!("  {line}");
+            terminal.line(format_args!("  {line}"));
         }
         if let Some(result) = &run.query {
-            print_dependency_query(result);
+            print_dependency_query(terminal, result);
             continue;
         }
-        print_dependency_language_summary(run, request.exclusions, request.top);
+        print_dependency_language_summary(terminal, run, request.exclusions, request.top);
     }
 }
 
 fn print_dependency_language_summary(
+    terminal: &mut output::Terminal<'_>,
     run: &LanguageDependencyRun,
     exclusions: DependencyGraphInputExclusions,
     top: Option<usize>,
 ) {
     let graph = &run.graph;
     let view = &run.view;
-    println!(
+    terminal.line(format_args!(
         "  Resolution coverage: total={} exact={} inferred={} ambiguous={} context-dependent={} unresolved={}",
         graph.coverage.total_references,
         graph.coverage.exact_references,
@@ -1576,7 +1537,7 @@ fn print_dependency_language_summary(
         graph.coverage.ambiguous_references,
         graph.coverage.context_dependent_references,
         graph.coverage.unresolved_references
-    );
+    ));
     let contexts = graph
         .relations
         .iter()
@@ -1589,7 +1550,7 @@ fn print_dependency_language_summary(
         })
         .collect::<Vec<_>>();
     if !contexts.is_empty() {
-        println!(
+        terminal.line(format_args!(
             "  Import contexts: type-only={} optional={} callable-local={} conditional={}",
             contexts
                 .iter()
@@ -1607,7 +1568,7 @@ fn print_dependency_language_summary(
                 .iter()
                 .filter(|context| context.conditional)
                 .count()
-        );
+        ));
     }
     let mut excluded = Vec::new();
     if exclusions.type_only {
@@ -1622,40 +1583,42 @@ fn print_dependency_language_summary(
     if exclusions.conditional {
         excluded.push("conditional");
     }
-    println!(
+    terminal.line(format_args!(
         "  Graph input exclusions: {}",
         if excluded.is_empty() {
             "none".to_owned()
         } else {
             excluded.join(", ")
         }
-    );
-    println!(
+    ));
+    terminal.line(format_args!(
         "  Graph: nodes={} relations={} cycles={} | view: nodes={} relations={}",
         graph.nodes.len(),
         graph.relations.len(),
         graph.cycles.len(),
         view.nodes.len(),
         view.relations.len()
-    );
+    ));
     let limit = top.unwrap_or(10);
     if graph.coverage.inferred_references > 0 {
         print_local_structural_ranking(
+            terminal,
             "Highest local fan-in (exact + inferred)",
             view,
             limit,
             true,
         );
         print_local_structural_ranking(
+            terminal,
             "Highest local fan-out (exact + inferred)",
             view,
             limit,
             false,
         );
     }
-    print_dependency_ranking("Highest exact fan-in", view, limit, true);
-    print_dependency_ranking("Highest exact fan-out", view, limit, false);
-    println!("\nCycles:");
+    print_dependency_ranking(terminal, "Highest exact fan-in", view, limit, true);
+    print_dependency_ranking(terminal, "Highest exact fan-out", view, limit, false);
+    terminal.line(format_args!("\nCycles:"));
     let visible = view
         .nodes
         .iter()
@@ -1671,10 +1634,10 @@ fn print_dependency_language_summary(
         })
         .collect::<Vec<_>>();
     if explanations.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for explanation in explanations {
-            println!(
+            terminal.line(format_args!(
                 "  {} witness: {}",
                 explanation.component_number,
                 explanation
@@ -1683,10 +1646,10 @@ fn print_dependency_language_summary(
                     .map(dependency_node_name)
                     .collect::<Vec<_>>()
                     .join(" -> ")
-            );
-            println!("    recommended cuts (approximate):");
+            ));
+            terminal.line(format_args!("    recommended cuts (approximate):"));
             for relation in explanation.recommended_cuts {
-                println!(
+                terminal.line(format_args!(
                     "      {} -> {} ({} reference {})",
                     dependency_node_name(&relation.source),
                     dependency_node_name(&relation.target),
@@ -1696,35 +1659,39 @@ fn print_dependency_language_summary(
                     } else {
                         "sites"
                     }
-                );
+                ));
                 for evidence in relation.evidence {
                     match &evidence.reference {
-                        codegraide_core::DependencyReference::Import(reference) => println!(
-                            "        {}:{}:{} [{}; {}; {}{}]",
-                            evidence.source_path.display(),
-                            reference.span.start.line,
-                            reference.span.start.column,
-                            reference.context.scope.as_str(),
-                            reference.context.usage.as_str(),
-                            reference.context.requirement.as_str(),
-                            if reference.context.conditional {
-                                "; conditional"
-                            } else {
-                                ""
-                            }
-                        ),
-                        codegraide_core::DependencyReference::Include(reference) => println!(
-                            "        {}:{}:{} [{}{}]",
-                            evidence.source_path.display(),
-                            reference.span.start.line,
-                            reference.span.start.column,
-                            reference.delimiter.as_str(),
-                            if reference.conditional {
-                                "; conditional"
-                            } else {
-                                ""
-                            }
-                        ),
+                        codegraide_core::DependencyReference::Import(reference) => {
+                            terminal.line(format_args!(
+                                "        {}:{}:{} [{}; {}; {}{}]",
+                                evidence.source_path.display(),
+                                reference.span.start.line,
+                                reference.span.start.column,
+                                reference.context.scope.as_str(),
+                                reference.context.usage.as_str(),
+                                reference.context.requirement.as_str(),
+                                if reference.context.conditional {
+                                    "; conditional"
+                                } else {
+                                    ""
+                                }
+                            ))
+                        }
+                        codegraide_core::DependencyReference::Include(reference) => {
+                            terminal.line(format_args!(
+                                "        {}:{}:{} [{}{}]",
+                                evidence.source_path.display(),
+                                reference.span.start.line,
+                                reference.span.start.column,
+                                reference.delimiter.as_str(),
+                                if reference.conditional {
+                                    "; conditional"
+                                } else {
+                                    ""
+                                }
+                            ))
+                        }
                     }
                 }
             }
@@ -1745,12 +1712,18 @@ fn print_dependency_language_summary(
         .iter()
         .filter(|node| node.node.kind() == DependencyNodeKind::ContextDependent)
         .count();
-    println!(
+    terminal.line(format_args!(
         "\nInvestigation nodes: ambiguous={ambiguous} context-dependent={context_dependent} unresolved={unresolved}"
-    );
+    ));
 }
 
-fn print_dependency_ranking(heading: &str, view: &DependencyGraphView, limit: usize, fan_in: bool) {
+fn print_dependency_ranking(
+    terminal: &mut output::Terminal<'_>,
+    heading: &str,
+    view: &DependencyGraphView,
+    limit: usize,
+    fan_in: bool,
+) {
     let mut nodes = view
         .nodes
         .iter()
@@ -1764,18 +1737,22 @@ fn print_dependency_ranking(heading: &str, view: &DependencyGraphView, limit: us
             .cmp(&left_value)
             .then_with(|| dependency_node_name(&left.node).cmp(&dependency_node_name(&right.node)))
     });
-    println!("\n{heading}:");
+    terminal.line(format_args!("\n{heading}:"));
     if nodes.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for node in nodes.into_iter().take(limit) {
             let value = if fan_in { node.fan_in } else { node.fan_out };
-            println!("  {value:>4}  {}", dependency_node_name(&node.node));
+            terminal.line(format_args!(
+                "  {value:>4}  {}",
+                dependency_node_name(&node.node)
+            ));
         }
     }
 }
 
 fn print_local_structural_ranking(
+    terminal: &mut output::Terminal<'_>,
     heading: &str,
     view: &DependencyGraphView,
     limit: usize,
@@ -1804,12 +1781,15 @@ fn print_local_structural_ranking(
             .cmp(left_count)
             .then_with(|| dependency_node_name(left_node).cmp(&dependency_node_name(right_node)))
     });
-    println!("\n{heading}:");
+    terminal.line(format_args!("\n{heading}:"));
     if counts.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for (node, count) in counts.into_iter().take(limit) {
-            println!("  {count:>4}  {}", dependency_node_name(&node));
+            terminal.line(format_args!(
+                "  {count:>4}  {}",
+                dependency_node_name(&node)
+            ));
         }
     }
 }
@@ -1860,7 +1840,7 @@ struct CallRequest<'a> {
     max_expansion_depth: Option<u8>,
 }
 
-fn run_calls(request: &CallRequest<'_>) -> ExitCode {
+fn run_calls(terminal: &mut output::Terminal<'_>, request: &CallRequest<'_>) -> ExitCode {
     if request.output.is_some() && request.format != CallOutputFormat::Html {
         eprintln!("error: --output requires --format html");
         return ExitCode::FAILURE;
@@ -2006,11 +1986,11 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
                 }
             };
             let mut resolution = resolve_cpp_calls(&analysis, &dependencies);
-            if let Some(path) = request.architecture
-                && let Err(error) = apply_architecture_to_resolution(path, &mut resolution)
-            {
-                eprintln!("error: {error}");
-                return ExitCode::FAILURE;
+            if let Some(path) = request.architecture {
+                if let Err(error) = apply_architecture_to_resolution(path, &mut resolution) {
+                    eprintln!("error: {error}");
+                    return ExitCode::FAILURE;
+                }
             }
             let diagnostics: Vec<String> = dependencies
                 .diagnostics
@@ -2026,7 +2006,13 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             )
         }
     };
-    let graph = analyze_call_graph_with_modules(&symbols, &resolutions, language_modules);
+    let graph = match analyze_call_graph_with_modules(&symbols, &resolutions, language_modules) {
+        Ok(graph) => graph,
+        Err(error) => {
+            eprintln!("error: invalid call graph: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let filter = CallGraphFilter {
         focus_symbols: request.focus.to_vec(),
         direction: request
@@ -2060,7 +2046,7 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
     }
     match request.format {
         CallOutputFormat::Terminal => {
-            print_call_summary(request.path, &graph, &view);
+            print_call_summary(terminal, request.path, &graph, &view);
             ExitCode::SUCCESS
         }
         CallOutputFormat::Json => {
@@ -2070,7 +2056,7 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
                 &view,
             )) {
                 Ok(json) => {
-                    println!("{json}");
+                    terminal.line(format_args!("{json}"));
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -2080,14 +2066,15 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
             }
         }
         CallOutputFormat::Mermaid => {
-            print!("{}", render_call_mermaid(&view));
+            terminal.write(format_args!("{}", render_call_mermaid(&view)));
             ExitCode::SUCCESS
         }
         CallOutputFormat::Dot => {
-            print!("{}", render_call_dot(&view));
+            terminal.write(format_args!("{}", render_call_dot(&view)));
             ExitCode::SUCCESS
         }
         CallOutputFormat::Html => emit_call_html(
+            terminal,
             &view,
             request.path,
             request.include_source,
@@ -2098,9 +2085,14 @@ fn run_calls(request: &CallRequest<'_>) -> ExitCode {
     }
 }
 
-fn print_call_summary(path: &Path, graph: &CallGraphAnalysis, view: &CallGraphView) {
-    println!("Call project: {}", path.display());
-    println!(
+fn print_call_summary(
+    terminal: &mut output::Terminal<'_>,
+    path: &Path,
+    graph: &CallGraphAnalysis,
+    view: &CallGraphView,
+) {
+    terminal.line(format_args!("Call project: {}", path.display()));
+    terminal.line(format_args!(
         "Resolution coverage: total={} exact={} inferred={} external={} ambiguous={} unresolved={} unavailable={}",
         graph.coverage.total_calls,
         graph.coverage.exact_calls,
@@ -2109,28 +2101,28 @@ fn print_call_summary(path: &Path, graph: &CallGraphAnalysis, view: &CallGraphVi
         graph.coverage.ambiguous_calls,
         graph.coverage.unresolved_calls,
         graph.coverage.unavailable_calls
-    );
-    println!(
+    ));
+    terminal.line(format_args!(
         "Graph: nodes={} calls={} recursive-groups={} | view: nodes={} calls={}",
         graph.nodes.len(),
         graph.relations.len(),
         graph.cycles.len(),
         view.nodes.len(),
         view.relations.len()
-    );
-    print_call_ranking("Highest caller fan-in", view, true);
-    print_call_ranking("Highest callee fan-out", view, false);
-    println!("\nRecursive groups:");
+    ));
+    print_call_ranking(terminal, "Highest caller fan-in", view, true);
+    print_call_ranking(terminal, "Highest callee fan-out", view, false);
+    terminal.line(format_args!("\nRecursive groups:"));
     let cycles = view
         .strongly_connected_components
         .iter()
         .filter(|component| component.cyclic)
         .collect::<Vec<_>>();
     if cycles.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for (index, cycle) in cycles.iter().enumerate() {
-            println!(
+            terminal.line(format_args!(
                 "  {}: {}",
                 index + 1,
                 cycle
@@ -2139,12 +2131,17 @@ fn print_call_summary(path: &Path, graph: &CallGraphAnalysis, view: &CallGraphVi
                     .map(call_node_name)
                     .collect::<Vec<_>>()
                     .join(" -> ")
-            );
+            ));
         }
     }
 }
 
-fn print_call_ranking(heading: &str, view: &CallGraphView, fan_in: bool) {
+fn print_call_ranking(
+    terminal: &mut output::Terminal<'_>,
+    heading: &str,
+    view: &CallGraphView,
+    fan_in: bool,
+) {
     let mut nodes = view
         .nodes
         .iter()
@@ -2157,14 +2154,15 @@ fn print_call_ranking(heading: &str, view: &CallGraphView, fan_in: bool) {
             .cmp(&left_value)
             .then_with(|| call_node_name(&left.node).cmp(&call_node_name(&right.node)))
     });
-    println!("\n{heading}:");
+    terminal.line(format_args!("\n{heading}:"));
     for node in nodes.into_iter().take(10) {
         let value = if fan_in { node.fan_in } else { node.fan_out };
-        println!("  {value:>4}  {}", call_node_name(&node.node));
+        terminal.line(format_args!("  {value:>4}  {}", call_node_name(&node.node)));
     }
 }
 
 fn emit_call_html(
+    terminal: &mut output::Terminal<'_>,
     view: &CallGraphView,
     project_root: &Path,
     include_source: bool,
@@ -2185,7 +2183,7 @@ fn emit_call_html(
         }
     };
     if output.is_none() && !open {
-        print!("{html}");
+        terminal.write(format_args!("{html}"));
         return ExitCode::SUCCESS;
     }
     let output = output.unwrap_or_else(|| Path::new("codegraide-call-graph.html"));
@@ -2197,12 +2195,14 @@ fn emit_call_html(
         return ExitCode::FAILURE;
     }
     eprintln!("wrote interactive call graph to {}", output.display());
-    if open && let Err(error) = open_in_default_browser(output) {
-        eprintln!(
-            "error: could not open call graph {}: {error}",
-            output.display()
-        );
-        return ExitCode::FAILURE;
+    if open {
+        if let Err(error) = open_in_default_browser(output) {
+            eprintln!(
+                "error: could not open call graph {}: {error}",
+                output.display()
+            );
+            return ExitCode::FAILURE;
+        }
     }
     ExitCode::SUCCESS
 }
@@ -2220,7 +2220,7 @@ struct CommentsRequest<'a> {
     format: CommentsOutputFormat,
 }
 
-fn run_comments(request: &CommentsRequest<'_>) -> ExitCode {
+fn run_comments(terminal: &mut output::Terminal<'_>, request: &CommentsRequest<'_>) -> ExitCode {
     let mut registry = match build_builtin_analyzer_registry(BuiltinAnalyzerFeatures {
         documentation: true,
     }) {
@@ -2263,7 +2263,12 @@ fn run_comments(request: &CommentsRequest<'_>) -> ExitCode {
 
     let output_status = match request.format {
         CommentsOutputFormat::Terminal => {
-            print_documentation_summary(request.path, &analysis, request.top.unwrap_or(20));
+            print_documentation_summary(
+                terminal,
+                request.path,
+                &analysis,
+                request.top.unwrap_or(20),
+            );
             ExitCode::SUCCESS
         }
         CommentsOutputFormat::Json => {
@@ -2272,7 +2277,7 @@ fn run_comments(request: &CommentsRequest<'_>) -> ExitCode {
                 request.top,
             )) {
                 Ok(json) => {
-                    println!("{json}");
+                    terminal.line(format_args!("{json}"));
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -2305,28 +2310,36 @@ fn documentation_review_status(analysis: &RepositoryAnalysis) -> ReviewStatus {
     }
 }
 
-fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: usize) {
+fn print_documentation_summary(
+    terminal: &mut output::Terminal<'_>,
+    path: &Path,
+    analysis: &RepositoryAnalysis,
+    top: usize,
+) {
     let coverage = &analysis.documentation_coverage;
-    println!("Documentation target: {}", path.display());
-    println!("Status: {}.", human_documentation_status(coverage.status));
-    println!(
+    terminal.line(format_args!("Documentation target: {}", path.display()));
+    terminal.line(format_args!(
+        "Status: {}.",
+        human_documentation_status(coverage.status)
+    ));
+    terminal.line(format_args!(
         "Files: applicable: {}, skipped tests: {}, unsupported: {}.",
         coverage.applicable_files, coverage.skipped_test_files, coverage.unsupported_selected_files
-    );
-    println!(
+    ));
+    terminal.line(format_args!(
         "Coverage: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}.",
         coverage.counts.documented,
         coverage.counts.measured(),
         coverage.counts.missing,
         coverage.counts.unavailable,
         format_documentation_percentage(coverage.counts.coverage_basis_points())
-    );
-    println!("\nBy symbol kind:");
+    ));
+    terminal.line(format_args!("\nBy symbol kind:"));
     if coverage.by_kind.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for (kind, counts) in &coverage.by_kind {
-            println!(
+            terminal.line(format_args!(
                 "  {}: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}",
                 kind.as_str(),
                 counts.documented,
@@ -2334,15 +2347,15 @@ fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: 
                 counts.missing,
                 counts.unavailable,
                 format_documentation_percentage(counts.coverage_basis_points())
-            );
+            ));
         }
     }
-    println!("\nFiles:");
+    terminal.line(format_args!("\nFiles:"));
     if coverage.files.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for file in &coverage.files {
-            println!(
+            terminal.line(format_args!(
                 "  {}: documented: {}/{}, missing: {}, unavailable: {}, coverage: {}",
                 file.path.display(),
                 file.counts.documented,
@@ -2350,40 +2363,40 @@ fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: 
                 file.counts.missing,
                 file.counts.unavailable,
                 format_documentation_percentage(file.counts.coverage_basis_points())
-            );
+            ));
         }
     }
-    println!("\nMissing documentation:");
+    terminal.line(format_args!("\nMissing documentation:"));
     if coverage.missing_symbols.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for symbol in coverage.missing_symbols.iter().take(top) {
-            println!(
+            terminal.line(format_args!(
                 "  {}:{} {} {}",
                 symbol.path.display(),
                 symbol.span.start.line,
                 symbol.kind.as_str(),
                 symbol.qualified_name
-            );
+            ));
         }
         if coverage.missing_symbols.len() > top {
-            println!(
+            terminal.line(format_args!(
                 "  ... {} more (use --top to change the limit)",
                 coverage.missing_symbols.len() - top
-            );
+            ));
         }
     }
     if !coverage.unavailable_symbols.is_empty() {
-        println!("\nUnavailable documentation evidence:");
+        terminal.line(format_args!("\nUnavailable documentation evidence:"));
         for symbol in coverage.unavailable_symbols.iter().take(top) {
-            println!(
+            terminal.line(format_args!(
                 "  {}:{} {} {}: {}",
                 symbol.path.display(),
                 symbol.span.start.line,
                 symbol.kind.as_str(),
                 symbol.qualified_name,
                 symbol.reason.as_deref().unwrap_or("unavailable")
-            );
+            ));
         }
     }
     for finding in analysis.review.findings.iter().filter(|finding| {
@@ -2391,7 +2404,7 @@ fn print_documentation_summary(path: &Path, analysis: &RepositoryAnalysis, top: 
             .rule_id
             .starts_with("python-documentation-coverage-")
     }) {
-        println!("\nReview: {}", finding.message);
+        terminal.line(format_args!("\nReview: {}", finding.message));
     }
 }
 
@@ -2422,7 +2435,7 @@ struct AnalyzeRequest<'a> {
     format: AnalyzeOutputFormat,
 }
 
-fn run_analyze(request: &AnalyzeRequest<'_>) -> ExitCode {
+fn run_analyze(terminal: &mut output::Terminal<'_>, request: &AnalyzeRequest<'_>) -> ExitCode {
     let AnalyzeRequest {
         path,
         match_patterns,
@@ -2507,18 +2520,18 @@ fn run_analyze(request: &AnalyzeRequest<'_>) -> ExitCode {
     };
 
     let output_status = match format {
-        AnalyzeOutputFormat::Json => print_analysis_json(&analysis, profile, top),
-        AnalyzeOutputFormat::Gate => print_gate_json(&analysis, top),
+        AnalyzeOutputFormat::Json => print_analysis_json(terminal, &analysis, profile, top),
+        AnalyzeOutputFormat::Gate => print_gate_json(terminal, &analysis, top),
         AnalyzeOutputFormat::Terminal => {
-            print_analysis_summary(path, &analysis, top);
+            print_analysis_summary(terminal, path, &analysis, top);
             if let Some(request) = detail_request {
-                if let Err(message) = print_details(&analysis, request) {
+                if let Err(message) = print_details(terminal, &analysis, request) {
                     eprintln!("error: {message}");
                     return ExitCode::FAILURE;
                 }
             }
             if let Some(request) = diagnostic_request {
-                if let Err(message) = print_diagnostics(&analysis, request) {
+                if let Err(message) = print_diagnostics(terminal, &analysis, request) {
                     eprintln!("error: {message}");
                     return ExitCode::FAILURE;
                 }
@@ -2581,6 +2594,7 @@ fn parse_detail_request(values: &[String]) -> Result<Option<DiagnosticRequest>, 
 }
 
 fn print_analysis_json(
+    terminal: &mut output::Terminal<'_>,
     analysis: &RepositoryAnalysis,
     profile: ReportProfile,
     top: Option<usize>,
@@ -2596,7 +2610,7 @@ fn print_analysis_json(
     };
     match json {
         Ok(json) => {
-            println!("{json}");
+            terminal.line(format_args!("{json}"));
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -2606,10 +2620,14 @@ fn print_analysis_json(
     }
 }
 
-fn print_gate_json(analysis: &RepositoryAnalysis, top: Option<usize>) -> ExitCode {
+fn print_gate_json(
+    terminal: &mut output::Terminal<'_>,
+    analysis: &RepositoryAnalysis,
+    top: Option<usize>,
+) -> ExitCode {
     match serde_json::to_string_pretty(&GateJsonReport::from_analysis(analysis, top)) {
         Ok(json) => {
-            println!("{json}");
+            terminal.line(format_args!("{json}"));
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -2619,26 +2637,34 @@ fn print_gate_json(analysis: &RepositoryAnalysis, top: Option<usize>) -> ExitCod
     }
 }
 
-fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Option<usize>) {
-    println!("Analysis target: {}", path.display());
-    println!("Inventoried files: {}", analysis.inventoried_files);
-    println!(
+fn print_analysis_summary(
+    terminal: &mut output::Terminal<'_>,
+    path: &Path,
+    analysis: &RepositoryAnalysis,
+    top: Option<usize>,
+) {
+    terminal.line(format_args!("Analysis target: {}", path.display()));
+    terminal.line(format_args!(
+        "Inventoried files: {}",
+        analysis.inventoried_files
+    ));
+    terminal.line(format_args!(
         "Selected files: {}",
         analysis.selection.selected_files.len()
-    );
-    println!(
+    ));
+    terminal.line(format_args!(
         "Review status: {}",
         human_review_status(analysis.review.status)
-    );
-    println!(
+    ));
+    terminal.line(format_args!(
         "Review coverage: Measured callables: {}/{}, unavailable callables: {}, unsupported files: {}.",
         analysis.review.coverage.measured_callables,
         analysis.review.coverage.eligible_callables,
         analysis.review.coverage.unavailable_callables,
         analysis.review.coverage.unsupported_selected_files
-    );
+    ));
     let documentation = &analysis.documentation_coverage;
-    println!(
+    terminal.line(format_args!(
         "Documentation coverage: {}. Applicable files: {}, skipped test files: {}, documented: {}/{}, missing: {}, unavailable: {}, coverage: {}.",
         human_documentation_status(documentation.status),
         documentation.applicable_files,
@@ -2648,10 +2674,10 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
         documentation.counts.missing,
         documentation.counts.unavailable,
         format_documentation_percentage(documentation.counts.coverage_basis_points())
-    );
-    println!("\nLanguages:");
+    ));
+    terminal.line(format_args!("\nLanguages:"));
     if analysis.inventory_languages.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for (language, count) in &analysis.inventory_languages {
             let marker = if analysis.inventory_only_languages.contains_key(language) {
@@ -2659,15 +2685,15 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             } else {
                 ""
             };
-            println!("  {}: {count}{marker}", language.as_str());
+            terminal.line(format_args!("  {}: {count}{marker}", language.as_str()));
         }
     }
-    println!("\nAnalyzers:");
+    terminal.line(format_args!("\nAnalyzers:"));
     if analysis.analyzers.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     }
     for run in &analysis.analyzers {
-        println!(
+        terminal.line(format_args!(
             "  {} [{}]: analyzed: {}, successful: {}, partial: {}, failed: {}",
             run.descriptor.language.as_str(),
             run.descriptor.id,
@@ -2675,8 +2701,8 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             run.counts.successful,
             run.counts.partial,
             run.counts.failed
-        );
-        print_diagnostic_summary(run);
+        ));
+        print_diagnostic_summary(terminal, run);
         let symbol_counts = run
             .files
             .iter()
@@ -2698,14 +2724,14 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
             .chain(dependency_counts)
             .map(|(kind, count)| format!("{}: {count}", fact_count_label(kind)))
             .collect::<Vec<_>>();
-        println!(
+        terminal.line(format_args!(
             "    facts: {}",
             if facts.is_empty() {
                 "(none)".to_owned()
             } else {
                 facts.join(", ")
             }
-        );
+        ));
         let explicit_export_counts =
             run.files
                 .iter()
@@ -2722,53 +2748,62 @@ fn print_analysis_summary(path: &Path, analysis: &RepositoryAnalysis, top: Optio
                     (statuses, names)
                 });
         if explicit_export_counts.0.iter().sum::<usize>() > 0 {
-            println!(
+            terminal.line(format_args!(
                 "    explicit exports: complete: {}, partial: {}, unavailable: {}, not declared: {}, names: {}",
                 explicit_export_counts.0[1],
                 explicit_export_counts.0[2],
                 explicit_export_counts.0[3],
                 explicit_export_counts.0[0],
                 explicit_export_counts.1
-            );
+            ));
         }
         print_top_measurements(
+            terminal,
             run,
             MeasurementConcept::DeclarationPhysicalLines,
             "longest declarations",
         );
         print_top_measurements(
+            terminal,
             run,
             MeasurementConcept::MaxControlFlowNesting,
             "deepest nesting",
         );
         print_top_measurements(
+            terminal,
             run,
             MeasurementConcept::CyclomaticComplexity,
             "highest cyclomatic complexity",
         );
     }
     if !analysis.review.findings.is_empty() {
-        println!("\nReview findings:");
+        terminal.line(format_args!("\nReview findings:"));
         for finding in analysis.review.findings.iter().take(top.unwrap_or(5)) {
             let location = finding
                 .path
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "repository".to_owned());
-            println!("  {}", human_review_finding(finding, &location));
+            terminal.line(format_args!(
+                "  {}",
+                human_review_finding(finding, &location)
+            ));
         }
     }
     for diagnostic in &analysis.diagnostics {
-        println!(
+        terminal.line(format_args!(
             "\n{}[{}]: {}",
             diagnostic.severity.as_str(),
             diagnostic.code,
             diagnostic.message
-        );
+        ));
     }
 }
 
-fn print_diagnostic_summary(run: &codegraide_core::AnalyzerRun) {
+fn print_diagnostic_summary(
+    terminal: &mut output::Terminal<'_>,
+    run: &codegraide_core::AnalyzerRun,
+) {
     let mut total = 0usize;
     let mut file_counts = BTreeMap::<PathBuf, usize>::new();
     let mut groups = BTreeMap::<(String, String, String), (usize, BTreeSet<PathBuf>)>::new();
@@ -2794,38 +2829,43 @@ fn print_diagnostic_summary(run: &codegraide_core::AnalyzerRun) {
         return;
     }
 
-    println!(
+    terminal.line(format_args!(
         "    diagnostics: {total} total across {} {}",
         file_counts.len(),
         file_word(file_counts.len())
-    );
+    ));
     let mut ranked_groups = groups.into_iter().collect::<Vec<_>>();
     ranked_groups
         .sort_by(|left, right| right.1.0.cmp(&left.1.0).then_with(|| left.0.cmp(&right.0)));
     for ((severity, code, message), (count, paths)) in ranked_groups.iter().take(5) {
-        println!(
+        terminal.line(format_args!(
             "      {severity}[{code}]: {count} in {} {} — {message}",
             paths.len(),
             file_word(paths.len())
-        );
+        ));
     }
     if ranked_groups.len() > 5 {
-        println!(
+        terminal.line(format_args!(
             "      ... {} more diagnostic groups",
             ranked_groups.len() - 5
-        );
+        ));
     }
 
     let mut ranked_files = file_counts.into_iter().collect::<Vec<_>>();
     ranked_files.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-    println!("      files with the most diagnostics:");
+    terminal.line(format_args!("      files with the most diagnostics:"));
     for (path, count) in ranked_files.iter().take(5) {
-        println!("        {}: {count}", path.display());
+        terminal.line(format_args!("        {}: {count}", path.display()));
     }
     if ranked_files.len() > 5 {
-        println!("        ... {} more files", ranked_files.len() - 5);
+        terminal.line(format_args!(
+            "        ... {} more files",
+            ranked_files.len() - 5
+        ));
     }
-    println!("      Full details: use --diagnostics [FILE].");
+    terminal.line(format_args!(
+        "      Full details: use --diagnostics [FILE]."
+    ));
 }
 
 fn file_word(count: usize) -> &'static str {
@@ -2883,6 +2923,7 @@ fn fact_count_label(kind: &str) -> &str {
 }
 
 fn print_top_measurements(
+    terminal: &mut output::Terminal<'_>,
     run: &codegraide_core::AnalyzerRun,
     concept: MeasurementConcept,
     label: &str,
@@ -2927,13 +2968,17 @@ fn print_top_measurements(
     if values.is_empty() {
         return;
     }
-    println!("    {label}:");
+    terminal.line(format_args!("    {label}:"));
     for (value, path, qualified_name) in values.into_iter().take(3) {
-        println!("      {value:>4}  {}::{qualified_name}", path.display());
+        terminal.line(format_args!(
+            "      {value:>4}  {}::{qualified_name}",
+            path.display()
+        ));
     }
 }
 
 fn print_diagnostics(
+    terminal: &mut output::Terminal<'_>,
     analysis: &RepositoryAnalysis,
     request: DiagnosticRequest,
 ) -> Result<(), String> {
@@ -2946,7 +2991,7 @@ fn print_diagnostics(
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     };
-    println!("\nDiagnostics:");
+    terminal.line(format_args!("\nDiagnostics:"));
     let mut printed_any = false;
     for run in &analysis.analyzers {
         for file in &run.files {
@@ -2957,13 +3002,13 @@ fn print_diagnostics(
                 continue;
             }
             printed_any = true;
-            println!("  {}:", file.path.display());
+            terminal.line(format_args!("  {}:", file.path.display()));
             if file.diagnostics.is_empty() {
-                println!("    (none)");
+                terminal.line(format_args!("    (none)"));
                 continue;
             }
             for diagnostic in &file.diagnostics {
-                print_one_diagnostic(diagnostic);
+                print_one_diagnostic(terminal, diagnostic);
             }
         }
     }
@@ -2983,12 +3028,16 @@ fn print_diagnostics(
         }
     }
     if !printed_any {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     }
     Ok(())
 }
 
-fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> Result<(), String> {
+fn print_details(
+    terminal: &mut output::Terminal<'_>,
+    analysis: &RepositoryAnalysis,
+    request: DiagnosticRequest,
+) -> Result<(), String> {
     let requested_paths = match request {
         DiagnosticRequest::All => None,
         DiagnosticRequest::Files(paths) => Some(
@@ -2998,7 +3047,7 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     };
-    println!("\nDetails:");
+    terminal.line(format_args!("\nDetails:"));
     let mut printed_any = false;
     for run in &analysis.analyzers {
         for file in &run.files {
@@ -3009,88 +3058,95 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
                 continue;
             }
             printed_any = true;
-            println!("  {}:", file.path.display());
+            terminal.line(format_args!("  {}:", file.path.display()));
             for symbol in &file.facts.symbols {
-                println!(
+                terminal.line(format_args!(
                     "    {} {} [{}]",
                     symbol.kind.as_str(),
                     symbol.qualified_name,
                     symbol.completeness.as_str()
-                );
+                ));
                 for measurement in &symbol.measurements {
-                    println!(
+                    terminal.line(format_args!(
                         "      metric {}: {}",
                         measurement.id,
                         measurement
                             .value
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "unavailable".to_owned())
-                    );
+                    ));
                 }
                 if let Some(documentation) = &symbol.documentation {
-                    println!(
+                    terminal.line(format_args!(
                         "      documentation: {}{}",
                         documentation.status.as_str(),
                         documentation
                             .span
                             .map(|span| format!(" at {}:{}", span.start.line, span.start.column))
                             .unwrap_or_default()
-                    );
+                    ));
                 }
                 for event in &symbol.decision_events {
-                    println!(
+                    terminal.line(format_args!(
                         "      decision {}: {}:{}-{}:{}",
                         event.kind.as_str(),
                         event.span.start.line,
                         event.span.start.column,
                         event.span.end.line,
                         event.span.end.column
-                    );
+                    ));
                 }
             }
             for dependency in &file.facts.dependencies {
                 match dependency {
-                    codegraide_core::DependencyReference::Import(dependency) => println!(
-                        "    import {}{}",
-                        dependency.module.as_deref().unwrap_or("."),
-                        dependency
-                            .imported_name
-                            .as_ref()
-                            .map(|name| format!("::{name}"))
-                            .unwrap_or_default()
-                    ),
-                    codegraide_core::DependencyReference::Include(dependency) => println!(
-                        "    include {} [{}{}]",
-                        dependency.target,
-                        dependency.delimiter.as_str(),
-                        if dependency.conditional {
-                            "; conditional"
-                        } else {
-                            ""
-                        }
-                    ),
+                    codegraide_core::DependencyReference::Import(dependency) => {
+                        terminal.line(format_args!(
+                            "    import {}{}",
+                            dependency.module.as_deref().unwrap_or("."),
+                            dependency
+                                .imported_name
+                                .as_ref()
+                                .map(|name| format!("::{name}"))
+                                .unwrap_or_default()
+                        ))
+                    }
+                    codegraide_core::DependencyReference::Include(dependency) => {
+                        terminal.line(format_args!(
+                            "    include {} [{}{}]",
+                            dependency.target,
+                            dependency.delimiter.as_str(),
+                            if dependency.conditional {
+                                "; conditional"
+                            } else {
+                                ""
+                            }
+                        ))
+                    }
                 }
             }
             if let Some(exports) = &file.facts.explicit_exports {
-                println!("    explicit exports [{}]", exports.status.as_str());
+                terminal.line(format_args!(
+                    "    explicit exports [{}]",
+                    exports.status.as_str()
+                ));
                 if let Some(span) = exports.declaration_span {
-                    println!(
+                    terminal.line(format_args!(
                         "      declaration: {}:{}-{}:{}",
                         span.start.line, span.start.column, span.end.line, span.end.column
-                    );
+                    ));
                 }
                 for name in &exports.names {
-                    println!(
+                    terminal.line(format_args!(
                         "      {:?}: {}:{}-{}:{}",
                         name.name,
                         name.span.start.line,
                         name.span.start.column,
                         name.span.end.line,
                         name.span.end.column
-                    );
+                    ));
                 }
                 if let Some(reason) = &exports.reason {
-                    println!("      reason: {reason}");
+                    terminal.line(format_args!("      reason: {reason}"));
                 }
             }
         }
@@ -3111,7 +3167,7 @@ fn print_details(analysis: &RepositoryAnalysis, request: DiagnosticRequest) -> R
         }
     }
     if !printed_any {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     }
     Ok(())
 }
@@ -3140,7 +3196,10 @@ fn normalize_diagnostic_path(
         })
 }
 
-fn print_one_diagnostic(diagnostic: &codegraide_core::AnalysisDiagnostic) {
+fn print_one_diagnostic(
+    terminal: &mut output::Terminal<'_>,
+    diagnostic: &codegraide_core::AnalysisDiagnostic,
+) {
     let location = diagnostic.span.map(|span| {
         format!(
             "{}:{}-{}:{}",
@@ -3148,102 +3207,136 @@ fn print_one_diagnostic(diagnostic: &codegraide_core::AnalysisDiagnostic) {
         )
     });
     match location {
-        Some(location) => println!(
+        Some(location) => terminal.line(format_args!(
             "    {}[{}] {location}: {}",
             diagnostic.severity.as_str(),
             diagnostic.code,
             diagnostic.message
-        ),
-        None => println!(
+        )),
+        None => terminal.line(format_args!(
             "    {}[{}]: {}",
             diagnostic.severity.as_str(),
             diagnostic.code,
             diagnostic.message
-        ),
+        )),
     }
 }
 
-fn print_summary(path: &Path, inventory: &RepositoryInventory) {
-    println!("Repository: {}", path.display());
-    println!("Inventoried files: {}", inventory.inventoried_files);
-    println!("Source files: {}", inventory.source_files());
-    println!(
+fn print_summary(
+    terminal: &mut output::Terminal<'_>,
+    path: &Path,
+    inventory: &RepositoryInventory,
+) {
+    terminal.line(format_args!("Repository: {}", path.display()));
+    terminal.line(format_args!(
+        "Inventoried files: {}",
+        inventory.inventoried_files
+    ));
+    terminal.line(format_args!("Source files: {}", inventory.source_files()));
+    terminal.line(format_args!(
         "Included ignored files: {}",
         inventory.num_included_ignored_files
-    );
+    ));
 
-    println!("\nCategories:");
+    terminal.line(format_args!("\nCategories:"));
     for category in FileCategory::ALL {
-        println!(
+        terminal.line(format_args!(
             "  {}: {}",
             category.as_str(),
             inventory.category_count(category)
-        );
+        ));
     }
 
-    println!("\nLanguages:");
+    terminal.line(format_args!("\nLanguages:"));
     if inventory.files_by_language.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for (language, count) in &inventory.files_by_language {
-            println!("  {}: {count}", language.as_str());
+            terminal.line(format_args!("  {}: {count}", language.as_str()));
         }
     }
 
-    println!("\nPhysical line counts:");
-    println!("  Files analyzed: {}", inventory.line_counts.total.files);
-    println!("  Total lines: {}", inventory.line_counts.total.total);
-    println!("  Source lines: {}", inventory.line_counts.total.source);
-    println!("  Comment lines: {}", inventory.line_counts.total.comment);
-    println!("  Blank lines: {}", inventory.line_counts.total.blank);
+    terminal.line(format_args!("\nPhysical line counts:"));
+    terminal.line(format_args!(
+        "  Files analyzed: {}",
+        inventory.line_counts.total.files
+    ));
+    terminal.line(format_args!(
+        "  Total lines: {}",
+        inventory.line_counts.total.total
+    ));
+    terminal.line(format_args!(
+        "  Source lines: {}",
+        inventory.line_counts.total.source
+    ));
+    terminal.line(format_args!(
+        "  Comment lines: {}",
+        inventory.line_counts.total.comment
+    ));
+    terminal.line(format_args!(
+        "  Blank lines: {}",
+        inventory.line_counts.total.blank
+    ));
     if !inventory.line_counts.by_language.is_empty() {
-        println!("  By language:");
+        terminal.line(format_args!("  By language:"));
         for (language, counts) in &inventory.line_counts.by_language {
-            println!(
+            terminal.line(format_args!(
                 "    {}: files: {}, source: {}, comment: {}, blank: {}",
                 language.as_str(),
                 counts.files,
                 counts.source,
                 counts.comment,
                 counts.blank
-            );
+            ));
         }
     }
 
-    println!("\nUncategorized extensions:");
+    terminal.line(format_args!("\nUncategorized extensions:"));
     if inventory.uncategorized_files_by_extension.is_empty() {
-        println!("  (none)");
+        terminal.line(format_args!("  (none)"));
     } else {
         for (extension, count) in &inventory.uncategorized_files_by_extension {
-            println!("  {}: {count}", extension.as_str());
+            terminal.line(format_args!("  {}: {count}", extension.as_str()));
         }
     }
 
-    println!("\nIgnored entries:");
+    terminal.line(format_args!("\nIgnored entries:"));
     if inventory.ignored.exact {
-        println!("  Files: {}", inventory.ignored.file_count());
-        println!("  Directories: {}", inventory.ignored.directory_count());
+        terminal.line(format_args!("  Files: {}", inventory.ignored.file_count()));
+        terminal.line(format_args!(
+            "  Directories: {}",
+            inventory.ignored.directory_count()
+        ));
     } else {
-        println!("  Files observed: {}", inventory.ignored.file_count());
-        println!(
+        terminal.line(format_args!(
+            "  Files observed: {}",
+            inventory.ignored.file_count()
+        ));
+        terminal.line(format_args!(
             "  Directories pruned: {}",
             inventory.ignored.directory_count()
-        );
+        ));
     }
-    println!(
+    terminal.line(format_args!(
         "  Built-in safety directories: {}",
         inventory.ignored.builtin_directory_count()
-    );
+    ));
     if inventory.ignored.exact {
-        println!("  Audit: exact except for built-in safety directories");
+        terminal.line(format_args!(
+            "  Audit: exact except for built-in safety directories"
+        ));
     } else {
-        println!(
+        terminal.line(format_args!(
             "  Note: contents of ignored directories were not enumerated; use --audit-ignored for exact Git-ignored counts and paths"
-        );
+        ));
     }
 }
 
-fn print_requested_files(inventory: &RepositoryInventory, selections: &[FileListSelection]) {
+fn print_requested_files(
+    terminal: &mut output::Terminal<'_>,
+    inventory: &RepositoryInventory,
+    selections: &[FileListSelection],
+) {
     if selections.is_empty() {
         return;
     }
@@ -3258,33 +3351,40 @@ fn print_requested_files(inventory: &RepositoryInventory, selections: &[FileList
             .collect::<BTreeSet<_>>()
     };
 
-    println!("\nSelected files:");
+    terminal.line(format_args!("\nSelected files:"));
     for category in categories {
-        println!("  {}:", category.as_str());
-        print_paths(inventory.category_files(category), 4);
+        terminal.line(format_args!("  {}:", category.as_str()));
+        print_paths(terminal, inventory.category_files(category), 4);
     }
 }
 
-fn print_ignored_paths(inventory: &RepositoryInventory) {
-    println!("\nIgnored audit paths:");
-    println!("  files:");
-    print_paths(&inventory.ignored.files, 4);
-    println!("  directories:");
-    print_paths(&inventory.ignored.directories, 4);
-    println!("  built-in safety directories:");
-    print_paths(&inventory.ignored.builtin_directories, 4);
+fn print_ignored_paths(terminal: &mut output::Terminal<'_>, inventory: &RepositoryInventory) {
+    terminal.line(format_args!("\nIgnored audit paths:"));
+    terminal.line(format_args!("  files:"));
+    print_paths(terminal, &inventory.ignored.files, 4);
+    terminal.line(format_args!("  directories:"));
+    print_paths(terminal, &inventory.ignored.directories, 4);
+    terminal.line(format_args!("  built-in safety directories:"));
+    print_paths(terminal, &inventory.ignored.builtin_directories, 4);
 }
 
-fn print_paths(paths: &[PathBuf], indentation: usize) {
+fn print_paths(terminal: &mut output::Terminal<'_>, paths: &[PathBuf], indentation: usize) {
     if paths.is_empty() {
-        println!("{:indentation$}(none)", "");
+        terminal.line(format_args!("{:indentation$}(none)", ""));
         return;
     }
 
     for path in paths {
         let normalized = path.to_string_lossy().replace('\\', "/");
-        println!("{:indentation$}{normalized}", "");
+        terminal.line(format_args!("{:indentation$}{normalized}", ""));
     }
+}
+
+fn main() -> ExitCode {
+    let stdout = io::stdout();
+    let mut terminal = output::Output::new(stdout.lock());
+    let status = execute(&mut terminal);
+    terminal.finish(status)
 }
 
 #[cfg(test)]

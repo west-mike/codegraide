@@ -14,4 +14,4 @@ tree-sitter.workspace = true
 tree-sitter-cpp.workspace = true
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tempfile.workspace = true

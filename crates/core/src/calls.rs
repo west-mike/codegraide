@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::DiGraph;
@@ -18,8 +19,15 @@ pub const CALL_FAN_OUT_DEFINITION_VERSION: &str = "call-fan-out-v2";
 pub const CALL_SCC_DEFINITION_VERSION: &str = "call-scc-v2";
 pub const CALL_REPORT_SCHEMA_VERSION: &str = "0.2.0";
 
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SymbolQualification {
+    Project,
+    Module,
+}
+
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProjectSymbolId {
+    pub qualification: SymbolQualification,
     pub language: LanguageId,
     pub module: ModuleId,
     pub qualified_name: String,
@@ -29,10 +37,11 @@ pub struct ProjectSymbolId {
 
 impl ProjectSymbolId {
     pub fn base_selector(&self) -> String {
-        if self.language.as_str() == "cpp" {
-            self.qualified_name.clone()
-        } else {
-            format!("{}::{}", self.module.qualified_name(), self.qualified_name)
+        match self.qualification {
+            SymbolQualification::Project => self.qualified_name.clone(),
+            SymbolQualification::Module => {
+                format!("{}::{}", self.module.qualified_name(), self.qualified_name)
+            }
         }
     }
 
@@ -114,9 +123,9 @@ pub struct ProjectLanguageModule {
     pub exports: Vec<ModuleExport>,
 }
 
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Clone)]
 pub enum CallNode {
-    LocalSymbol(Box<ProjectSymbol>),
+    LocalSymbol(Arc<ProjectSymbol>),
     External {
         source: ProjectSymbolId,
         name: String,
@@ -124,7 +133,7 @@ pub enum CallNode {
     Ambiguous {
         source: ProjectSymbolId,
         spelling: String,
-        candidates: Vec<ProjectSymbol>,
+        candidates: Vec<Arc<ProjectSymbol>>,
     },
     Unresolved {
         source: ProjectSymbolId,
@@ -135,6 +144,64 @@ pub enum CallNode {
         spelling: String,
     },
 }
+
+// Graph identity depends on stable IDs, never on mutable display metadata.
+impl CallNode {
+    fn key(&self) -> (u8, &ProjectSymbolId, &str) {
+        match self {
+            Self::LocalSymbol(symbol) => (0, &symbol.id, ""),
+            Self::External { source, name } => (1, source, name),
+            Self::Ambiguous {
+                source, spelling, ..
+            } => (2, source, spelling),
+            Self::Unresolved { source, spelling } => (3, source, spelling),
+            Self::Unavailable { source, spelling } => (4, source, spelling),
+        }
+    }
+}
+impl Ord for CallNode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key()
+            .cmp(&other.key())
+            .then_with(|| match (self, other) {
+                (Self::Ambiguous { candidates: a, .. }, Self::Ambiguous { candidates: b, .. }) => {
+                    a.iter().map(|s| &s.id).cmp(b.iter().map(|s| &s.id))
+                }
+                _ => std::cmp::Ordering::Equal,
+            })
+    }
+}
+impl PartialOrd for CallNode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for CallNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+impl Eq for CallNode {}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum CallGraphError {
+    DuplicateSymbol(ProjectSymbolId),
+    InvalidLanguage(ProjectSymbolId),
+    MissingSymbol(ProjectSymbolId),
+    ConflictingSymbol(ProjectSymbolId),
+}
+impl fmt::Display for CallGraphError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (problem, id) = match self {
+            Self::DuplicateSymbol(id) => ("duplicate symbol", id),
+            Self::InvalidLanguage(id) => ("inconsistent symbol language", id),
+            Self::MissingSymbol(id) => ("symbol absent from catalog", id),
+            Self::ConflictingSymbol(id) => ("symbol metadata differs from catalog", id),
+        };
+        write!(f, "{problem}: {}", id.ordinal_selector())
+    }
+}
+impl std::error::Error for CallGraphError {}
 
 impl CallNode {
     pub fn kind(&self) -> &'static str {
@@ -183,7 +250,7 @@ pub struct CallRelation {
     pub target: CallNode,
     pub kind: CallRelationKind,
     pub evidence: Vec<CallEvidence>,
-    pub alternatives: Vec<ProjectSymbol>,
+    pub alternatives: Vec<Arc<ProjectSymbol>>,
     pub reason: Option<String>,
 }
 
@@ -225,7 +292,7 @@ pub struct CallGraphAnalysis {
 pub fn analyze_call_graph(
     symbols: &[ProjectSymbol],
     resolutions: &[ProjectCallResolution],
-) -> CallGraphAnalysis {
+) -> Result<CallGraphAnalysis, CallGraphError> {
     analyze_call_graph_with_modules(symbols, resolutions, Vec::new())
 }
 
@@ -233,27 +300,52 @@ pub fn analyze_call_graph_with_modules(
     symbols: &[ProjectSymbol],
     resolutions: &[ProjectCallResolution],
     language_modules: Vec<ProjectLanguageModule>,
-) -> CallGraphAnalysis {
-    let mut nodes = symbols
-        .iter()
+) -> Result<CallGraphAnalysis, CallGraphError> {
+    let mut catalog = BTreeMap::new();
+    for symbol in symbols {
+        if symbol.id.language != *symbol.id.module.language() {
+            return Err(CallGraphError::InvalidLanguage(symbol.id.clone()));
+        }
+        if catalog
+            .insert(symbol.id.clone(), Arc::new(symbol.clone()))
+            .is_some()
+        {
+            return Err(CallGraphError::DuplicateSymbol(symbol.id.clone()));
+        }
+    }
+    let canonical = |symbol: &ProjectSymbol| -> Result<Arc<ProjectSymbol>, CallGraphError> {
+        let entry = catalog
+            .get(&symbol.id)
+            .ok_or_else(|| CallGraphError::MissingSymbol(symbol.id.clone()))?;
+        if entry.as_ref() != symbol {
+            return Err(CallGraphError::ConflictingSymbol(symbol.id.clone()));
+        }
+        Ok(Arc::clone(entry))
+    };
+    let mut nodes = catalog
+        .values()
         .cloned()
-        .map(|symbol| CallNode::LocalSymbol(Box::new(symbol)))
+        .map(CallNode::LocalSymbol)
         .collect::<BTreeSet<_>>();
     let mut grouped = BTreeMap::<
         (CallNode, CallNode, CallRelationKind),
-        (Vec<CallEvidence>, BTreeSet<ProjectSymbol>, BTreeSet<String>),
+        (
+            Vec<CallEvidence>,
+            BTreeSet<Arc<ProjectSymbol>>,
+            BTreeSet<String>,
+        ),
     >::new();
     let mut coverage = CallGraphCoverage {
         total_calls: resolutions.len(),
         ..Default::default()
     };
     for resolution in resolutions {
-        let source = CallNode::LocalSymbol(Box::new(resolution.source.clone()));
+        let source = CallNode::LocalSymbol(canonical(&resolution.source)?);
         let (target, kind, alternatives, reason) = match &resolution.outcome {
             CallResolutionOutcome::Exact(target) => {
                 coverage.exact_calls += 1;
                 (
-                    CallNode::LocalSymbol(Box::new(target.clone())),
+                    CallNode::LocalSymbol(canonical(target)?),
                     CallRelationKind::Exact,
                     Vec::new(),
                     None,
@@ -266,9 +358,12 @@ pub fn analyze_call_graph_with_modules(
             } => {
                 coverage.inferred_calls += 1;
                 (
-                    CallNode::LocalSymbol(Box::new(target.clone())),
+                    CallNode::LocalSymbol(canonical(target)?),
                     CallRelationKind::Inferred,
-                    alternatives.clone(),
+                    alternatives
+                        .iter()
+                        .map(&canonical)
+                        .collect::<Result<Vec<_>, _>>()?,
                     Some(reason.clone()),
                 )
             }
@@ -285,6 +380,10 @@ pub fn analyze_call_graph_with_modules(
                 )
             }
             CallResolutionOutcome::Ambiguous(candidates) => {
+                let candidates = candidates
+                    .iter()
+                    .map(&canonical)
+                    .collect::<Result<Vec<_>, _>>()?;
                 coverage.ambiguous_calls += 1;
                 (
                     CallNode::Ambiguous {
@@ -356,21 +455,29 @@ pub fn analyze_call_graph_with_modules(
         .filter(|relation| relation.kind == CallRelationKind::Exact)
         .map(|relation| (relation.source.clone(), relation.target.clone()))
         .collect::<BTreeSet<_>>();
+    let mut degrees = BTreeMap::<&CallNode, (usize, usize)>::new();
+    for (source, target) in &edges {
+        degrees.entry(source).or_default().1 += 1;
+        degrees.entry(target).or_default().0 += 1;
+    }
     let metrics = nodes
         .iter()
-        .map(|node| CallNodeMetrics {
-            node: node.clone(),
-            fan_in: edges.iter().filter(|(_, target)| target == node).count(),
-            fan_out: edges.iter().filter(|(source, _)| source == node).count(),
+        .map(|node| {
+            let (fan_in, fan_out) = degrees.get(node).copied().unwrap_or_default();
+            CallNodeMetrics {
+                node: node.clone(),
+                fan_in,
+                fan_out,
+            }
         })
         .collect();
-    let strongly_connected_components = call_sccs(symbols, &edges);
+    let strongly_connected_components = call_sccs(&nodes, &edges);
     let cycles = strongly_connected_components
         .iter()
         .filter(|component| component.cyclic)
         .cloned()
         .collect();
-    CallGraphAnalysis {
+    Ok(CallGraphAnalysis {
         nodes,
         relations,
         metrics,
@@ -378,15 +485,15 @@ pub fn analyze_call_graph_with_modules(
         cycles,
         coverage,
         language_modules,
-    }
+    })
 }
 
-fn call_sccs(symbols: &[ProjectSymbol], edges: &BTreeSet<(CallNode, CallNode)>) -> Vec<CallScc> {
+fn call_sccs(nodes: &[CallNode], edges: &BTreeSet<(CallNode, CallNode)>) -> Vec<CallScc> {
     let mut graph = DiGraph::<CallNode, ()>::new();
-    let indexes = symbols
+    let indexes = nodes
         .iter()
+        .filter(|node| matches!(node, CallNode::LocalSymbol(_)))
         .cloned()
-        .map(|symbol| CallNode::LocalSymbol(Box::new(symbol)))
         .map(|node| {
             let index = graph.add_node(node.clone());
             (node, index)
@@ -536,7 +643,7 @@ pub fn filter_call_graph(
             selected.contains(&relation.source) || selected.contains(&relation.target)
         })
         .flat_map(|relation| relation.alternatives.iter().cloned())
-        .map(|symbol| CallNode::LocalSymbol(Box::new(symbol)))
+        .map(CallNode::LocalSymbol)
         .collect::<Vec<_>>();
     selected.extend(candidate_nodes);
     if filter.exact_only || filter.local_only || filter.cycles_only {
@@ -728,10 +835,10 @@ fn traverse(
             } else {
                 None
             };
-            if let Some(neighbor) = neighbor
-                && selected.insert(neighbor.clone())
-            {
-                queue.push_back((neighbor.clone(), distance + 1));
+            if let Some(neighbor) = neighbor {
+                if selected.insert(neighbor.clone()) {
+                    queue.push_back((neighbor.clone(), distance + 1));
+                }
             }
         }
     }
@@ -835,6 +942,7 @@ mod tests {
         ProjectSymbol {
             call_flow: None,
             id: ProjectSymbolId {
+                qualification: SymbolQualification::Module,
                 language: LanguageId::new("python"),
                 module,
                 qualified_name: name.to_owned(),
@@ -919,7 +1027,8 @@ mod tests {
                     2,
                 ),
             ],
-        );
+        )
+        .unwrap();
 
         assert_eq!(graph.coverage.exact_calls, 2);
         assert_eq!(graph.coverage.unresolved_calls, 1);
@@ -947,5 +1056,102 @@ mod tests {
                 .len(),
             2
         );
+    }
+    #[test]
+    fn rejects_inconsistent_catalogs_and_resolution_endpoints() {
+        let a = symbol("a");
+        let b = symbol("b");
+        assert!(matches!(
+            analyze_call_graph(&[a.clone(), a.clone()], &[]),
+            Err(CallGraphError::DuplicateSymbol(_))
+        ));
+        let call = resolution(&a, "b", CallResolutionOutcome::Exact(b.clone()), 0);
+        assert!(matches!(
+            analyze_call_graph(std::slice::from_ref(&b), std::slice::from_ref(&call)),
+            Err(CallGraphError::MissingSymbol(_))
+        ));
+        assert!(matches!(
+            analyze_call_graph(std::slice::from_ref(&a), std::slice::from_ref(&call)),
+            Err(CallGraphError::MissingSymbol(_))
+        ));
+        let mut wrong = a.clone();
+        wrong.path = "different.py".into();
+        assert!(matches!(
+            analyze_call_graph(&[wrong, b.clone()], std::slice::from_ref(&call)),
+            Err(CallGraphError::ConflictingSymbol(_))
+        ));
+        let mut wrong = a.clone();
+        wrong.id.language = LanguageId::new("cpp");
+        assert!(matches!(
+            analyze_call_graph(&[wrong], &[]),
+            Err(CallGraphError::InvalidLanguage(_))
+        ));
+        let graph = analyze_call_graph(&[a, b], &[call.clone(), call]).unwrap();
+        assert_eq!(graph.relations.len(), 1);
+        assert_eq!(graph.metrics.iter().map(|m| m.fan_out).sum::<usize>(), 1);
+        let source = match &graph.relations[0].source {
+            CallNode::LocalSymbol(s) => s,
+            _ => unreachable!(),
+        };
+        let catalog_source = graph
+            .nodes
+            .iter()
+            .find_map(|n| match n {
+                CallNode::LocalSymbol(s) if s.id == source.id => Some(s),
+                _ => None,
+            })
+            .unwrap();
+        assert!(Arc::ptr_eq(source, catalog_source));
+    }
+
+    #[test]
+    fn context_reports_invalid_locations_and_missing_endpoints() {
+        use crate::{
+            git_snapshot::{GitSnapshot, SnapshotFile},
+            review_context::ContextSnapshot,
+        };
+        let a = symbol("a");
+        let mut invalid = symbol("invalid");
+        invalid.span.end_byte = 2; // inside the second UTF-8 character
+        let missing = symbol("missing");
+        let git = GitSnapshot {
+            commit: "a".repeat(40),
+            files: BTreeMap::from([(
+                a.path.clone(),
+                SnapshotFile {
+                    object: "b".repeat(40),
+                    source: "xé".into(),
+                },
+            )]),
+            entries: BTreeMap::new(),
+            excluded: Vec::new(),
+        };
+        let context = ContextSnapshot::new(
+            git,
+            vec![a.clone(), invalid],
+            vec![resolution(
+                &a,
+                "missing",
+                CallResolutionOutcome::Exact(missing),
+                0,
+            )],
+            BTreeMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(context.symbols.len(), 1);
+        assert!(
+            context
+                .diagnostics
+                .iter()
+                .any(|d| d.starts_with("invalid-symbol-location:"))
+        );
+        assert!(
+            context
+                .diagnostics
+                .iter()
+                .any(|d| d.starts_with("missing-call-target:"))
+        );
+        assert_eq!(context.relations[0].resolution, "unavailable");
     }
 }

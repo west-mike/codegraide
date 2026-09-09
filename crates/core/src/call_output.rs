@@ -245,7 +245,10 @@ impl CallJsonReport {
                             None,
                             None,
                             None,
-                            candidates.iter().map(json_candidate).collect(),
+                            candidates
+                                .iter()
+                                .map(|symbol| json_candidate(symbol))
+                                .collect(),
                             None,
                         ),
                         _ => (None, None, None, Vec::new(), None),
@@ -320,7 +323,11 @@ fn json_relation(relation: &CallRelation, ids: &BTreeMap<CallNode, String>) -> J
         source: ids[&relation.source].clone(),
         target: ids[&relation.target].clone(),
         kind: relation.kind.as_str(),
-        alternatives: relation.alternatives.iter().map(json_candidate).collect(),
+        alternatives: relation
+            .alternatives
+            .iter()
+            .map(|symbol| json_candidate(symbol))
+            .collect(),
         reason: relation.reason.clone(),
         evidence: relation
             .evidence
